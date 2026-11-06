@@ -8,7 +8,13 @@
     "directory": "./public",
     "binding": "ASSETS",
     "run_worker_first": ["/api/*"]
-  }
-  // D1 binding deliberately not included until the owner provides the real
-  // database_id. See README.md. Never invent a database UUID.
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "spine-community-db",
+      "database_id": "5919ff78-b8fc-46ab-85f0-01fe5e6a41b0",
+      "migrations_dir": "migrations"
+    }
+  ]
 }
