@@ -1,0 +1,15 @@
+{
+  "topics": [
+    {
+      "title": "Development test: sample discussion",
+      "body": "Fictional content used only to test the import API.",
+      "source_lang": "en",
+      "comments": [
+        {
+          "body": "First sample reply.",
+          "replies": [{"body": "A nested sample reply."}]
+        }
+      ]
+    }
+  ]
+}
