@@ -17,7 +17,7 @@
 
 ## 本地验证
 
-- `npm run verify`：TypeScript + 15项 Worker/SQLite 集成测试，包含整套DDL、外键、跨帖回复、楼主权限、点赞幂等、自我通知、收藏关注分离、删除译文/索引、七语言词典/中文短词、角色撤销/禁言、翻译预算/删除竞态、统计口径、数据删除及Google JWT验证。
+- `npm run verify`：TypeScript + 16项 Worker/SQLite 集成测试，包含整套DDL、外键、跨帖回复、楼主权限、点赞幂等、自我通知、收藏关注分离、删除译文/索引、七语言词典/中文短词、角色撤销/禁言、翻译预算/删除竞态、统计口径、数据删除及Google JWT验证。
 - Wrangler/Miniflare 本地 D1：两份迁移共302条语句成功运行。无远程生产数据库访问。
 - 浏览器验证：首页/中文和英文界面、游客发布入口的登录提示、搜索及空状态。真实 Google 登录和外部翻译仍需独立凭据后实测，不能宣称已端到端验证。
 
@@ -46,3 +46,5 @@
 - `googleConfigured=false`、`translationConfigured=false`、`analyticsConfigured=false`；不能声称真实Google登录、外部翻译或流量采集已经启用。
 - 首次实现仅更新feature分支与预览D1；没有提交/合并main，没有生产D1写入，也没有复制生产数据。
 - 验收截图：[开发预览](assets/development-preview.jpg)。
+
+最终回归补充：管理员隐藏的内容经作者编辑后进入待审核，不能通过编辑绕过审核重新公开；专门回归测试通过。

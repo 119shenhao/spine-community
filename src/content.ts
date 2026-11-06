@@ -70,7 +70,7 @@ export async function contentRoute(req:Request,env:Env,u:Row|null,path:string):P
     if(method==='DELETE'){await env.DB.batch(purge(env.DB,'topic',topicId));return json({ok:true});}
     if(method==='PATCH'){
       const b=await body(req),title=textField(b.title,1,200,'title'),text=textField(b.body,1,30000),tags=await terms(env,b.terms);
-      const status=risk(title,text);const duration=b.symptom_duration_days==null||b.symptom_duration_days===''?null:Number(b.symptom_duration_days);if(duration!==null&&(!Number.isInteger(duration)||duration<0||duration>36500))fail(400,'invalid_duration');const writes=[stmt(env.DB,'UPDATE topics SET title=?,body=?,status=?,source_lang=?,symptom_duration_days=?,content_version=content_version+1,updated_at=? WHERE id=?',title,text,status,lang(b.source_lang||topic.source_lang),duration,now(),topicId)];
+      const status=topic.status==='hidden'?'pending_review':risk(title,text);const duration=b.symptom_duration_days==null||b.symptom_duration_days===''?null:Number(b.symptom_duration_days);if(duration!==null&&(!Number.isInteger(duration)||duration<0||duration>36500))fail(400,'invalid_duration');const writes=[stmt(env.DB,'UPDATE topics SET title=?,body=?,status=?,source_lang=?,symptom_duration_days=?,content_version=content_version+1,updated_at=? WHERE id=?',title,text,status,lang(b.source_lang||topic.source_lang),duration,now(),topicId)];
       if(b.terms!==undefined){writes.push(stmt(env.DB,'DELETE FROM topic_terms WHERE topic_id=?',topicId),...tags.map(t=>stmt(env.DB,'INSERT INTO topic_terms VALUES(?,?)',topicId,t)));}
       await env.DB.batch(writes);return json({ok:true,status});
     }
@@ -97,7 +97,7 @@ export async function contentRoute(req:Request,env:Env,u:Row|null,path:string):P
     const user=await writable(env.DB,u),c=await getContent(env,'comment',commentMatch[1],user);if(c.author_id!==user.id)fail(403,'forbidden');
     if(c.kind==='progress'){const t=await one(env.DB,'SELECT author_id FROM topics WHERE id=?',c.topic_id);if(t?.author_id!==user.id)fail(403,'progress_author_required');}
     if(method==='DELETE')await env.DB.batch(purge(env.DB,'comment',c.id));
-    else{const b=await body(req),text=textField(b.body,1,12000),status=risk('',text);await stmt(env.DB,'UPDATE comments SET body=?,status=?,source_lang=?,content_version=content_version+1,updated_at=? WHERE id=?',text,status,lang(b.source_lang||c.source_lang),now(),c.id).run();}
+    else{const b=await body(req),text=textField(b.body,1,12000),status=c.status==='hidden'?'pending_review':risk('',text);await stmt(env.DB,'UPDATE comments SET body=?,status=?,source_lang=?,content_version=content_version+1,updated_at=? WHERE id=?',text,status,lang(b.source_lang||c.source_lang),now(),c.id).run();}
     return json({ok:true});
   }
   const interaction=path.match(/^\/api\/(topics|comments)\/([^/]+)\/(like|bookmark|follow)$/);
