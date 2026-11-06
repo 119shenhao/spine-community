@@ -2,6 +2,33 @@
 
 日期：2026-11-06。分支：`feature/v1-community-build-20261106`。此记录区分代码、自测和远程环境，不将代码存在等同于可公开上线。
 
+## 当前交接状态（本次开发结束后同步）
+
+**结论：第一版核心代码已提交并部署到开发预览，测试 D1 已初始化；尚未达到真实用户登录和正式运营的验收条件。**
+
+| 项目 | 当前状态 | 验证范围／下一步 |
+| --- | --- | --- |
+| 开发代码 | 已提交 | 最新代码提交 `44f6b1855394d8967a9bcf9bbfa89010b4e19e68`，分支 `feature/v1-community-build-20261106` |
+| Cloudflare Preview | 构建成功 | 最终代码的 GitHub check 为 `completed / success`；Build ID `28102adf-a738-4e3a-81cb-8d6936ae700e` |
+| 独立测试 D1 | 已初始化 | 两份 v1 迁移；远程 `/api/health` 已返回 `databaseReady=true`，页面分类和空帖子列表正常读取 |
+| TypeScript 与集成测试 | 通过 | `npm run verify`；16 项测试全部通过；使用虚构账号和隔离数据库 |
+| 浏览器页面 | 已检查 | 本地中英文切换、游客发布登录提示、搜索空状态；远程新版首页、分类与空列表 |
+| Google 登录／站长账号 | 代码已实现，凭据未配置 | 远程 `googleConfigured=false`；目前不能真正登录发帖，登录后的浏览器全流程尚未实测 |
+| 自动翻译 | 适配器、缓存和预算代码已实现，保持关闭 | 远程 `translationConfigured=false`；供应商、隐私告知及凭据仍待确认，未调用真实供应商联调 |
+| 流量统计 | 代码已实现，采集未启用 | 远程 `analyticsConfigured=false`；需预览环境独立 `ANALYTICS_SALT` |
+| 图片／R2 | 预留且关闭 | 上传按钮禁用，上传和读取接口均拒绝；未启用 R2 |
+| 正式发布 | 未执行 | 未合并 `main`、未写入生产 D1；本轮没有生产数据复制 |
+
+开发预览：[打开论坛](https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev/)。
+
+### 下一次继续开发的顺序
+
+1. 在 Cloudflare **Preview** 环境安全配置 `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`；Google Web OAuth 回调登记为 `https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev/api/auth/callback`。密钥不写入本文或源码。
+2. 配置 `ADMIN_GOOGLE_SUB` 初始化指定站长；需要统计时配置独立 `ANALYTICS_SALT`。
+3. 用测试 Google 账号在远程预览验证登录／退出、发帖、楼中楼回复、楼主进展、点赞取消、收藏关注、通知、举报审核、禁言及数据删除；包含手机端实际操作验收。
+4. 翻译供应商及文本处理规则确认后，才配置凭据和双重开关，补做真实翻译联调；当前不自动开启。
+5. 补齐隐私政策、年龄和留存规则、SEO、备份恢复与规模测试，再整理生产发布申请。**开发预览成功不等于正式上线获批。**
+
 ## 已实现的代码
 
 - 七种界面语言；浏览器初始语言、手动切换和记忆。共用一个论坛，不按语言隔离。
