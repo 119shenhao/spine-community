@@ -1,50 +1,17 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="A welcoming community for people sharing lived experiences with neck and lower-back conditions. Coming soon.">
-  <meta name="robots" content="noindex,nofollow">
-  <meta name="theme-color" content="#f8fafc">
-  <title>Spine Community — Real stories, shared experiences</title>
-  <link rel="stylesheet" href="/styles.css">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#175b50"><meta name="robots" content="noindex,nofollow">
+<meta name="description" content="Share neck and lower-back experiences, find similar stories, and follow personal progress in one multilingual community.">
+<title>Spine Community — Shared experiences, a little less alone</title>
+<link rel="stylesheet" href="/styles.css"><script type="module" src="/app.js"></script>
 </head>
 <body>
-  <a class="skip-link" href="#main">Skip to content</a>
-  <header class="topbar">
-    <div class="container nav">
-      <a class="brand" href="/" aria-label="Spine Community Home"><span class="brand-symbol" aria-hidden="true">S</span><span>spine<span class="brand-accent">community</span></span></a>
-      <nav aria-label="Main navigation">
-        <a href="#topics">Topics</a><a href="#how-it-works">Our approach</a>
-      </nav>
-      <span class="launch-status">Launching soon</span>
-    </div>
-  </header>
-  <main id="main">
-    <section class="hero container">
-      <span class="eyebrow"><span class="small-dot"></span> A space for lived experiences</span>
-      <h1>Real stories.<br><span>Shared journeys.</span></h1>
-      <p class="lede">Living with neck or lower back pain can feel isolating. We're building a place to learn from others' experiences, follow recovery journeys, and feel less alone.</p>
-      <div class="hero-actions"><a class="primary-link" href="#topics">Explore our focus <span aria-hidden="true">→</span></a><span class="quiet-note">Community features are not open yet</span></div>
-    </section>
-    <section class="topics-section" id="topics">
-      <div class="container">
-        <div class="section-heading"><span class="eyebrow">Community spaces</span><h2>Start with what matters to you.</h2><p>Dedicated spaces for meaningful, respectful conversations. These sections are being prepared.</p></div>
-        <div class="cards">
-          <article class="topic-card"><div class="topic-icon neck" aria-hidden="true">N</div><span class="card-label">CONDITIONS</span><h3>Neck & Cervical Spine</h3><p>Share experiences with neck pain, stiffness, cervical discs, and related symptoms.</p><span class="card-state">Opening soon</span></article>
-          <article class="topic-card"><div class="topic-icon lower" aria-hidden="true">L</div><span class="card-label">CONDITIONS</span><h3>Lower Back & Lumbar Spine</h3><p>Discuss low back pain, sciatica, lumbar discs, and daily-life challenges.</p><span class="card-state">Opening soon</span></article>
-          <article class="topic-card"><div class="topic-icon story" aria-hidden="true">P</div><span class="card-label">EXPERIENCES</span><h3>Patient Stories</h3><p>Hear firsthand stories about assessments, treatment decisions, and what people learned.</p><span class="card-state">Opening soon</span></article>
-          <article class="topic-card"><div class="topic-icon journal" aria-hidden="true">R</div><span class="card-label">PROGRESS</span><h3>Recovery Journals</h3><p>Follow personal updates over weeks, months, or years—progress isn't always linear.</p><span class="card-state">Opening soon</span></article>
-        </div>
-      </div>
-    </section>
-    <section class="about container" id="how-it-works">
-      <div class="about-panel">
-        <div><span class="eyebrow">What we believe</span><h2>Your experience matters.</h2><p>This space will center real experiences, not miracle cures or one-size-fits-all answers. Members will be able to share at their own pace, with meaningful privacy and moderation controls.</p></div>
-        <div class="values"><p><span aria-hidden="true">✓</span> Lived experience, clearly labeled</p><p><span aria-hidden="true">✓</span> Respectful, supportive conversations</p><p><span aria-hidden="true">✓</span> Privacy and safety by design</p></div>
-      </div>
-    </section>
-  </main>
-  <footer class="footer"><div class="container"><strong>spinecommunity</strong><p>Peer experiences are not medical advice. For individual care decisions, consult a qualified clinician.</p><small>Early preview · Not yet accepting personal health information</small></div></footer>
-</body>
-</html>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="topbar"><div class="header-inner"><a class="brand" href="#/" aria-label="Spine Community"><span class="brand-icon" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M20 4c-12 4 5 9-7 13s5 9-3 12"/><circle cx="17" cy="5" r="2"/><circle cx="17" cy="12" r="2"/><circle cx="13" cy="19" r="2"/><circle cx="13" cy="26" r="2"/></svg></span><span>spine<span class="brand-light">community</span></span></a><span class="preview-badge" id="preview-badge"></span><div class="header-actions"><label class="sr-only" for="language">Language</label><select id="language" aria-label="Language"><option value="en">English</option><option value="zh-CN">简体中文</option><option value="es">Español</option><option value="pt-BR">Português</option><option value="de">Deutsch</option><option value="fr">Français</option><option value="ja">日本語</option></select><div id="account-actions"></div></div></div></header>
+<div class="page-shell"><aside class="sidebar" id="sidebar"></aside><main id="main" tabindex="-1"><div class="loading"><span class="spinner"></span></div></main><aside class="right-rail" id="right-rail"></aside></div>
+<footer id="footer"></footer>
+<dialog id="modal"><button class="dialog-close" data-action="close-modal" aria-label="Close">×</button><div id="modal-content"></div></dialog>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+</body></html>

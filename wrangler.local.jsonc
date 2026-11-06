@@ -1,0 +1,14 @@
+{
+  "$schema":"./node_modules/wrangler/config-schema.json",
+  "name":"spine-community-local",
+  "main":"src/index.ts",
+  "compatibility_date":"2026-11-06",
+  "assets":{"directory":"./public","binding":"ASSETS","run_worker_first":["/api/*"]},
+  "vars":{"APP_ENV":"local"},
+  "d1_databases":[{
+    "binding":"DB",
+    "database_name":"spine-community-db-preview",
+    "database_id":"4362537a-5748-4a05-b0c4-219c3db36996",
+    "migrations_dir":"migrations/v1"
+  }]
+}

@@ -16,7 +16,7 @@
       "binding": "DB",
       "database_name": "spine-community-db",
       "database_id": "5919ff78-b8fc-46ab-85f0-01fe5e6a41b0",
-      "migrations_dir": "migrations"
+      "migrations_dir": "migrations/v1"
     }
   ],
   "previews": {
@@ -24,8 +24,16 @@
       {
         "binding": "DB",
         "database_name": "spine-community-db-preview",
-        "database_id": "4362537a-5748-4a05-b0c4-219c3db36996"
+        "database_id": "4362537a-5748-4a05-b0c4-219c3db36996",
+        "migrations_dir": "migrations/v1"
       }
-    ]
+    ],
+    "vars": {
+      "APP_ENV": "preview",
+      "TRANSLATION_ENABLED": "false"
+    }
+  },
+  "build": {
+    "command": "node scripts/prepare-build.mjs"
   }
 }

@@ -1,40 +1,45 @@
 # Spine Community
 
-An English-language, peer-to-peer community focused on lived experiences with cervical and lumbar spine conditions.
+A multilingual peer community for neck and lower-back experiences. This branch implements the v1 development application. **Use fictional test data only; public launch is not approved.**
 
-> **Status:** Initial, read-only scaffold. NOT ready for public registration, posting, or medical-data collection.
+## Development
 
-## Stack
+Requires Node 22.13+ (Cloudflare Builds uses `.node-version`).
 
-- GitHub private repo (`main`)
-- Cloudflare Workers with static assets in `public/`
-- Cloudflare D1 (migration prepared; binding pending)
-- R2 integration reserved, **uploads and reads disabled by default**
-- No separate Cloudflare Pages project is required
-
-## Local setup
-
-```bash
-npm install
+```sh
+npm ci
 npm run dev
 ```
 
-Visit the Wrangler local URL. The starter home page does not require a database. The `/api/health` endpoint reports whether a D1 binding is attached. `/api/topics` requires D1 and migrations.
+The development launcher applies **local-only** D1 migrations and starts Wrangler. It never contacts a remote database. Open the URL printed by Wrangler. `npm run verify` runs TypeScript checks and the full in-memory SQLite/Worker integration suite.
 
-## Deploy
+## Preview
 
-1. In Cloudflare Workers Builds, select the GitHub repo and `main` branch.
-2. Set build command **empty** and deploy command `npx wrangler deploy`. Disable preview deployments for now.
-3. The D1 binding is already configured in `wrangler.jsonc` for the existing `spine-community-db` database. Cloudflare builds will redeploy the Worker when `main` changes.
-4. The database schema has **not yet been applied**. To initialize it, run `npx wrangler d1 migrations apply DB --remote` after reviewing `migrations/0001_initial.sql`. This step requires authenticated Cloudflare access. The site homepage can run before schema initialization; `/api/topics` will return a not-ready error until migrations are applied.
+Branch: `feature/v1-community-build-20261106`
 
-**Never** commit Cloudflare API tokens, secret keys, or patient records.
+https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev/
 
-## Release restrictions
+Cloudflare's existing `npx wrangler preview` command runs `scripts/prepare-build.mjs`: checks/tests, then migrations **only** when `WORKERS_CI=1` and the exact development branch matches. The dedicated migration config pins the preview UUID and cross-checks its binding. An unknown legacy schema or missing D1 credentials stops preparation; it never falls back to production or overwrites tables. Check the actual build and `/api/health` before calling the preview ready.
 
-- No actual user accounts, posting, or file upload yet.
-- `POST /api/uploads` and `GET /api/uploads/*` are explicitly forbidden (fail-closed).
-- Demo cards are informational navigation, not fabricated patient testimonials.
-- Launch gate: moderation, account verification, privacy controls, content reporting, backups, abuse protections, and consent text must be implemented and tested.
+Manual preview migration, after reviewing scripts and confirming the test DB ID:
 
-See [docs/requirements.md](docs/requirements.md) for planned scope and phased rollout.
+```sh
+npm run db:preview
+```
+
+## Runtime setup
+
+No secret or real user data is committed. Preview credentials must be configured separately through Cloudflare Preview settings:
+
+- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`: Google web OAuth client; register the exact preview origin + `/api/auth/callback` as an allowed callback. Until configured, browsing works and sign-in explains the missing setup.
+- `ADMIN_GOOGLE_SUB`: immutable Google subject of the owner, set out of band. Never use a client-supplied role or email to assign ownership.
+- `ANALYTICS_SALT`: random preview-only secret. Without it traffic collection stays off, and the management screen says so.
+- Optional translation adapter: `TRANSLATOR_KEY`, `TRANSLATOR_REGION`, runtime `TRANSLATION_ENABLED=true`, and site setting `translation_enabled=true` are all required. Default off. Do not activate before provider/privacy approval. Hard daily/monthly character reservations precede requests; failures show the original.
+
+Only Google login is implemented. There is **no preview login bypass**. Tests insert fictional users directly into isolated test databases.
+
+## Database versions
+
+Reviewed implementation migrations are in `migrations/v1/`. The obsolete initial migration was moved to `docs/archive/0001-initial-legacy.sql` and is excluded from all active migration configs. Production `main`, deployment, D1 writes and data copying are not part of this task.
+
+[Implementation status and limitations](docs/implementation-v1-2026-11-06.md) · [Canonical requirements](docs/requirements/README.md) · [Development/release policy](docs/development-release-workflow.md)
