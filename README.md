@@ -25,20 +25,8 @@ Visit the Wrangler local URL. The starter home page does not require a database.
 
 1. In Cloudflare Workers Builds, select the GitHub repo and `main` branch.
 2. Set build command **empty** and deploy command `npx wrangler deploy`. Disable preview deployments for now.
-3. **Before connecting D1**, add a D1 binding in `wrangler.jsonc` using the real **database_id** from Cloudflare:
-
-```jsonc
-"d1_databases": [
-  {
-    "binding": "DB",
-    "database_name": "spine-community-db",
-    "database_id": "REAL-DATABASE-UUID",
-    "migrations_dir": "migrations"
-  }
-]
-```
-
-4. Apply migrations: `npx wrangler d1 migrations apply DB --remote`, reviewing the SQL before running against production. Ensure Cloudflare build credentials have appropriate D1 access. Initial site can deploy without D1 until this is configured.
+3. The D1 binding is already configured in `wrangler.jsonc` for the existing `spine-community-db` database. Cloudflare builds will redeploy the Worker when `main` changes.
+4. The database schema has **not yet been applied**. To initialize it, run `npx wrangler d1 migrations apply DB --remote` after reviewing `migrations/0001_initial.sql`. This step requires authenticated Cloudflare access. The site homepage can run before schema initialization; `/api/topics` will return a not-ready error until migrations are applied.
 
 **Never** commit Cloudflare API tokens, secret keys, or patient records.
 
