@@ -2,6 +2,8 @@
 
 > 日期：2026-11-06。**仅设计，未建表、未执行迁移、未修改网站代码。** 正式业务依据：[需求总览](../requirements/README.md)、[决策记录](../requirements/decisions.md) 以及同目录各专题文档。本文字段、表名与索引是工程建议，不等于新增了未经用户确认的业务规则。
 
+> 配套 SQL 草案： [d1-v1-schema-draft.sql](d1-v1-schema-draft.sql)。该文件位于 docs/ 下，**仅供设计评审，尚未在 SQLite/D1 验证，也未执行建表**。
+
 ## 1. 设计原则
 
 - 使用 Cloudflare D1（SQLite），所有核心实体使用稳定、不易猜的内部文本 ID；统一 UTC Unix 秒时间戳。账号与帖子通过内部用户 ID 关联，不用 Google 邮箱或公开昵称做关联主键。
