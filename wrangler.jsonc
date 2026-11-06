@@ -7,7 +7,9 @@
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
-    "run_worker_first": ["/api/*"]
+    "run_worker_first": [
+      "/api/*"
+    ]
   },
   "d1_databases": [
     {
@@ -16,5 +18,14 @@
       "database_id": "5919ff78-b8fc-46ab-85f0-01fe5e6a41b0",
       "migrations_dir": "migrations"
     }
-  ]
+  ],
+  "previews": {
+    "d1_databases": [
+      {
+        "binding": "DB",
+        "database_name": "spine-community-db-preview",
+        "database_id": "4362537a-5748-4a05-b0c4-219c3db36996"
+      }
+    ]
+  }
 }
