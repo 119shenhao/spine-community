@@ -36,3 +36,13 @@
 4. 流量统计使用浏览器随机HttpOnly访客cookie，经每日盐值摘要后保存；同人多设备计多UV，机器人判断和五分钟峰值是估算。为低流量开发阶段直接写D1小批事务，限制每访客300PV/天及全站10000PV/天；大规模需异步汇总。匿名访客摘要保留不超过约2天，社区聚合仍需最终留存政策。
 5. 无真实用户数据，未启用公开注册运营。正式隐私政策、年龄要求、申诉/审计留存期、第三方文本处理告知、独立语言URL/SEO、生产备份恢复演练和真实手机验收需在正式上线前完成。
 6. 自动化测试不能代替远程预览D1和Google/翻译供应商的真实联调；实际构建、API健康及缺失配置应以交付报告为准。
+
+## 远程开发预览验收
+
+- 首次实现提交：`204ddc21abf8d08fd057cca46a048adf924e8e66`。
+- Cloudflare GitHub check：**success**，Build ID `c1076802-4c80-4daf-ba9a-c4b1ef61a7fc`。
+- 浏览器打开指定远程预览：新版多语言论坛首页和空列表正常，分类词条读取成功。
+- `/api/health` 实际返回 `status=ok`、`databaseReady=true`、`version=0.2.0-preview.1`；测试库结构已初始化。
+- `googleConfigured=false`、`translationConfigured=false`、`analyticsConfigured=false`；不能声称真实Google登录、外部翻译或流量采集已经启用。
+- 首次实现仅更新feature分支与预览D1；没有提交/合并main，没有生产D1写入，也没有复制生产数据。
+- 验收截图：[开发预览](assets/development-preview.jpg)。
