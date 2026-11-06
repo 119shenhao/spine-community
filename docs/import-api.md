@@ -106,6 +106,12 @@ curl --request POST \
 
 - TypeScript 与25项集成测试通过，含9项新增导入测试：生产关闭及无数据库访问、系统账号禁止登录／授权、免密批量和嵌套、单条接口、去重、跨帖和隐藏内容拒绝、长度和数量限制、审核、失败回滚及测试库隔离。
 - 本地 Wrangler 已成功应用 `0003_import.sql`。本机 Wrangler HTTP 启动遇到运行环境的 `uv_interface_addresses` 错误，不能把该步骤写成已完成浏览器验收。
-- 远程预览构建、账号和实际 API 验收结果在部署完成后补记。
+- 远程 Cloudflare Preview 构建 **success**，代码提交 `1df625b0209928db6e7e84d8d8b3093ea32be27b`，Build ID `80d3bb81-cfe3-413a-b540-d5183f4ee9d9`；构建前自动执行了测试库迁移，远程 `/api/import/account` 确认账号存在且 `canLogin=false`。
+- 远程健康检查：`version=0.2.0-preview.2`、`databaseReady=true`、`importEnabled=true`。
+- 实际无密钥／无 Cookie 导入：批量1帖＋2条嵌套回复返回201；原请求重放返回200及原ID；单独追加1条回复、单帖接口均返回201。
+- 两个相同请求并发提交实际得到201和200，内容ID相同；跨帖上级返回400 `cross_topic_reply`，伪造作者返回400 `unknown_import_field`，无效批次返回400 `invalid_title`。
+- 浏览器确认导入帖子及3条回复作者均显示“未知用户”，楼中楼链接正常，无楼主进展。测试后预览库保留3篇明确标为 Development test 的虚构帖子和3条回复，便于复查。
+- [查看实际测试讨论](https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev/#/topic/a2a118dc-a057-474d-9c05-a79c384d3bf6)。
+- 生产关闭由隔离Worker测试确认403且零数据库访问；**未向正式站发送写入测试、未提交main、未迁移生产D1**。现有正式站未发布本次代码。
 
 相关：[需求](requirements/content-import-api.md) · [实现进度](implementation-v1-2026-11-06.md) · [发布规范](development-release-workflow.md)。
