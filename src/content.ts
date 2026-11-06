@@ -31,7 +31,7 @@ export function purge(db:D1Database,type:string,contentId:string){
   const table=type==='topic'?'topics':'comments',key=type==='topic'?'topic_id':'comment_id';
   return [stmt(db,`UPDATE ${table} SET ${type==='topic'?'title=NULL,':''} body=NULL,status='deleted',deleted_at=?,updated_at=?,content_version=content_version+1 WHERE id=?`,now(),now(),contentId),stmt(db,`DELETE FROM ${type==='topic'?'topic_translations':'comment_translations'} WHERE ${key}=?`,contentId),stmt(db,`DELETE FROM translation_jobs WHERE content_type=? AND content_id=?`,type,contentId)];
 }
-async function terms(env:Env,value:unknown){
+export async function terms(env:Env,value:unknown){
   if(value===undefined)return [] as string[];
   if(!Array.isArray(value)||value.length>16||value.some(v=>typeof v!=='string'))fail(400,'invalid_terms');
   const unique=[...new Set(value)] as string[];for(const term of unique)if(!await one(env.DB,'SELECT 1 FROM taxonomy_terms WHERE id=? AND is_active=1',term))fail(400,'invalid_terms');return unique;

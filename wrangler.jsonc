@@ -26,11 +26,18 @@
         "database_name": "spine-community-db-preview",
         "database_id": "4362537a-5748-4a05-b0c4-219c3db36996",
         "migrations_dir": "migrations/v1"
+      },
+      {
+        "binding": "IMPORT_DB",
+        "database_name": "spine-community-db-preview",
+        "database_id": "4362537a-5748-4a05-b0c4-219c3db36996",
+        "migrations_dir": "migrations/v1"
       }
     ],
     "vars": {
       "APP_ENV": "preview",
-      "TRANSLATION_ENABLED": "false"
+      "TRANSLATION_ENABLED": "false",
+      "IMPORT_ENABLED": "true"
     }
   },
   "build": {

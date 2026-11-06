@@ -3,6 +3,7 @@ export interface Env {
   ADMIN_GOOGLE_SUB?: string; TRANSLATOR_KEY?: string; TRANSLATOR_REGION?: string;
   TRANSLATION_ENABLED?: string; TRANSLATION_DAILY_LIMIT?: string; TRANSLATION_MONTHLY_LIMIT?: string;
   ANALYTICS_SALT?: string; APP_ENV?: string; DEV_AUTH?: string;
+  IMPORT_DB?: D1Database; IMPORT_ENABLED?: string;
 }
 export type Row = Record<string, any>;
 export const locales = ['en','zh-CN','es','pt-BR','de','fr','ja'];
@@ -42,7 +43,7 @@ export async function rate(db: D1Database,key: string,limit: number,seconds=60) 
 }
 export async function currentUser(req: Request, env: Env): Promise<Row|null> {
   const token=cookie(req,'sc_session');if(!token)return null;
-  const user=await one(env.DB,`SELECT u.*,s.id session_id FROM user_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>? AND s.revoked_at IS NULL AND u.status='active'`,await hash(token),now());
+  const user=await one(env.DB,`SELECT u.*,s.id session_id FROM user_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>? AND s.revoked_at IS NULL AND u.status='active' AND u.is_system=0`,await hash(token),now());
   if(!user)return null;
   const roles=await all(env.DB,'SELECT role FROM user_roles WHERE user_id=?',user.id);
   user.role=roles.some(r=>r.role==='admin')?'admin':roles.some(r=>r.role==='moderator')?'moderator':'member';return user;

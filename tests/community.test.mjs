@@ -42,3 +42,130 @@ test('notification focus can reach comments after page one and progress-only pag
 test('Google JWT signature, audience, nonce and expiration verification',async()=>{const pair=await crypto.subtle.generateKey({name:'RSASSA-PKCS1-v1_5',modulusLength:2048,publicExponent:new Uint8Array([1,0,1]),hash:'SHA-256'},true,['sign','verify']);const jwk=await crypto.subtle.exportKey('jwk',pair.publicKey);const encode=o=>Buffer.from(JSON.stringify(o)).toString('base64url');const make=async extra=>{const h=encode({alg:'RS256',kid:'test'}),p=encode({iss:'https://accounts.google.com',aud:'client',sub:'google-user',nonce:'nonce',iat:now(),exp:now()+300,...extra});const sig=await crypto.subtle.sign('RSASSA-PKCS1-v1_5',pair.privateKey,new TextEncoder().encode(h+'.'+p));return h+'.'+p+'.'+Buffer.from(sig).toString('base64url');};const original=globalThis.fetch;globalThis.fetch=async()=>Response.json({keys:[{...jwk,kid:'test'}]});try{assert.equal((await verifyGoogle(await make({}),'client','nonce')).sub,'google-user');await assert.rejects(()=>verifyGoogle(makeToken,'client','bad'));const bad=await make({aud:'evil'});await assert.rejects(()=>verifyGoogle(bad,'client','nonce'));const expired=await make({exp:now()-1});await assert.rejects(()=>verifyGoogle(expired,'client','nonce'));const nonce=await make({nonce:'wrong'});await assert.rejects(()=>verifyGoogle(nonce,'client','nonce'));}finally{globalThis.fetch=original;}var makeToken='invalid';});
 test('owner fulfils deletion request: source/cache removal, sessions revoked, other replies intact',async()=>{const {call,topic,DB}=await fixture();const id=await topic('My test data','A private detail','bob');const c=await call('/api/topics/'+id+'/comments','POST',{body:'Another person reply'},'carol');await call('/api/privacy-requests','POST',{type:'account_delete'},'bob');const p=DB.db.prepare("SELECT id FROM privacy_requests WHERE user_id='bob'").get().id;const r=await call('/api/admin/privacy','POST',{id:p,status:'fulfill',reason:'Test user request'},'admin');assert.equal(r.status,200,JSON.stringify(r));assert.equal((await call('/api/me','GET',undefined,'bob')).data.user,null);const detail=await call('/api/topics/'+id,'GET',undefined,null);assert.equal(detail.data.topic.body,null);assert(detail.data.comments.some(x=>x.id===c.data.id));assert.equal(DB.db.prepare('PRAGMA foreign_key_check').all().length,0);});
 test('editing a manually hidden post cannot bypass moderator review',async()=>{const {call,topic}=await fixture();const id=await topic();await call('/api/admin/content','POST',{type:'topic',id,action:'hide',reason:'Needs review'},'admin');const edited=await call('/api/topics/'+id,'PATCH',{title:'Changed title',body:'Changed body'},'alice');assert.equal(edited.data.status,'pending_review');assert.equal((await call('/api/topics/'+id,'GET',undefined,null)).status,404);});
+
+const IMPORT_ORIGIN='https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev';
+async function importFixture(){
+ const f=await fixture();Object.assign(f.env,{APP_ENV:'preview',IMPORT_ENABLED:'true',IMPORT_DB:f.DB});
+ f.imp=async(path,data,options={})=>{
+  const req=new Request((options.origin||IMPORT_ORIGIN)+path,{method:options.method||'POST',headers:{'content-type':'application/json',...options.headers},body:data===undefined?undefined:JSON.stringify(data)});
+  const res=await worker.fetch(req,options.env||f.env);
+  return {status:res.status,data:await res.json()};
+ };
+ return f;
+}
+test('imports fail closed before any DB access for production, missing config and spoofed origin',async()=>{
+ const poison={prepare(){throw Error('DB accessed');},batch(){throw Error('DB accessed');}};
+ const good={APP_ENV:'preview',IMPORT_ENABLED:'true',DB:poison,IMPORT_DB:poison};
+ for(const env of [{},{...good,APP_ENV:'production'},{...good,IMPORT_ENABLED:'false'},{...good,IMPORT_DB:undefined},{...good,APP_ENV:undefined}]){
+  for(const method of ['POST','GET','OPTIONS']){
+   const r=await worker.fetch(new Request(IMPORT_ORIGIN+'/api/import/batch?APP_ENV=preview&IMPORT_ENABLED=true',{method,headers:{authorization:'Bearer fake'}}),env);
+   assert.equal(r.status,403);assert.equal((await r.json()).error,'import_disabled');
+  }
+ }
+ for(const origin of ['https://spine-community.119shenhao.workers.dev','https://evil.test']){
+  const r=await worker.fetch(new Request(origin+'/api/import/batch',{method:'POST',headers:{host:new URL(IMPORT_ORIGIN).host}}),good);
+  assert.equal((await r.json()).error,'import_disabled');
+ }
+});
+test('unknown user is seeded once and cannot obtain identity, session, role or login',async()=>{
+ const {DB,imp,env}=await importFixture();
+ for(let i=0;i<2;i++)assert.deepEqual((await imp('/api/import/account',undefined,{method:'GET'})).data.account,{id:'system-unknown-import',nickname:'未知用户',canLogin:false});
+ const uid='system-unknown-import';
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM users WHERE is_system=1').get().n,1);
+ assert.throws(()=>DB.db.prepare("INSERT INTO auth_identities(id,user_id,provider,provider_subject) VALUES('fake',?,'google','fake')").run(uid));
+ assert.throws(()=>DB.db.prepare("INSERT INTO user_sessions(id,user_id,token_hash,expires_at) VALUES('fake',?,'fake',9999999999)").run(uid));
+ assert.throws(()=>DB.db.prepare("INSERT INTO user_roles(user_id,role) VALUES(?,'admin')").run(uid));
+ // Even if a future bug bypasses the DB trigger, the Worker refuses a system account session.
+ DB.db.exec('DROP TRIGGER system_session_insert');
+ DB.db.prepare('INSERT INTO user_sessions(id,user_id,token_hash,expires_at) VALUES(?,?,?,?)').run('forged',uid,await hash('forged'),now()+300);
+ const r=await worker.fetch(new Request(IMPORT_ORIGIN+'/api/me',{headers:{cookie:'sc_session=forged'}}),env);
+ assert.equal((await r.json()).user,null);
+ DB.db.exec('DROP TRIGGER system_identity_insert');
+ DB.db.prepare("INSERT INTO auth_identities(id,user_id,provider,provider_subject) VALUES('bad',?,'google','fake')").run(uid);
+ const {login}=await import('../.test-build/auth.js');
+ await assert.rejects(()=>login(new Request(IMPORT_ORIGIN),env,'fake'),e=>e.status===403);
+});
+test('anonymous batch imports all content as unknown user with nesting, search, counts and no progress',async()=>{
+ const {DB,imp,call}=await importFixture();
+ const r=await imp('/api/import/batch',{topics:[{title:'Import feature test',body:'Fictional development text',source_lang:'en',terms:['lower-back'],comments:[{body:'Parent reply',replies:[{body:'Nested reply'}]}]},{title:'Second test',body:'More fictional development text'}]});
+ assert.equal(r.status,201,JSON.stringify(r));
+ assert.equal(r.data.imported.topics,2);assert.equal(r.data.imported.comments,2);
+ const tid=r.data.results[0].id;
+ const detail=await call('/api/topics/'+tid,'GET',undefined,null);
+ assert.equal(detail.data.topic.nickname,'未知用户');assert.equal(detail.data.topic.reply_count,2);
+ assert.equal(detail.data.comments[1].parent_comment_id,detail.data.comments[0].id);
+ assert(detail.data.comments.every(c=>c.author_id==='system-unknown-import'&&c.nickname==='未知用户'&&c.kind==='regular'&&c.progress_seq===null));
+ assert.equal(detail.data.progress.length,0);assert.equal(DB.db.prepare('SELECT count(*) n FROM notifications').get().n,0);
+ assert((await call('/api/topics?q=Import')).data.topics.some(t=>t.id===tid));
+ assert.equal(DB.db.prepare('PRAGMA foreign_key_check').all().length,0);
+});
+test('single-topic and existing-topic replies import without cookies or origin, and cannot edit or impersonate',async()=>{
+ const {imp,call,DB}=await importFixture();
+ const t=await imp('/api/import/topics',{title:'Standalone test topic',body:'Fictional test content'});assert.equal(t.status,201,JSON.stringify(t));
+ const tid=t.data.results[0].id;
+ const a=await imp('/api/import/comments',{topic_id:tid,body:'First test reply'});assert.equal(a.status,201);
+ const b=await imp('/api/import/comments',{topic_id:tid,parent_comment_id:a.data.results[0].id,body:'Child test reply'});assert.equal(b.status,201);
+ assert.equal((await call('/api/topics/'+tid,'GET',undefined,null)).data.topic.reply_count,2);
+ assert.equal((await imp('/api/import/topics',{title:'bad',body:'bad',author_id:'admin'})).status,400);
+ assert.equal((await imp('/api/import/comments',{topic_id:tid,body:'bad',kind:'progress'})).status,400);
+ assert.equal((await imp('/api/import/topics',{title:'bad',body:'bad',source_url:'https://example.test'})).status,400);
+ assert.equal((await imp('/api/import/topics',{}, {method:'PATCH'})).status,405);
+ assert.equal((await call('/api/topics/'+tid,'PATCH',{title:'tamper',body:'tamper'},null)).status,401);
+ assert.equal((await call('/api/topics/'+tid,'PATCH',{title:'tamper',body:'tamper'},'alice')).status,403);
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM auth_identities WHERE user_id=?').get('system-unknown-import').n,0);
+});
+test('identical imports replay the original IDs without duplicate content, counters or metrics',async()=>{
+ const {imp,DB}=await importFixture();
+ const a=await imp('/api/import/topics',{title:'Replay test',body:'Replay body',comments:[{body:'Replay reply'}]});
+ const b=await imp('/api/import/topics',{comments:[{body:'Replay reply'}],body:'Replay body',title:'Replay test'});
+ assert.equal(a.status,201);assert.equal(b.status,200);assert.equal(b.data.replayed,true);assert.deepEqual(a.data.results,b.data.results);
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM topics').get().n,1);assert.equal(DB.db.prepare('SELECT count(*) n FROM comments').get().n,1);
+ assert.equal(DB.db.prepare('SELECT new_topics FROM daily_community_metrics').get().new_topics,1);
+});
+test('cross-topic, missing and hidden parent rejection keeps batches atomic',async()=>{
+ const {imp,DB}=await importFixture();
+ const a=await imp('/api/import/topics',{title:'First',body:'First body',comments:[{body:'First reply'}]});
+ const b=await imp('/api/import/topics',{title:'Second',body:'Second body'});
+ const tid=b.data.results[0].id,cid=a.data.results[1].id;
+ const before=DB.db.prepare('SELECT count(*) n FROM topics').get().n;
+ const cross=await imp('/api/import/batch',{topics:[{title:'Must rollback',body:'Not saved'}],comments:[{topic_id:tid,parent_comment_id:cid,body:'Wrong parent'}]});
+ assert.equal(cross.status,400);assert.equal(cross.data.error,'cross_topic_reply');
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM topics').get().n,before);
+ assert.equal((await imp('/api/import/comments',{topic_id:tid,parent_comment_id:'missing',body:'test'})).status,404);
+ DB.db.prepare("UPDATE comments SET status='hidden' WHERE id=?").run(cid);
+ assert.equal((await imp('/api/import/comments',{topic_id:a.data.results[0].id,parent_comment_id:cid,body:'test'})).status,404);
+ DB.db.prepare("UPDATE topics SET status='hidden' WHERE id=?").run(tid);
+ assert.equal((await imp('/api/import/comments',{topic_id:tid,body:'test'})).status,404);
+});
+test('import validation limits, moderation and origin checks remain active',async()=>{
+ const {imp,DB}=await importFixture();
+ assert.equal((await imp('/api/import/batch',{})).status,400);
+ assert.equal((await imp('/api/import/topics',{title:'',body:'test'})).status,400);
+ assert.equal((await imp('/api/import/batch',{topics:Array.from({length:11},()=>({title:'test',body:'test'}))})).data.error,'too_many_topics');
+ assert.equal((await imp('/api/import/topics',{title:'test',body:'test',comments:Array.from({length:50},()=>({body:'test'}))})).data.error,'too_many_items');
+ assert.equal((await imp('/api/import/topics',{title:'test',body:'x'.repeat(150001)})).status,413);
+ assert.equal((await imp('/api/import/topics',{title:'test',body:'test'},{headers:{origin:'https://evil.test'}})).status,403);
+ assert.equal((await imp('/api/import/topics',{title:'test',body:'test'},{headers:{'content-type':'text/plain'}})).status,415);
+ let deep={body:'deep'};for(let i=0;i<8;i++)deep={body:'deep',replies:[deep]};
+ assert.equal((await imp('/api/import/topics',{title:'deep',body:'test',comments:[deep]})).data.error,'reply_depth_exceeded');
+ const blocked=await imp('/api/import/topics',{title:'guaranteed cure',body:'buy now https://scam.test'});assert.equal(blocked.data.results[0].status,'blocked');
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM topics_search').get().n,0);
+});
+test('database failure rolls back content and replay record so retry can succeed',async()=>{
+ const {imp,DB}=await importFixture();
+ DB.db.exec("CREATE TRIGGER forced_import_failure BEFORE INSERT ON topics BEGIN SELECT RAISE(ABORT,'test failure'); END");
+ const payload={title:'Rollback test',body:'Rollback text'};
+ assert.equal((await imp('/api/import/topics',payload)).status,503);
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM import_batches').get().n,0);
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM topics').get().n,0);
+ DB.db.exec('DROP TRIGGER forced_import_failure');
+ assert.equal((await imp('/api/import/topics',payload)).status,201);
+});
+test('preview import uses only IMPORT_DB and never falls back to the normal DB binding',async()=>{
+ const {imp,env,DB}=await importFixture();
+ env.DB={prepare(){throw Error('Wrong database');},batch(){throw Error('Wrong database');}};
+ assert.equal((await imp('/api/import/topics',{title:'Isolated',body:'Isolated test'})).status,201);
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM topics').get().n,1);
+ for(let i=0;i<30;i++)await imp('/api/import/batch',{comments:[]});
+ assert.equal((await imp('/api/import/topics',{title:'Over limit',body:'test'})).status,429);
+});

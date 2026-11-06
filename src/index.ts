@@ -5,15 +5,17 @@ import {searchRoute} from './search';
 import {communityRoute} from './community';
 import {translationRoute} from './translation';
 import {adminRoute} from './admin';
+import {importRoute,importEnabled} from './import';
 export default {
  async fetch(req:Request,env:Env):Promise<Response>{
   const url=new URL(req.url),path=url.pathname;
   if(!path.startsWith('/api/'))return env.ASSETS.fetch(req);
   try{
+   if(path==='/api/import'||path.startsWith('/api/import/'))return await importRoute(req,env,path);
    if(path==='/api/uploads'||path.startsWith('/api/uploads/'))fail(403,'image_feature_disabled');
    if(path==='/api/health'){
     let ready=false;try{ready=Boolean(env.DB&&await one(env.DB,"SELECT value FROM settings WHERE key='schema_version' AND value='1'"));}catch{}
-    return json({status:ready?'ok':'setup_required',stage:'v1-development',version:'0.2.0-preview.1',databaseConfigured:Boolean(env.DB),databaseReady:ready,imageUploadsEnabled:false,googleConfigured:Boolean(env.GOOGLE_CLIENT_ID&&env.GOOGLE_CLIENT_SECRET),translationConfigured:env.TRANSLATION_ENABLED==='true'&&Boolean(env.TRANSLATOR_KEY),analyticsConfigured:Boolean(env.ANALYTICS_SALT)},ready?200:503);
+    return json({status:ready?'ok':'setup_required',stage:'v1-development',version:'0.2.0-preview.2',databaseConfigured:Boolean(env.DB),databaseReady:ready,imageUploadsEnabled:false,importEnabled:importEnabled(req,env),googleConfigured:Boolean(env.GOOGLE_CLIENT_ID&&env.GOOGLE_CLIENT_SECRET),translationConfigured:env.TRANSLATION_ENABLED==='true'&&Boolean(env.TRANSLATOR_KEY),analyticsConfigured:Boolean(env.ANALYTICS_SALT)},ready?200:503);
    }
    if(!env.DB)fail(503,'database_not_configured');
    if(!['GET','HEAD'].includes(req.method))sameOrigin(req);

@@ -26,7 +26,7 @@ export async function login(req: Request,env: Env,subject: string,provider='goog
       stmt(env.DB,"INSERT INTO daily_community_metrics(day_utc,new_users) VALUES(date('now'),1) ON CONFLICT(day_utc) DO UPDATE SET new_users=new_users+1")
     ]);
   }
-  const user=await one(env.DB,'SELECT status FROM users WHERE id=?',uid);if(user?.status!=='active')fail(403,'account_unavailable');
+  const user=await one(env.DB,'SELECT status,is_system FROM users WHERE id=?',uid);if(user?.status!=='active'||user.is_system)fail(403,'account_unavailable');
   if(provider==='google'&&env.ADMIN_GOOGLE_SUB&&subject===env.ADMIN_GOOGLE_SUB){
     // Only an out-of-band secret can bootstrap ownership. Never trust a request role or email.
     await stmt(env.DB,"INSERT OR IGNORE INTO user_roles(user_id,role) VALUES(?,'admin')",uid).run();
