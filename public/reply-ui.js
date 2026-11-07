@@ -9,7 +9,9 @@ export function applyReplyResult(state,result,editing=false){
  state.topic.reply_count=result.reply_count;
  if(c.kind==='progress'){
   const previous=state.progress||[];
-  state.progress=[{id:c.id,body:c.body,source_lang:c.source_lang,content_version:c.content_version,progress_seq:c.progress_seq,created_at:c.created_at},...previous.filter(p=>p.id!==c.id)].sort((a,b)=>b.progress_seq-a.progress_seq).slice(0,2).filter(p=>p.body&&c.status==='published'||p.id!==c.id);
+  const next=previous.filter(p=>p.id!==c.id);
+  if(c.status==='published')next.push({id:c.id,body:c.body,source_lang:c.source_lang,content_version:c.content_version,progress_seq:c.progress_seq,created_at:c.created_at});
+  state.progress=next.sort((a,b)=>b.progress_seq-a.progress_seq).slice(0,2);
  }
  return {comment:c,insert:at<0};
 }
