@@ -1,0 +1,191 @@
+name: Production D1
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Inspect schema or apply reviewed migrations
+        type: choice
+        options: [inspect, apply]
+        default: inspect
+      migration_sha:
+        description: Full commit SHA containing the reviewed migrations/v1 SQL
+        type: string
+        required: true
+      confirmation:
+        description: For apply, enter spine-community-db
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spine-community-production-d1
+  cancel-in-progress: false
+
+jobs:
+  production-d1:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_ACCOUNT_ID: 289976272520a38732bef34108585e11
+      D1_NAME: spine-community-db
+      D1_ID: 5919ff78-b8fc-46ab-85f0-01fe5e6a41b0
+      OPERATION: ${{ inputs.operation }}
+      MIGRATION_SHA: ${{ inputs.migration_sha }}
+    steps:
+      - name: Validate the operation
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          if [[ ! "$MIGRATION_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Use a full 40-character lowercase commit SHA."
+            exit 1
+          fi
+          case "$OPERATION" in
+            inspect) ;;
+            apply)
+              if [[ "$CONFIRMATION" != "$D1_NAME" ]]; then
+                echo "::error::Type the exact production database name to confirm apply."
+                exit 1
+              fi
+              ;;
+            *) exit 1 ;;
+          esac
+
+      - name: Check out the reviewed migration source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.migration_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          sparse-checkout: migrations/v1
+          path: migration-source
+
+      - name: Prepare an isolated Wrangler configuration
+        run: |
+          test "$(git -C migration-source rev-parse HEAD)" = "$MIGRATION_SHA"
+          if ! git -C migration-source for-each-ref --contains "$MIGRATION_SHA" --format='%(refname)' refs/remotes/origin/main refs/remotes/origin/release/ | grep -q .; then
+            echo "::error::The migration commit must belong to main or a release/* branch in this repository."
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import shutil
+          from pathlib import Path
+
+          source = Path("migration-source/migrations/v1")
+          target = Path(os.environ["RUNNER_TEMP"]) / "production-d1"
+          migrations = target / "migrations"
+          files = sorted(source.glob("*.sql"))
+          if not files or any(f.is_symlink() or not f.is_file() or not re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", f.name) for f in files):
+              raise SystemExit("Expected regular, versioned SQL files in migrations/v1.")
+          if len({f.name[:4] for f in files}) != len(files):
+              raise SystemExit("Duplicate migration version numbers.")
+          migrations.mkdir(parents=True)
+          for file in files:
+              shutil.copyfile(file, migrations / file.name)
+          config = {
+              "name": "spine-community-production-d1",
+              "d1_databases": [{
+                  "binding": "PRODUCTION_DB",
+                  "database_name": os.environ["D1_NAME"],
+                  "database_id": os.environ["D1_ID"],
+                  "migrations_dir": "migrations",
+              }],
+          }
+          (target / "wrangler.json").write_text(json.dumps(config))
+          PY
+
+      - name: Inspect production schema and migration history
+        id: inspect
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PROD_D1_API_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from urllib.error import URLError
+          from urllib.request import Request, urlopen
+
+          token = os.environ["CLOUDFLARE_API_TOKEN"]
+          if not token:
+              raise SystemExit("Missing Actions secret CLOUDFLARE_PROD_D1_API_TOKEN.")
+          account, database = os.environ["CLOUDFLARE_ACCOUNT_ID"], os.environ["D1_ID"]
+          endpoint = f"https://api.cloudflare.com/client/v4/accounts/{account}/d1/database/{database}"
+          headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+          def request(suffix="", sql=None):
+              payload = json.dumps({"sql": sql}).encode() if sql else None
+              try:
+                  with urlopen(Request(endpoint + suffix, data=payload, headers=headers), timeout=30) as response:
+                      body = json.load(response)
+              except (URLError, TimeoutError, ValueError):
+                  raise SystemExit("Cloudflare D1 API request failed. Check token permissions and the target account.") from None
+              if not body.get("success"):
+                  raise SystemExit("Cloudflare rejected the D1 API request.")
+              return body["result"]
+
+          database_info = request()
+          if database_info.get("uuid") != database or database_info.get("name") != os.environ["D1_NAME"]:
+              raise SystemExit("Production D1 identity mismatch.")
+
+          def query(sql):
+              response = request("/query", sql)
+              if len(response) != 1 or not response[0].get("success"):
+                  raise SystemExit("Production D1 inspection query failed.")
+              return response[0]["results"]
+
+          tables = {r["name"] for r in query(
+              "SELECT name FROM sqlite_master WHERE type = 'table' "
+              "AND name NOT GLOB 'sqlite_*' AND name NOT GLOB '_cf_*'"
+          )}
+          applied = [r["name"] for r in query("SELECT name FROM d1_migrations ORDER BY id")] if "d1_migrations" in tables else []
+          files = sorted(f.name for f in (Path(os.environ["RUNNER_TEMP"]) / "production-d1/migrations").glob("*.sql"))
+          pending = files[len(applied):]
+          blocking_reason = None
+          if applied != files[:len(applied)]:
+              blocking_reason = "Production migration history is not an ordered prefix of this commit."
+          elif not applied and tables - {"d1_migrations"}:
+              blocking_reason = "Production has tables without registered migrations. Review legacy compatibility first."
+          elif applied and not {"users", "topics", "comments", "settings", "auth_states"} <= tables:
+              blocking_reason = "Required v1 tables are missing despite registered migrations."
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              print("### Production D1 inspection", file=summary)
+              for label, values in (("Tables", sorted(tables)), ("Applied", applied), ("Pending", pending)):
+                  print(f"\n- {label}: {', '.join(values) or '(none)'}", file=summary)
+              if blocking_reason:
+                  print(f"\n**Migration blocked:** {blocking_reason}", file=summary)
+          if blocking_reason and os.environ["OPERATION"] == "apply":
+              raise SystemExit(blocking_reason)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              print(f"apply_needed={'true' if pending and not blocking_reason else 'false'}", file=output)
+          PY
+
+      - name: Set up Node for Wrangler
+        if: inputs.operation == 'apply' && steps.inspect.outputs.apply_needed == 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Install the pinned Wrangler version
+        if: inputs.operation == 'apply' && steps.inspect.outputs.apply_needed == 'true'
+        run: npm install --prefix "$RUNNER_TEMP/production-d1" --no-audit --no-fund wrangler@4.135.0
+
+      - name: Record a restore point and apply migrations
+        if: inputs.operation == 'apply' && steps.inspect.outputs.apply_needed == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PROD_D1_API_TOKEN }}
+        run: |
+          cd "$RUNNER_TEMP/production-d1"
+          wrangler=./node_modules/.bin/wrangler
+          bookmark=$("$wrangler" d1 time-travel info "$D1_NAME" --config wrangler.json --json)
+          value=$(jq -er '.bookmark | select(type == "string" and length > 0)' <<< "$bookmark")
+          printf '\nRestore bookmark: %s\n' "$value" >> "$GITHUB_STEP_SUMMARY"
+          "$wrangler" d1 migrations apply "$D1_NAME" --remote --config wrangler.json
+          printf '\nMigration apply completed for %s.\n' "$MIGRATION_SHA" >> "$GITHUB_STEP_SUMMARY"
