@@ -89,3 +89,11 @@
 - 点击退出后调用既有 `POST /api/auth/logout`，撤销本站 D1 会话、清除 Cookie 和前端用户态，并返回公开首页；不会退出浏览器中的整个 Google 账号。
 - 退出功能集成回归测试覆盖 Cookie 清空、会话撤销、重复请求及退出后读取用户为空；GitHub Actions `npm run verify` **success**，最终代码提交 `e858a23a1b7aec653cee982ce0dae2d2a197f124`，检查 [42362127680](https://github.com/119shenhao/spine-community/actions/runs/42362127680)。
 - **未实测 Cloudflare 线上浏览器效果**：当前访问工具无法打开开发预览地址，应以预览构建成功后的手机实际验收为准。未执行 D1 迁移、未更改生产数据、未授权本次合并生产代码。
+
+## Google OAuth 客户端 ID 环境隔离与防回归（2026-11-07）
+
+- 用户分别提供了开发预览与正式生产使用的 **OAuth Client ID**（Client ID 是公开标识，不是 Client Secret）。
+- 在开发分支 `feature/v1-community-build-20261106` 的 `wrangler.jsonc` 固定绑定：生产顶层 `vars.GOOGLE_CLIENT_ID` = `294338107553-k5bts5abj3tg85lt82moelv40sph3tuh.apps.googleusercontent.com`；开发预览 `previews.vars.GOOGLE_CLIENT_ID` = `294338107553-bht5pr4qa112e9knbst517b0mvb9pus9.apps.googleusercontent.com`。
+- `GOOGLE_CLIENT_SECRET` 仍必须分别用 Cloudflare 加密 Secret 配置；绝不提交到 GitHub。代码测试会校验两个 Client ID 均非空、互不混用且 Secret 未写入明文配置。
+- 修复针对近期开发预览因 `GOOGLE_CLIENT_ID` 运行时变量缺失而不显示 Google 登录按钮的问题。开发代码与检查提交 `8a2f10f1377511fba3534de7295640139a2832b9`。自动预览部署和远程 `/api/health` 检查应单独核实。
+- **重要：正式站尚未执行本次配置部署。** 顶层生产 ID 当前保存在开发分支，等正式发布审批后随代码部署至生产；不得为添加 ID 单独合并/发布旧生产代码或误触发生产 D1 变更。本次未触碰生产 D1。
