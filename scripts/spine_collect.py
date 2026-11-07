@@ -174,7 +174,7 @@ def inspect_ask39():
 
 
 def ask39_directory_candidates(excluded, maximum=36):
-    found = {}
+    ranked = {}
     for listing in ASK39_LISTS:
         try:
             page = BeautifulSoup(fetch(listing), "html.parser")
@@ -183,23 +183,23 @@ def ask39_directory_candidates(excluded, maximum=36):
             if error.status in (401, 403, 429):
                 break
             continue
-        added = 0
         for link in page.select("a[href]"):
             url = urljoin(listing, link["href"])
             try:
                 identifier = source_id("ask39", url)
             except ValueError:
                 continue
-            if identifier in excluded or identifier in found:
+            if identifier in excluded:
                 continue
-            found[identifier] = url
-            added += 1
-            if added == 6 or len(found) == maximum:
-                break
-        if len(found) == maximum:
-            break
+            title = link.get("title") or link.get_text(" ", strip=True)
+            priority = (12 * bool(re.search(r"术后|康复|手术后|复发|保守治疗", title))
+                        + 8 * bool(re.search(r"我|妈妈|父亲|母亲|[0-9一二三四五六七八九十]+[年月周天岁]", title))
+                        + min(len(title), 60))
+            if identifier not in ranked or priority > ranked[identifier][0]:
+                ranked[identifier] = (priority, url)
         time.sleep(1)
-    return found
+    selected = sorted(ranked.items(), key=lambda item: item[1][0], reverse=True)[:maximum]
+    return {identifier: url for identifier, (_, url) in selected}
 
 
 def complete(payload):

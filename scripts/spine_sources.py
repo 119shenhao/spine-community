@@ -14,10 +14,12 @@ SOURCE_URLS = {
 }
 ASK39_LISTS = (
     "https://ask.39.net/browse/11760-1-1.html",
+    "https://ask.39.net/browse/11760-1-2.html",
     "https://ask.39.net/browse/11760-1-10.html",
     "https://ask.39.net/browse/11760-1-50.html",
     "https://ask.39.net/browse/11760-1-100.html",
     "https://ask.39.net/browse/625-1-1.html",
+    "https://ask.39.net/browse/625-1-2.html",
     "https://ask.39.net/browse/625-1-5.html",
     "https://ask.39.net/browse/625-1-10.html",
     "https://ask.39.net/browse/625-1-50.html",
@@ -150,9 +152,12 @@ def parse_ask39(markup):
     unique_extra = re.sub(r"[\s，。？！、：；,.?!:;]", "", extra)
     if unique_extra and unique_extra not in (unique_title, unique_body):
         body += "\n" + extra
-    if (len(re.sub(r"\s+", "", body)) < 30 or
-            (unique_body == unique_title and unique_extra in ("", unique_body)) or
-            not re.search(r"我|本人|家人|父亲|母亲|[年月周天岁]|术后|复发|诊断|检查", body)):
+    personal_context = re.search(
+        r"我|本人|家人|父亲|母亲|[0-9一二三四五六七八九十]+[年月周天岁]|术后|复发|诊断|检查", body
+    )
+    if len(re.sub(r"\s+", "", body)) < 24:
+        raise ValueError("patient_narrative_too_short")
+    if not personal_context:
         raise ValueError("patient_narrative_unverified")
 
     comments = []

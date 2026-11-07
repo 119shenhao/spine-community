@@ -1,18 +1,9 @@
 {
-  "request_id": "collect-expanded-sources-20261107",
+  "request_id": "collect-ask39-ranked-20261107",
   "mode": "collect",
   "sites": [
-    "healthunlocked",
-    "ask39",
-    "mayoclinic"
+    "ask39"
   ],
-  "candidates": {
-    "healthunlocked": [
-      "https://healthunlocked.com/painconcern/posts/135726117/pudendal-or-piriformis",
-      "https://healthunlocked.com/painconcern/posts/146163247/neck-and-shoulder-pain",
-      "https://healthunlocked.com/painconcern/posts/142787353/piriformis-and-pudendal-nerve-pain",
-      "https://healthunlocked.com/painconcern/posts/153215969/piriformis-pain"
-    ]
-  },
+  "candidates": {},
   "limit": 7
 }
