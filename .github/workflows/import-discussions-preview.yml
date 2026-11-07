@@ -1,0 +1,52 @@
+name: One-time preview discussion import
+on:
+  push:
+    branches:
+      - feature/v1-community-build-20261106
+    paths:
+      - .github/workflows/import-discussions-preview.yml
+permissions:
+  contents: read
+jobs:
+  import-preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify isolated preview and import six discussion summaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          base='https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev'
+          health_code=$(curl -fsS --connect-timeout 10 --max-time 40 -o health.json -w '%{http_code}' "$base/api/health")
+          test "$health_code" = 200
+          python3 - <<'PY'
+          import json
+          h=json.load(open('health.json'))
+          print('Preview health:', h)
+          assert h.get('stage') == 'v1-development', 'Wrong application stage'
+          assert h.get('databaseReady') is True, 'Preview DB is not ready'
+          assert h.get('importEnabled') is True, 'Preview import is not enabled'
+          PY
+          code=$(curl -sS --connect-timeout 10 --max-time 90 --retry 2 --retry-all-errors \
+            -H 'Content-Type: application/json' \
+            --data-binary @scripts/reddit_discussions_preview.json \
+            -o import_result.json -w '%{http_code}' "$base/api/import/batch")
+          echo "HTTP: $code"
+          cat import_result.json
+          test "$code" = 201 -o "$code" = 200
+          python3 - <<'PY'
+          import json,os
+          d=json.load(open('import_result.json'))
+          assert d['imported']=={'topics':6,'comments':22}, d.get('imported')
+          assert d['author']['id']=='system-unknown-import', d.get('author')
+          ids=[x['id'] for x in d['results'] if x['type']=='topic']
+          assert len(ids)==6
+          print('\nImported topic URLs:')
+          for topic_id in ids: print('https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev/#/topic/'+topic_id)
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:
+            f.write('## Preview import complete\n\n6 topics + 22 comments\n\n')
+            for i,topic_id in enumerate(ids,1):
+              url='https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev/#/topic/'+topic_id
+              f.write(f'{i}. [{url}]({url})\n')
+          PY
