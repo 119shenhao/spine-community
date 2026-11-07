@@ -2,7 +2,7 @@
 
 > **固定名称（2026-11-07 用户确认）：同步帖子，从开发环境到生产环境**
 > 与 [发布新版本，从开发环境到生产环境](release-version-workflow.md) **严格区分**：本任务只同步论坛内容，不发布程序代码、数据库结构或系统基础数据。
-> 任务实现状态：已沿用 2026-11-07 成功脚本制作重复执行的工作流草案 [PR #4](https://github.com/119shenhao/spine-community/pull/4)，**尚未合并至 main，不能宣称 Actions 中已正式启用**。
+> 任务实现状态：重复执行工作流已经通过 [PR #4](https://github.com/119shenhao/spine-community/pull/4) 合并到 `main`；Cloudflare 构建排除路径 `.github/workflows/sync-posts.yml` 已由用户配置并提供截图。**在 ChatGPT 中执行本任务不要求用户每次打开 GitHub 点击 Run workflow：优先使用已连接的 GitHub 工具重跑上次成功的同步作业。**
 
 ## 从 ChatGPT 发起任务时的含义
 
@@ -15,7 +15,13 @@
 5. 生产已有相同主帖指纹时跳过，不为已有主帖增量补回帖；完成的开发主帖有回执后永远不再重复处理。任何批次失败，保留成功记录并核对，不清空生产库。
 6. 按 GitHub Actions 实际结果核对：每批的主帖、回复数量及回执均匹配，最后一轮 examined=0，才报告“本次符合条件内容全部同步完成”。
 
-**不能把这个固定任务名误认为自动授权任何未来的生产写入。** 如果目前使用的 GitHub 连接器不支持触发 workflow_dispatch，应如实说明，并提供 GitHub Actions 入口；不能声称已启动。
+**ChatGPT 无需用户手动点 Run workflow 的固定执行方式：**
+
+- 先确认用户本次明确说了“执行同步帖子，从开发环境到生产环境”，核实生产 D1、脚本和 GitHub 权限；如未授权正式同步，则只做检查。
+- 已有成功作业 ID：`128412889102`，运行 [#42375764551](https://github.com/119shenhao/spine-community/actions/runs/42375764551)，使用固定、已验证的版本。GitHub 连接器提供 `rerun_workflow_job`，可以从 ChatGPT 直接重新执行该作业，无需网页手动点击。这个运行会重新从远程预览 D1 查找尚无回执的帖子，而非重播旧内容；前置测试、预检查、恢复点、幂等同步与逐项验收依旧生效。
+- 触发成功后要获取**实际执行状态和日志**，按批次统计核对；触发接口接受请求不等于同步完成。不得在无实际运行记录时声称已经执行。
+- 如果 GitHub 拒绝重跑已完成的作业、达到重跑限制，或连接器权限发生变化，可以改用之前已验证的开发分支 `.github/workflows/approved-preview-to-production-20261107.yml` 推送触发机制（须单独核对该分支目前代码及权限）；若这些方式都不可用，再解释阻碍，绝不谎称任务已启动。
+- 固定任务名称不等于授权任何未来的生产写入；每次正式同步仍以用户当前明确指令为准。
 
 ## 成功执行过的历史任务
 
@@ -23,9 +29,9 @@
 - [修复后的成功任务 #42375764551](https://github.com/119shenhao/spine-community/actions/runs/42375764551)：新增 31 篇主帖、153 条回复（含楼中楼），记录 31 条回执，最后一批 examined=0，工作流结论为 Success。
 - 两批累计确认 **131 篇主帖、810 条回复**；这是当时的已确认完成量，不代表今后开发环境不会继续产生新内容。
 
-## 可重复执行的 GitHub Actions（草案，未启用）
+## 已安装的 GitHub Actions（网页上的备用入口）
 
-工作流文件：`.github/workflows/sync-posts.yml`（[PR #4](https://github.com/119shenhao/spine-community/pull/4)）。
+工作流文件：`.github/workflows/sync-posts.yml`（[PR #4 已合并](https://github.com/119shenhao/spine-community/pull/4)）。它同时提供网页手动触发入口，但用户从 ChatGPT 发指令时**不必使用此网页按钮**；上面的重跑方式基于已成功验证的现有作业。
 
 - 固定名称：**同步帖子，从开发环境到生产环境**。
 - 仅允许 **手动触发**（`workflow_dispatch`），没有定时或推送自动写生产；只允许从 `main` 派发。
@@ -34,6 +40,6 @@
 - 使用 SHA `4580263f1ec66feed1d1f2d2722873068455f2bb` 锁定 [成功运行 #42375764551](https://github.com/119shenhao/spine-community/actions/runs/42375764551) 中已验证的同步脚本，不会盲目执行后来开发分支新提交。未来若要升级同步代码，需先测试新候选再修改锁定 SHA。
 - 保留旧的一次性工作流运行历史，不重新运行历史脚本，也不改变去重规则。
 
-**启用前唯一已知外部配置项**：Cloudflare Worker `spine-community` → 设置 → 构建 → 构建监视路径（Build watch paths）→ **排除路径**，加入 `.github/workflows/sync-posts.yml`。当前已知 `production-d1.yml` 单独被排除，但这个新文件尚未确认已排除。在此之前，PR #4 保持草案、不合并，以免仅安装 GitHub Actions 就触发正式站点重新构建。
+**安装状态：** 用户已在 Cloudflare 生产 Worker 的构建排除路径添加 `.github/workflows/sync-posts.yml`，并通过截图确认；PR #4 已合并到 `main`。这个工作流没有自动定时同步，也不会因为普通代码推送而同步。
 
-完成排除路径配置后，将 PR #4 合并 `main`（此操作只安装 Actions 工作流、不应发布程序），在 GitHub Actions 中先运行一次 `inspect` 并检查结果，再按用户明确授权执行未来的 `sync`。这项手动操作不属于“发布新版本”任务。
+**验证状态：** 上次正式同步作业 [#42375764551](https://github.com/119shenhao/spine-community/actions/runs/42375764551) 已成功。新增的 `sync-posts.yml` 还没有单独运行过一次 `inspect`；不要把“旧任务运行成功”和“新工作流已单独验收”混为一谈。网页可手动运行 `inspect` 或 `sync` 作为备用渠道，但语音/ChatGPT 触发的默认方式为重跑已经验证过的同步作业；它与“发布新版本”任务完全独立。
