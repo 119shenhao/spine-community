@@ -95,5 +95,5 @@
 - 用户分别提供了开发预览与正式生产使用的 **OAuth Client ID**（Client ID 是公开标识，不是 Client Secret）。
 - 在开发分支 `feature/v1-community-build-20261106` 的 `wrangler.jsonc` 固定绑定：生产顶层 `vars.GOOGLE_CLIENT_ID` = `294338107553-k5bts5abj3tg85lt82moelv40sph3tuh.apps.googleusercontent.com`；开发预览 `previews.vars.GOOGLE_CLIENT_ID` = `294338107553-bht5pr4qa112e9knbst517b0mvb9pus9.apps.googleusercontent.com`。
 - `GOOGLE_CLIENT_SECRET` 仍必须分别用 Cloudflare 加密 Secret 配置；绝不提交到 GitHub。代码测试会校验两个 Client ID 均非空、互不混用且 Secret 未写入明文配置。
-- 修复针对近期开发预览因 `GOOGLE_CLIENT_ID` 运行时变量缺失而不显示 Google 登录按钮的问题。开发代码与检查提交 `8a2f10f1377511fba3534de7295640139a2832b9`。自动预览部署和远程 `/api/health` 检查应单独核实。
+- 修复针对近期开发预览因 `GOOGLE_CLIENT_ID` 运行时变量缺失而不显示 Google 登录按钮的问题。开发代码与检查提交 `8a2f10f1377511fba3534de7295640139a2832b9`。Cloudflare Worker Preview 构建已成功（Build ID `c0556985-1868-48e5-af57-fba423255031`，对应提交 `8a2f10f`），GitHub Actions `npm run verify` 通过；受当前环境 DNS 限制，尚无法读取远程 `/api/health` 以独立确认运行时 `googleConfigured=true`。
 - **重要：正式站尚未执行本次配置部署。** 顶层生产 ID 当前保存在开发分支，等正式发布审批后随代码部署至生产；不得为添加 ID 单独合并/发布旧生产代码或误触发生产 D1 变更。本次未触碰生产 D1。
