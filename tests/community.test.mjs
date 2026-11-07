@@ -856,3 +856,16 @@ test('Migrated accounts preserve non-English choices, and allow returning to aut
  assert.equal(legacy.status,200,'legacy clients with a concrete locale remain compatible');
  assert.equal((await call('/api/me')).data.user.preferred_locale_mode,'manual');
 });
+
+test('post/reply language menus use 简体中文 and 繁體中文 rather than region labels',async()=>{
+ const source=readFileSync('public/app.js','utf8');
+ const menuLine=source.split('\n').find(line=>line.startsWith('function languageOptions('));
+ assert(menuLine,'shared post/reply language options function must exist');
+ assert(menuLine.includes("l==='zh-CN'?'简体中文'"));
+ assert(menuLine.includes("l==='zh-TW'?'繁體中文'"));
+ assert(menuLine.includes('includeOther=true'));
+ assert(menuLine.includes("...(includeOther?['und']:[])"));
+ assert(source.includes('languageOptions(c?.source_lang||postingLanguage(state.user,locale,languages))'));
+ assert(source.includes('languageOptions(editing?c.source_lang:postingLanguage(state.user,locale,languages))'));
+ assert(source.includes('profilePostingLanguageOptions(u,locale,languages,t,languageOptions)'));
+});
