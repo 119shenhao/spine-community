@@ -257,6 +257,74 @@ def collect(site, candidates, limit, export_dir):
     return not (unverified or mark_failures or stopped_reason)
 
 
+
+def probe_sources(site, excluded, candidates):
+    from collections import Counter
+    if site == "ask39":
+        for listing in ASK39_LISTS:
+            page = BeautifulSoup(fetch(listing), "html.parser")
+            added = 0
+            for link in page.select("a[href]"):
+                url = urljoin(listing, link["href"])
+                try:
+                    identifier = source_id(site, url)
+                except ValueError:
+                    continue
+                if identifier not in excluded and identifier not in candidates:
+                    candidates[identifier] = url
+                    added += 1
+                    if added == 2:
+                        break
+            time.sleep(1)
+    for identifier, url in candidates.items():
+        if identifier in excluded:
+            emit("probe_excluded", site=site, source_id=identifier)
+            if site == "healthunlocked":
+                try:
+                    req = Request(url, method="HEAD", headers={"User-Agent": "SpineCommunityCollector/1.0"})
+                    with http.open(req, timeout=20) as response:
+                        emit("probe_access", site=site, status=response.status)
+                except HTTPError as error:
+                    emit("probe_access", site=site, status=error.code)
+            continue
+        response = api("/api/collect/claim", {
+            "site": site, "collector_id": "chatgpt-source-layout-probe", "source_ids": [identifier],
+        })
+        lease, = response["results"]
+        if lease["result"] != "granted":
+            continue
+        try:
+            doc = BeautifulSoup(fetch(url), "html.parser")
+            tags = Counter()
+            for node in doc.select("[id], [class]"):
+                for key in node.get("class", []) + ([node["id"]] if node.get("id") else []):
+                    if re.fullmatch(r"[\w-]{1,70}", key) and re.search(r"post|content|detail|entry|ask|answer|reply|comment|page|question|problem|title|info|thread", key, re.I):
+                        tags[(node.name, key)] += 1
+            links = []
+            for node in doc.select("link[href], a[href]"):
+                href = node["href"]
+                if re.search(r"[?&](?:p|pg|comment|post_id)=\d+|/comment/\d+|#comment-\d+", href):
+                    if re.fullmatch(r"[A-Za-z0-9_:/?#&=.%+-]{1,300}", href):
+                        links.append(href)
+            containers = []
+            for node in doc.select("h1,article, [class*=reply], [class*=answer], [class*=comment]"):
+                parents = [x.name + "." + ".".join(x.get("class", [])) for x in list(node.parents)[:3]]
+                shape = [node.name, node.get("id"), node.get("class"), len(node.get_text(strip=True)), parents,
+                         sorted(k for k in node.attrs if k.startswith("data-"))]
+                if shape[2] or shape[0] in ("h1", "article"):
+                    containers.append(shape)
+            emit("source_shape", site=site, source_id=identifier, counts=tags.most_common(55), links=list(dict.fromkeys(links))[:16],
+                 containers=containers[:32], meta=[n.get("property") or n.get("name") for n in doc.select("meta")][:40],
+                 scripts=[n.get("id") for n in doc.select("script[id]")][:12])
+        except FetchProblem as error:
+            emit("source_probe_error", site=site, source_id=identifier, reason=str(error))
+            if error.status in (401, 403, 429):
+                break
+        finally:
+            api("/api/collect/release", {"site":site, "source_id":identifier, "lease_token":lease["lease_token"]})
+        time.sleep(1)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("request", type=Path)
@@ -281,6 +349,9 @@ def main():
             eligible = {key: url for key, url in candidates.items() if key not in excluded}
             emit("plan", site=site, existing_exclusions=len(excluded), candidates=len(candidates),
                  excluded=len(candidates) - len(eligible), eligible=len(eligible))
+            if request["request_id"] == "probe-expanded-sources-20261107":
+                probe_sources(site, excluded, eligible)
+                continue
             if site in SKIP and not args.export_dir:
                 emit("source_unavailable", site=site, reason=SKIP[site])
                 if site == "ask39" and request["mode"] == "inspect":
