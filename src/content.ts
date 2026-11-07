@@ -93,7 +93,7 @@ export async function contentRoute(req:Request,env:Env,u:Row|null,path:string):P
       if(parentRow&&parentRow.author_id!==topic.author_id)writes.push(notify(env.DB,parentRow.author_id,user.id,'comment_reply',topic.id,commentId,'reply:'+commentId));
       if(kind==='progress')writes.push(stmt(env.DB,`INSERT OR IGNORE INTO notifications(id,recipient_id,actor_id,event_type,topic_id,comment_id,event_key) SELECT lower(hex(randomblob(16))),f.user_id,?,'progress_update',?,?,? FROM topic_follows f WHERE f.topic_id=? AND f.user_id<>?`,user.id,topic.id,commentId,'progress:'+commentId,topic.id,user.id));
     }
-    await env.DB.batch(writes);return json({id:commentId,status},201);
+    await env.DB.batch(writes);const created=await getContent(env,'comment',commentId,user);await decorate(env,[created],user,'comment');const counts=await one(env.DB,'SELECT reply_count FROM topics WHERE id=?',topic.id);return json({id:commentId,status,comment:created,reply_count:counts?.reply_count},201);
   }
   const commentMatch=path.match(/^\/api\/comments\/([^/]+)$/);
   if(commentMatch&&['PATCH','DELETE'].includes(method)){
@@ -101,6 +101,7 @@ export async function contentRoute(req:Request,env:Env,u:Row|null,path:string):P
     if(c.kind==='progress'){const t=await one(env.DB,'SELECT author_id FROM topics WHERE id=?',c.topic_id);if(t?.author_id!==user.id)fail(403,'progress_author_required');}
     if(method==='DELETE')await env.DB.batch(purge(env.DB,'comment',c.id));
     else{const b=await body(req),text=textField(b.body,1,12000),status=c.status==='hidden'?'pending_review':risk('',text);await stmt(env.DB,'UPDATE comments SET body=?,status=?,source_lang=?,content_version=content_version+1,updated_at=? WHERE id=?',text,status,lang(b.source_lang||c.source_lang),now(),c.id).run();}
+    if(method==='PATCH'){const changed=await getContent(env,'comment',c.id,user);await decorate(env,[changed],user,'comment');const counts=await one(env.DB,'SELECT reply_count FROM topics WHERE id=?',c.topic_id);return json({ok:true,status:changed.status,comment:changed,reply_count:counts?.reply_count});}
     return json({ok:true});
   }
   const interaction=path.match(/^\/api\/(topics|comments)\/([^/]+)\/(like|bookmark|follow)$/);

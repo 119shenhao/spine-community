@@ -13,6 +13,10 @@
       "/index.html"
     ]
   },
+  "vars": {
+    "APP_ENV": "production",
+    "GOOGLE_CLIENT_ID": "294338107553-k5bts5abj3tg85lt82moelv40sph3tuh.apps.googleusercontent.com"
+  },
   "d1_databases": [
     {
       "binding": "DB",
@@ -21,10 +25,6 @@
       "migrations_dir": "migrations/v1"
     }
   ],
-  "vars": {
-    "APP_ENV": "production",
-    "GOOGLE_CLIENT_ID": "294338107553-k5bts5abj3tg85lt82moelv40sph3tuh.apps.googleusercontent.com"
-  },
   "previews": {
     "d1_databases": [
       {
@@ -42,6 +42,7 @@
     ],
     "vars": {
       "APP_ENV": "preview",
+      "GOOGLE_CLIENT_ID": "294338107553-bht5pr4qa112e9knbst517b0mvb9pus9.apps.googleusercontent.com",
       "TRANSLATION_ENABLED": "false",
       "IMPORT_ENABLED": "true",
       "COLLECT_ENABLED": "true"

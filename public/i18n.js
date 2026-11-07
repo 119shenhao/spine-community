@@ -1,6 +1,6 @@
 export const languages=['en','zh-CN','es','pt-BR','de','fr','ja'];
 const rows={
-preview:['Development preview','开发预览','Vista de desarrollo','Prévia de desenvolvimento','Entwicklungsvorschau','Aperçu de développement','開発プレビュー'],
+preview:['Development preview','开发环境','Vista de desarrollo','Prévia de desenvolvimento','Entwicklungsvorschau','Aperçu de développement','開発プレビュー'],
 home:['All discussions','全部讨论','Todas las conversaciones','Todas as conversas','Alle Diskussionen','Toutes les discussions','すべての投稿'],
 search:['Find similar experiences','寻找相似经历','Buscar experiencias similares','Buscar experiências semelhantes','Ähnliche Erfahrungen finden','Trouver des expériences similaires','似た体験を探す'],
 spaces:['Community spaces','交流专区','Espacios de la comunidad','Espaços da comunidade','Community-Bereiche','Espaces de la communauté','コミュニティ'],

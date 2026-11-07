@@ -239,6 +239,39 @@ test('one-time production SQL snapshot writes topic and nested replies, and repe
 });
 
 
+test('production sync maps arbitrary published topic/reply authors to Unknown User and keeps progress/nesting without duplicates',async()=>{
+ const {DB}=await fixture();
+ const {buildInserts,fingerprint,sortComments}=await import('../scripts/sync-preview-to-production.mjs');
+ const topic={id:'preview-user-topic',author_id:'bob',title:'Personal recovery notes',body:'Six weeks later',source_lang:'en',symptom_duration_days:42,created_at:1234567};
+ const all=[
+  {id:'grandchild',author_id:'alice',parent_comment_id:'child',kind:'regular',progress_seq:null,body:'Third level',source_lang:'en',status:'published',created_at:1234571},
+  {id:'child',author_id:'carol',parent_comment_id:'progress1',kind:'regular',progress_seq:null,body:'Reply to progress',source_lang:'en',status:'published',created_at:1234570},
+  {id:'progress1',author_id:'bob',parent_comment_id:null,kind:'progress',progress_seq:1,body:'Week six improvement',source_lang:'en',status:'published',created_at:1234569},
+  {id:'hidden',author_id:'bob',parent_comment_id:null,kind:'regular',progress_seq:null,body:'Hidden',source_lang:'en',status:'hidden',created_at:1234572},
+  {id:'hidden-child',author_id:'alice',parent_comment_id:'hidden',kind:'regular',progress_seq:null,body:'Should remain hidden',source_lang:'en',status:'published',created_at:1234573},
+  {id:'deleted',author_id:'alice',parent_comment_id:null,kind:'regular',progress_seq:null,body:null,source_lang:'en',status:'deleted',created_at:1234574},
+  {id:'after-deleted',author_id:'carol',parent_comment_id:'deleted',kind:'regular',progress_seq:null,body:'Preserve thread hierarchy',source_lang:'en',status:'published',created_at:1234575},
+ ];
+ const selected=sortComments(all);
+ assert.deepEqual(selected.map(x=>x.id),['progress1','child','grandchild','deleted','after-deleted']);
+ const sql=buildInserts(topic,selected,[],fingerprint(topic.title,topic.body));
+ DB.db.exec(sql);DB.db.exec(sql);
+ assert.equal(DB.db.prepare('SELECT author_id FROM topics WHERE id=?').get(topic.id).author_id,'system-unknown-import');
+ const rows=DB.db.prepare('SELECT id,author_id,parent_comment_id,kind,progress_seq,body FROM comments WHERE topic_id=? ORDER BY created_at').all(topic.id);
+ assert.equal(rows.length,5);
+ assert.ok(rows.every(x=>x.author_id==='system-unknown-import'));
+ assert.equal(rows.find(x=>x.id==='progress1').kind,'progress');
+ assert.equal(rows.find(x=>x.id==='progress1').progress_seq,1);
+ assert.equal(rows.find(x=>x.id==='grandchild').parent_comment_id,'child');
+ assert.equal(rows.find(x=>x.id==='deleted').body,null);
+ assert.equal(rows.find(x=>x.id==='after-deleted').parent_comment_id,'deleted');
+ assert.equal(DB.db.prepare('SELECT reply_count FROM topics WHERE id=?').get(topic.id).reply_count,4);
+ assert.equal(DB.db.prepare('PRAGMA foreign_key_check').all().length,0);
+ const wrong={...all[2],kind:'unsupported'};
+ assert.throws(()=>buildInserts(topic,[wrong],[],fingerprint(topic.title,topic.body)),/Unsupported source comment kind/);
+});
+
+
 // Collection coordination test fixtures never access the network or production database.
 async function collectFixture(){
  const f=await importFixture();
@@ -441,32 +474,229 @@ test('numeric-leading source site 120ask supports exclusions, claim, complete an
  assert.equal((await exclude('reddit')).status,200);
 });
 
-test('preview and production environment labels and robots directives stay isolated',async()=>{
+
+test('sign out revokes the session and clears the cookie, including for repeated requests',async()=>{
+ const {call,DB}=await fixture();
+ const before=await call('/api/me');assert.equal(before.status,200);assert.equal(before.data.user.id,'alice');
+ const response=await call('/api/auth/logout','POST',{});
+ assert.equal(response.status,200);assert.equal(response.data.ok,true);
+ assert.match(response.headers.get('set-cookie')||'',/sc_session=;/);
+ assert.match(response.headers.get('set-cookie')||'',/Max-Age=0/);
+ assert(DB.db.prepare("SELECT revoked_at FROM user_sessions WHERE id='alice'").get().revoked_at);
+ const after=await call('/api/me');assert.equal(after.status,200);assert.equal(after.data.user,null);
+ assert.equal((await call('/api/auth/logout','POST',{})).status,200);
+});
+
+test('the desktop and mobile account menu exposes a discoverable sign out action',()=>{
+ const app=readFileSync('public/app.js','utf8');
+ const css=readFileSync('public/styles.css','utf8');
+ assert.match(app,/<details class="account-menu"><summary/);
+ assert.match(app,/data-action="logout"/);
+ assert.match(app,/account-dropdown/);
+ assert.match(css,/\.account-dropdown\{/);
+ assert.match(css,/\.account-trigger:focus-visible/);
+ assert.match(css,/@media\(max-width:700px\)/);
+});
+
+
+test('Google OAuth client IDs remain separated across production and preview config',()=>{
+ const cfg=JSON.parse(readFileSync('wrangler.jsonc','utf8'));
+ assert.equal(cfg.vars?.GOOGLE_CLIENT_ID,'294338107553-k5bts5abj3tg85lt82moelv40sph3tuh.apps.googleusercontent.com');
+ assert.equal(cfg.previews?.vars?.GOOGLE_CLIENT_ID,'294338107553-bht5pr4qa112e9knbst517b0mvb9pus9.apps.googleusercontent.com');
+ assert.notEqual(cfg.vars.GOOGLE_CLIENT_ID,cfg.previews.vars.GOOGLE_CLIENT_ID);
+ assert.equal('GOOGLE_CLIENT_SECRET' in (cfg.vars||{}),false);
+ assert.equal('GOOGLE_CLIENT_SECRET' in (cfg.previews.vars||{}),false);
+ assert.equal(cfg.d1_databases[0].database_name,'spine-community-db');
+ assert.equal(cfg.previews.d1_databases[0].database_name,'spine-community-db-preview');
+});
+
+test('likes, bookmarks and follows patch only matching buttons and cached content',async()=>{
+ const {applyInteractionResult}=await import('../public/interaction-ui.js');
+ const topic={id:'topic-a',liked:false,like_count:1,bookmarked:false,followed:false};
+ const duplicate={id:'topic-a',liked:false,like_count:1,bookmarked:false,followed:false};
+ const comment={id:'comment-a',topic_id:'topic-a',liked:false,like_count:0};
+ const state={topic,feed:[duplicate],comments:[comment]};
+ const button=(action,id,type='topic')=>{
+  const count={textContent:'1'},classes=new Set();
+  return {dataset:{action,id,type,active:'false'},classList:{toggle:(k,on)=>on?classes.add(k):classes.delete(k),contains:k=>classes.has(k)},setAttribute(k,v){this[k]=v;},querySelector:selector=>selector==='[data-like-count]'?count:null,count,innerHTML:''};
+ };
+ const like=button('like','topic-a'),anotherLike=button('like','topic-a'),commentLike=button('like','comment-a','comment'),bookmark=button('bookmark','topic-a'),follow=button('follow','topic-a'),unrelated=button('like','other');
+ const buttons=[like,anotherLike,commentLike,bookmark,follow,unrelated],icon=key=>'('+key+')',translate=key=>key;
+ applyInteractionResult(state,'like','topic','topic-a',{active:true,like_count:4},buttons,icon,translate);
+ for(const b of [like,anotherLike]){assert.equal(b.dataset.active,'true');assert.equal(b['aria-pressed'],'true');assert.equal(b.classList.contains('active'),true);assert.equal(b.count.textContent,'4');}
+ assert.equal(topic.like_count,4);assert.equal(duplicate.like_count,4);assert.equal(comment.like_count,0);assert.equal(unrelated.dataset.active,'false');
+ applyInteractionResult(state,'like','topic','topic-a',{active:false,like_count:3},buttons,icon,translate);
+ assert.equal(like.dataset.active,'false');assert.equal(like.classList.contains('active'),false);assert.equal(like.count.textContent,'3');
+ applyInteractionResult(state,'like','comment','comment-a',{active:true,like_count:1},buttons,icon,translate);
+ assert.equal(commentLike.count.textContent,'1');assert.equal(comment.liked,true);assert.equal(topic.liked,false);
+ applyInteractionResult(state,'bookmark','topic','topic-a',{active:true},buttons,icon,translate);
+ assert.equal(bookmark.innerHTML,'(bookmark)bookmarked');assert.equal(bookmark['aria-pressed'],'true');assert.equal(topic.bookmarked,true);assert.equal(duplicate.bookmarked,true);
+ applyInteractionResult(state,'bookmark','topic','topic-a',{active:false},buttons,icon,translate);
+ assert.equal(bookmark.innerHTML,'(bookmark)bookmark');assert.equal(topic.bookmarked,false);
+ applyInteractionResult(state,'follow','topic','topic-a',{active:true},buttons,icon,translate);
+ assert.equal(follow.innerHTML,'(follow)followed');assert.equal(follow.classList.contains('active'),true);assert.equal(topic.followed,true);
+ applyInteractionResult(state,'follow','topic','topic-a',{active:false},buttons,icon,translate);
+ assert.equal(follow.innerHTML,'(follow)follow');assert.equal(follow['aria-pressed'],'false');assert.equal(topic.followed,false);
+ assert.throws(()=>applyInteractionResult(state,'like','topic','topic-a',{active:true},buttons,icon,translate),/invalid_interaction_response/);
+ assert.equal(like.count.textContent,'3');
+});
+
+test('reaction handlers keep current page and scroll position instead of re-rendering',()=>{
+ const app=readFileSync('public/app.js','utf8');
+ const start=app.indexOf("if(['like','bookmark','follow'].includes(action))");
+ const end=app.indexOf("if(action==='reply')",start);
+ assert.ok(start>=0&&end>start);
+ const handler=app.slice(start,end);
+ assert.match(handler,/applyInteractionResult\(/);
+ assert.doesNotMatch(handler,/await render\(/);
+ assert.match(handler,/result=await api\(/);
+ assert.match(handler,/card\?\.remove\(\)/);
+ assert.match(app,/data-like-count/);
+ assert.match(app,/aria-pressed/);
+});
+
+test('reply creation and edits return a ready-to-render comment and exact server count',async()=>{
+ const {call,topic}=await fixture();
+ const topicId=await topic('Looking for advice','My neck and lower back are sore');
+ const root=await call('/api/topics/'+topicId+'/comments','POST',{body:'After walking for a month, things improved',source_lang:'en'},'bob');
+ assert.equal(root.status,201);
+ assert.equal(root.data.id,root.data.comment.id);
+ assert.equal(root.data.comment.topic_id,topicId);
+ assert.equal(root.data.comment.nickname,'bob');
+ assert.equal(root.data.comment.parent_comment_id,null);
+ assert.equal(root.data.comment.kind,'regular');
+ assert.equal(root.data.comment.like_count,0);
+ assert.equal(root.data.comment.liked,false);
+ assert.equal(root.data.reply_count,1);
+ const nested=await call('/api/topics/'+topicId+'/comments','POST',{body:'Thank you for the update',parent_comment_id:root.data.id,source_lang:'en'},'carol');
+ assert.equal(nested.status,201);
+ assert.equal(nested.data.comment.parent_comment_id,root.data.id);
+ assert.equal(nested.data.comment.nickname,'carol');
+ assert.equal(nested.data.reply_count,2);
+ const edit=await call('/api/comments/'+nested.data.id,'PATCH',{body:'Thank you. That is useful.',source_lang:'en'},'carol');
+ assert.equal(edit.status,200);
+ assert.equal(edit.data.ok,true);
+ assert.equal(edit.data.comment.id,nested.data.id);
+ assert.equal(edit.data.comment.body,'Thank you. That is useful.');
+ assert.equal(edit.data.reply_count,2);
+ const progress=await call('/api/topics/'+topicId+'/comments','POST',{body:'Four week recovery update',kind:'progress',source_lang:'en'},'alice');
+ assert.equal(progress.status,201);
+ assert.equal(progress.data.comment.kind,'progress');
+ assert.equal(progress.data.comment.progress_seq,1);
+ assert.equal(progress.data.reply_count,3);
+ const detail=await call('/api/topics/'+topicId,'GET',undefined,'alice');
+ assert.equal(detail.data.topic.reply_count,3);
+ assert.ok(detail.data.comments.some(c=>c.id===root.data.id));
+ assert.ok(detail.data.comments.some(c=>c.id===nested.data.id));
+ assert.ok(detail.data.comments.some(c=>c.id===progress.data.id));
+});
+
+test('reply UI state appends or updates only the relevant comment, count and progress',async()=>{
+ const {applyReplyResult}=await import('../public/reply-ui.js');
+ const existing={id:'older',topic_id:'topic-a',body:'Original'};
+ const state={topic:{id:'topic-a',reply_count:1},comments:[existing],progress:[]};
+ const reply={id:'new-reply',topic_id:'topic-a',kind:'regular',status:'published',body:'New content'};
+ const created=applyReplyResult(state,{id:reply.id,status:'published',comment:reply,reply_count:2});
+ assert.equal(created.insert,true);
+ assert.equal(state.comments.length,2);
+ assert.equal(state.comments.at(-1),reply);
+ assert.equal(state.topic.reply_count,2);
+ assert.equal(state.comments[0],existing);
+ const duplicate=applyReplyResult(state,{id:reply.id,comment:reply,reply_count:2});
+ assert.equal(duplicate.insert,false);
+ assert.equal(state.comments.length,2);
+ const updated={...reply,body:'Edited content'};
+ const edit=applyReplyResult(state,{comment:updated,reply_count:2},true);
+ assert.equal(edit.insert,false);
+ assert.equal(state.comments.at(-1).body,'Edited content');
+ const update={id:'progress-1',topic_id:'topic-a',kind:'progress',status:'published',body:'Recovery day 1',progress_seq:1,created_at:1234};
+ applyReplyResult(state,{id:update.id,comment:update,reply_count:3});
+ assert.equal(state.progress[0].body,'Recovery day 1');
+ assert.equal(state.progress.length,1);
+ const another={...update,id:'progress-2',body:'Recovery day 2',progress_seq:2,created_at:1235};
+ applyReplyResult(state,{id:another.id,comment:another,reply_count:4});
+ assert.deepEqual(state.progress.map(p=>p.id),['progress-2','progress-1']);
+ applyReplyResult(state,{comment:{...update,body:'Recovery day 1 corrected'},reply_count:4},true);
+ assert.equal(state.progress[1].body,'Recovery day 1 corrected');
+ const flagged={...another,status:'pending_review',body:'Updated but pending'};
+ applyReplyResult(state,{comment:flagged,reply_count:3},true);
+ assert.deepEqual(state.progress.map(p=>p.id),['progress-1']);
+ assert.equal(state.topic.reply_count,3);
+ assert.throws(()=>applyReplyResult(state,{id:'wrong',comment:reply,reply_count:999}),/invalid_comment_response/);
+ assert.throws(()=>applyReplyResult(state,{comment:{...reply,topic_id:'another-topic'},reply_count:2}),/invalid_comment_response/);
+ assert.throws(()=>applyReplyResult(state,{comment:reply,reply_count:-1}),/invalid_comment_response/);
+ assert.throws(()=>applyReplyResult(state,{comment:{...reply,id:'missing'},reply_count:4},true),/comment_not_loaded/);
+ assert.equal(state.comments.length,4);
+});
+
+test('reply form locally inserts and focuses posted comment without full page refresh',()=>{
+ const app=readFileSync('public/app.js','utf8'),css=readFileSync('public/styles.css','utf8');
+ const start=app.indexOf("if(form.id==='root-reply'||form.id==='reply-form')");
+ const end=app.indexOf("if(form.id==='report-form')",start);
+ assert.ok(start>=0&&end>start);
+ const handler=app.slice(start,end);
+ assert.match(handler,/updateReplyUI\(result,edit\)/);
+ assert.doesNotMatch(handler,/await render\(/);
+ assert.doesNotMatch(handler,/location.hash\s*=/);
+ assert.match(app,/insertAdjacentHTML\('beforeend',commentHtml\(comment\)\)/);
+ assert.match(app,/scrollIntoView\(\{behavior:'smooth',block:'center'\}\)/);
+ assert.match(app,/data-reply-count/);
+ assert.match(app,/data\.comments\.filter\(c=>!existing\.has\(c\.id\)\)/);
+ assert.match(css,/\.comment\.just-posted/);
+});
+
+test('production pages are indexable while preview pages and indicators stay isolated',async()=>{
  const {env,call}=await fixture();
  const html=readFileSync('public/index.html','utf8');
  const headers=readFileSync('public/_headers','utf8');
  const client=readFileSync('public/app.js','utf8');
- const config=JSON.parse(readFileSync('wrangler.jsonc','utf8'));
+ const cfg=JSON.parse(readFileSync('wrangler.jsonc','utf8'));
  assert(!html.includes('name="robots"'));
  assert(!headers.includes('X-Robots-Tag: noindex'));
- assert.deepEqual(config.assets.run_worker_first,['/api/*','/','/index.html']);
- assert.equal(config.vars.APP_ENV,'production');
- assert.equal(config.previews.vars.APP_ENV,'preview');
- assert(client.includes("const isPreview=()=>state.health?.environment==='preview'"));
+ assert.deepEqual(cfg.assets.run_worker_first,['/api/*','/','/index.html']);
+ assert.equal(cfg.vars.APP_ENV,'production');
+ assert.equal(cfg.previews.vars.APP_ENV,'preview');
+ assert(client.includes('badge.hidden=!isPreview()'));
  assert(client.includes("t(isPreview()?'privacyText':'privacyProduction')"));
  env.ASSETS={fetch:async()=>new Response('<html>example</html>',{headers:{'content-type':'text/html','X-Robots-Tag':'noindex, nofollow'}})};
  env.APP_ENV='production';
  assert.equal((await call('/api/health')).data.environment,'production');
- for(const page of ['/','/index.html']){
-  const result=await worker.fetch(new Request('https://site.test'+page),env);
-  assert.equal(result.status,200);
-  assert.equal(result.headers.get('X-Robots-Tag'),null);
+ for(const p of ['/','/index.html']){
+  const r=await worker.fetch(new Request('https://spine.nbn369.com'+p),env);
+  assert.equal(r.headers.get('X-Robots-Tag'),null);
  }
  env.APP_ENV='preview';
  assert.equal((await call('/api/health')).data.environment,'preview');
- for(const page of ['/','/index.html']){
-  const result=await worker.fetch(new Request('https://preview.test'+page),env);
-  assert.equal(result.status,200);
-  assert.equal(result.headers.get('X-Robots-Tag'),'noindex, nofollow');
+ for(const p of ['/','/index.html']){
+  const r=await worker.fetch(new Request('https://preview.test'+p),env);
+  assert.equal(r.headers.get('X-Robots-Tag'),'noindex, nofollow');
  }
+});
+
+test('visitor language survives a Google login callback and account default English',async()=>{
+ const {initialLocale}=await import('../public/locale.js');
+ const {languages}=await import('../public/i18n.js');
+ const store=new Map();
+ const storage={getItem:key=>store.get(key)??null,setItem:(key,value)=>store.set(key,value)};
+ // A first-time Chinese browser has not manually opened the language selector.
+ assert.equal(initialLocale(storage,'zh-CN',languages),'zh-CN');
+ assert.equal(store.get('sc_locale'),'zh-CN');
+ // After OAuth redirect, the logged-in user can have preferred_locale='en'.
+ // The interface remains Chinese because local browser choice was persisted.
+ const account={preferred_locale:'en'};
+ assert.equal(account.preferred_locale,'en');
+ assert.equal(initialLocale(storage,'en-US',languages),'zh-CN');
+ // An explicit language selection must win over browser and database defaults.
+ storage.setItem('sc_locale','ja');
+ assert.equal(initialLocale(storage,'zh-CN',languages),'ja');
+ store.delete('sc_locale');
+ assert.equal(initialLocale(storage,'pt-PT',languages),'pt-BR');
+ store.delete('sc_locale');
+ assert.equal(initialLocale(storage,'fr-FR',languages),'fr');
+ store.delete('sc_locale');
+ assert.equal(initialLocale(storage,'unknown',languages),'en');
+ const client=readFileSync('public/app.js','utf8');
+ assert(client.includes("initialLocale(localStorage,navigator.language,languages)"));
+ assert(!client.includes("state.user.preferred_locale))locale="));
+ assert(client.includes("localStorage.setItem('sc_locale',locale)"));
 });
