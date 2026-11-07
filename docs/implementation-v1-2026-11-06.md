@@ -104,3 +104,11 @@
 - `GOOGLE_CLIENT_SECRET` 仍必须分别用 Cloudflare 加密 Secret 配置；绝不提交到 GitHub。代码测试会校验两个 Client ID 均非空、互不混用且 Secret 未写入明文配置。
 - 修复针对近期开发预览因 `GOOGLE_CLIENT_ID` 运行时变量缺失而不显示 Google 登录按钮的问题。开发代码与检查提交 `8a2f10f1377511fba3534de7295640139a2832b9`。Cloudflare Worker Preview 构建已成功（Build ID `c0556985-1868-48e5-af57-fba423255031`，对应提交 `8a2f10f`），GitHub Actions `npm run verify` 通过；受当前环境 DNS 限制，尚无法读取远程 `/api/health` 以独立确认运行时 `googleConfigured=true`。
 - **重要：正式站尚未执行本次配置部署。** 顶层生产 ID 当前保存在开发分支，等正式发布审批后随代码部署至生产；不得为添加 ID 单独合并/发布旧生产代码或误触发生产 D1 变更。本次未触碰生产 D1。
+
+## 帖子点赞、收藏、关注无整页刷新（2026-11-07）
+
+- 按用户手机端反馈，修复点赞、取消点赞、收藏、取消收藏、关注与取消关注请求成功后调用全局 `render()` 导致帖子详情和评论区重新加载、页面跳动的问题。
+- 开发分支 `feature/v1-community-build-20261106`：新增 `public/interaction-ui.js`，使用服务器确认的 `active` 和 `like_count` 更新对应按钮、ARIA 状态与前端缓存；无需重新获取帖文与评论。收藏、关注在状态更新后显示轻量提示。在个人中心的“我的收藏”或“关注的帖子”取消相应操作后，局部移除该卡片。
+- 改动仅涉及前端代码和测试，无 D1 表结构迁移或正式环境写操作。前端提交 `16f10b6a33efd60ec09e4047954a748f70d7faef`；新增测试的最终提交 `d4908a9af468f22c2aeafd5c6a7f97f53942b197`。
+- GitHub Actions [verify](https://github.com/119shenhao/spine-community/actions/runs/42366425368) 结果 `completed/success`；Cloudflare Workers Preview 构建 `completed/success`（Build ID `5540170f-a208-4a17-b659-5a3e014a34b9`）。
+- 当前执行环境无法访问 Worker Preview URL，尚未完成真实手机点击与滚动位置的人工验收；只在开发预览部署，不把这次程序代码推送到生产 `main`。
