@@ -21,6 +21,26 @@
 
 本任务仅发布**代码、数据库结构、必要基础表数据**。开发环境采集的帖子、回复、楼中楼不通过本任务同步，它们由独立任务“同步帖子”负责。不得覆盖生产真实用户及其业务数据。
 
+## ChatGPT 直接触发，无须每次点击 Run workflow（2026-11-07 已验证）
+
+**名称保持不变：发布新版本，从开发环境到生产环境。** 用户在 ChatGPT 说“执行发布新版本，从开发环境到生产环境”，AI 应按本页现有版本发布步骤执行，而不是要求用户到 GitHub 手动点 Run workflow。此指令不代表可以忽略当次候选版本、SQL 差异、发布授权和生产风险审查。
+
+**现有 Production D1 工作流已增加一个非常小的自动触发入口，原来的数据库迁移实现和工作流手动入口都保留：**
+
+- 工作流文件：`.github/workflows/production-d1.yml`，通过 [PR #5](https://github.com/119shenhao/spine-community/pull/5) 合并到 `main`；Cloudflare 构建监视路径已排除该工作流文件。
+- ChatGPT 先核对待发布分支及完整 SHA、测试、预览状态和迁移清单（既有要求：迁移候选 SHA 必须属于 `main` 或 `release/*`，功能分支需要先准备同版本的 `release/*` 发布候选）；检查正式 D1 UUID，必要时申请本次上线授权。
+- **无需 GitHub 网页按钮的触发方式：** ChatGPT 通过 GitHub 连接器修改/创建 `main/docs/release-requests/production-d1.json`，内容为 `repository`、`operation`（`inspect` 或 `apply`）、`migration_sha`、`production_db_id`、`confirmation`（仅 apply）及 `user_authorized`（仅 apply 时为 true）。提交消息严格为 `chatgpt-release-d1 <operation> <40位SHA>`。
+- 这个 `docs/` 内的请求提交不会触发 Cloudflare 正式站点构建，但会通过 GitHub `push` 自动唤起一个无生产密钥的请求校验 job，校验提交消息、SHA、仓库和生产 D1 ID 后，调用**原有** Production D1 的 `workflow_dispatch`。原工作流依旧负责生产 D1 只读检查、检查迁移历史、恢复点及按序 apply。
+- 首先提交 `inspect` 请求。查看**真正执行迁移检查的第二条** GitHub Actions 运行日志及 Summary；没有新迁移就跳过 apply。有获批新迁移时，再提交 `apply` 请求，必须包含生产 D1 名称确认及 `user_authorized=true`，并检查实际 apply 结果，不能仅凭“已发出请求”就宣称迁移成功。
+- 数据库部分完成后，ChatGPT 使用 GitHub 连接器按已审查的 SHA 合并发布 PR 到 `main`，等待 Cloudflare 生产部署并核验生产健康及受影响的 API/页面。**帖子、回帖及真实用户数据不随此任务复制**，仍由单独“同步帖子”任务负责。
+- 若 GitHub 连接器不具备提交权限、触发失败、Actions 权限有变，或代码合并遇到保护规则，必须如实报告，不得伪造成功。现有网页手动入口仅作为备用，不是默认要求用户操作。
+
+**已完成的只读端到端验证：**
+
+- [ChatGPT 提交请求触发运行 #42381735726](https://github.com/119shenhao/spine-community/actions/runs/42381735726)：Success，自动调用现有 Production D1。
+- [由 GitHub 自动派发的 Production D1 inspect #42381742609](https://github.com/119shenhao/spine-community/actions/runs/42381742609)：Success。确认原来的验证、迁移来源核对、生产 D1 schema 检查成功；`apply` 步骤被跳过，**未修改生产数据库**。
+- 这次只测试了自动触发和只读链路；**正式 apply 和新版本代码合并没有在这次测试中执行**，不能将其视为新的生产发布已经完成。
+
 ## 成功运行过的历史流程
 
 - [Production D1 生产迁移成功记录（2026-11-07）](https://github.com/119shenhao/spine-community/actions/runs/42365746245)
