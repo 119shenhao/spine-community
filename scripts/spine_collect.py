@@ -14,6 +14,7 @@ from spine_sources import (
 
 PREVIEW = "https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev"
 JSON_LIMIT = 150000
+DEFAULT_TOPIC_LIMIT = 10
 SKIP = {
     "mayoclinic": "public_thread_returned_403_use_authorized_export",
 }
@@ -82,15 +83,17 @@ def emit(event, **fields):
 
 def read_request(path):
     request = json.loads(path.read_text(encoding="utf-8"))
-    if set(request) != {"request_id", "mode", "sites", "candidates", "limit"}:
+    required_fields = {"request_id", "mode", "sites", "candidates"}
+    if not isinstance(request, dict) or set(request) - {"limit"} != required_fields:
         raise ValueError("invalid_request_fields")
+    request.setdefault("limit", DEFAULT_TOPIC_LIMIT)
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", request["request_id"]):
         raise ValueError("invalid_request_id")
     if request["mode"] not in ("inspect", "collect") or type(request["limit"]) is not int:
         raise ValueError("invalid_request_mode_or_limit")
     sites = request["sites"]
     if (not isinstance(sites, list) or not sites or len(sites) != len(set(sites))
-            or any(site not in SOURCE_URLS for site in sites) or not 1 <= request["limit"] <= 7):
+            or any(site not in SOURCE_URLS for site in sites) or not 1 <= request["limit"] <= DEFAULT_TOPIC_LIMIT):
         raise ValueError("invalid_sites_or_limit")
     candidates = request["candidates"]
     if not isinstance(candidates, dict) or set(candidates) - set(sites):
