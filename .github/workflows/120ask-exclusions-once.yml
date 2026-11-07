@@ -67,6 +67,8 @@ jobs:
               found = {}
               dirs = [
                   'https://www.120ask.com/list/jsjzwk/',
+                  'https://www.120ask.com/list/jingzhuibing/',
+                  'https://www.120ask.com/list/yaozhuibing/',
                   'https://m.120ask.com/list/jsjzwk/',
                   'https://m.120ask.com/list/yaozhuibing/',
                   'https://m.120ask.com/list/jingzhuibing/',
@@ -86,9 +88,8 @@ jobs:
                           continue
                       if parts.hostname not in ('m.120ask.com', 'www.120ask.com', 'tag.120ask.com'):
                           continue
-                      match = re.fullmatch(r'/(?:question|askg/bd_detail)/([0-9a-z]{8,25})(?:\.html?)?/?', parts.path)
+                      match = re.fullmatch(r'/(?:question|askg/(?:bd_detail|posts_detail))/([0-9a-z]{8,25})(?:\.html?)?/?', parts.path)
                       if not match:
-                          print('Relevant link path format', parts.hostname, parts.path, flush=True)
                           continue
                       stable_id = match[1]
                       score = 2 * bool(re.search(r'手术|术后|消融|康复|恢复|治疗', title)) + bool(re.search(r'腿|手|麻|疼', title))
@@ -97,33 +98,43 @@ jobs:
               return found
           
           before = exclusions()
-          print('Exclusions before search', dict(collections.Counter(before.values())), flush=True)
           found = candidate_links()
           eligible = sorted((k for k in found if k not in before), key=lambda k: found[k][1], reverse=True)
-          print('Candidates', len(found), 'excluded', len(found)-len(eligible), 'eligible', [(k, found[k][0]) for k in eligible], flush=True)
-          if not eligible:
-              raise SystemExit('No eligible source links discovered')
-          for record in api('/api/collect/claim', {'site': site, 'collector_id': collector, 'source_ids': eligible[:2]})['results']:
-              key = record['source_id']
-              if record['result'] != 'granted':
-                  print('Claim status', key, record['result'], flush=True)
+          print('Candidates', len(found), 'excluded', len(found)-len(eligible), flush=True)
+          for rec in api('/api/collect/claim', {'site': site, 'collector_id': collector, 'source_ids': eligible[:8]})['results']:
+              key = rec['source_id']
+              if rec['result'] != 'granted':
+                  print('Claim status', key, rec['result'], flush=True)
                   continue
-              lease = {'site': site, 'source_id': key, 'lease_token': record['lease_token']}
+              lease = {'site': site, 'source_id': key, 'lease_token': rec['lease_token']}
               try:
                   source = found[key][0]
+                  if source.startswith('https://m.120ask.com/') and key.isdigit():
+                      source = 'https://www.120ask.com/question/' + key + '.htm'
                   code, body = request(source)
-                  print('Source HTTP', key, source, code, len(body), flush=True)
+                  time.sleep(1)
+                  print('Source', key, code, flush=True)
                   if code != 200:
                       continue
                   soup = BeautifulSoup(body, 'html.parser')
-                  print('HTML markers', key, bool(soup.h1), [(m.get('name') or m.get('property')) for m in soup.find_all('meta') if m.get('name') or m.get('property')], flush=True)
-                  for tag in soup.find_all(True):
-                      klass = '.'.join(tag.get('class', []))
-                      ident = tag.get('id', '')
-                      if tag.name in ('h1', 'h2', 'h3') or re.search(r'answer|reply|ask|content|detail|desc|question|follow|problem|doctor|zhui|user|time|qust', klass + ident, re.I):
-                          shape = ' > '.join(p.name + '.' + '.'.join(p.get('class', [])) for p in list(tag.parents)[:2] if isinstance(p, Tag))
-                          print('Structure', key, tag.name, klass, ident, shape, len(tag.get_text(strip=True)), flush=True)
+                  ask = soup.select_one('#d_msCon')
+                  if not ask:
+                      print('Missing question markup', key)
+                      continue
+                  def shape(tag):
+                      if isinstance(tag, Tag):
+                          return [tag.name, tag.get('class', []), bool(tag.get('id')), len(tag.get_text(strip=True))]
+                      return ['text', len(str(tag).strip())]
+                  print('Question structure', key, [shape(n) for n in ask.children if isinstance(n, Tag) or str(n).strip()], 'links/images', [(n.name, n.get('class', [])) for n in ask.select('a,img,video')], flush=True)
+                  for container in soup.select('.b_answerbox'):
+                      header = container.select_one('.b_answerti')
+                      print('Answer header', key, re.findall(r'\d+', header.get_text(strip=True)) if header else [], flush=True)
+                      for answer in container.select('.b_answerli:not(.zhenshiAD)'):
+                          print('Answer structure', key, [
+                              (shape(n), ' '.join(n.parent.get('class', [])), [shape(x) for x in n.children if isinstance(x, Tag) or str(x).strip()]) for n in answer.select('.b_anscont_cont > *, .b_anscontc > *, [class*=more], [class*=follow], [class*=zhui]') if isinstance(n, Tag)
+                          ], flush=True)
+              except (RuntimeError, subprocess.SubprocessError) as error:
+                  print('Source inspection failed', key, type(error).__name__, flush=True)
               finally:
-                  released = api('/api/collect/release', lease)
-                  print('Probe claim', key, released['status'], flush=True)
+                  print('Released', key, api('/api/collect/release', lease)['status'], flush=True)
           PY
