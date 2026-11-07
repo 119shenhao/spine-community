@@ -168,3 +168,10 @@
 Cloudflare 远程环境还需要配置 Secret 并独立验证部署；本地/CI 测试通过不等于已经进行了生产同步。不会把测试帖写入正式数据库。
 
 [AI 操作规程](ai-collector-sop.md) · [原导入接口](import-api.md) · [一次性主帖跨库同步](topic-dedup-and-sync.md)
+
+## 2026-11-07 验证记录（实际执行）
+
+- [GitHub Actions TypeScript + SQLite 集成测试](https://github.com/119shenhao/spine-community/actions/runs/42330870727)：**success**。包括生产隔离、专用鉴权、排除清单分页、并发认领、锁过期与释放、英文内容及楼中楼原样保存、跨来源指纹去重、崩溃/写入失败回滚、旧内容关联、重复完成的幂等验证。
+- [Cloudflare Workers 预览构建](https://github.com/119shenhao/spine-community/runs/128276961775)：**success**，开发分支提交 `b46baa719a5a970d39347f9e7eb29f2e37ff53bd`；预览构建原有流程会针对独立 preview D1 应用迁移。
+- [预览站远程只读 HTTP 验证](https://github.com/119shenhao/spine-community/actions/runs/42330870725)：**success**。`/api/health` 确认数据库可用；无 Bearer 访问 `/api/collect/exclusions` 返回 `503 collect_secret_not_configured`，证明新路由已部署且不会匿名读取采集清单。
+- **未进行远程带密钥的 claim/complete 写入验收**：当前 Cloudflare 预览环境未设置 `COLLECT_API_TOKEN`，需要通过 Cloudflare 安全配置填入至少 32 字符的专用密钥，再以虚构、明确的测试记录进行远程闭环验收，测试后清理这些记录。生产 D1 完全不参与本轮验证。
