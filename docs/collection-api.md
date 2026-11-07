@@ -5,7 +5,7 @@
 ## 地址、鉴权与状态
 
 - 预览根地址：`https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev`
-- 仅当 Worker 运行在**预览/本地环境**，`IMPORT_DB` 指向隔离开发库，`IMPORT_ENABLED=true`、`COLLECT_ENABLED=true` 时启用。生产域名直接 `403 collect_disabled`，访问数据库之前即拒绝。
+- 仅当 Worker 运行在**预览/本地环境**，`IMPORT_DB` 指向隔离开发库，`IMPORT_ENABLED=true`、`COLLECT_ENABLED=true` 时启用。部署了新接口代码的生产环境会在访问数据库之前返回 `403 collect_disabled`；若生产仍使用未包含该路由的旧代码，可能返回 `404 not_found`。
 - 所有 `/api/collect/*` 请求必须有 `Authorization: Bearer <COLLECT_API_TOKEN>`。这是独立的、至少 32 字符的 **Worker Secret**；不放 GitHub、前端代码或 URL。开发者需要先在 Cloudflare 对应的预览部署中**私密配置**它；配置缺失返回 `503 collect_secret_not_configured`，不会降级为匿名访问。
 - 请求使用 `Content-Type: application/json`；跨域浏览器请求被拒绝；命令行客户端无需 Origin。响应禁用缓存，始终 JSON。
 - 每个站点有稳定编码：`tieba`、`reddit` 等。`source_id` 是外站原帖唯一 ID，**不传原站整条 URL**；贴吧目前限定 1–20 位数字，Reddit 目前限定 1–15 位小写字母/数字，其他站点仅允许字母、数字、下划线和连字符。
