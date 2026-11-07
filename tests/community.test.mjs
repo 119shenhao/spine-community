@@ -644,3 +644,31 @@ test('reply form locally inserts and focuses posted comment without full page re
  assert.match(app,/data\.comments\.filter\(c=>!existing\.has\(c\.id\)\)/);
  assert.match(css,/\.comment\.just-posted/);
 });
+
+test('production pages are indexable while preview pages and indicators stay isolated',async()=>{
+ const {env,call}=await fixture();
+ const html=readFileSync('public/index.html','utf8');
+ const headers=readFileSync('public/_headers','utf8');
+ const client=readFileSync('public/app.js','utf8');
+ const cfg=JSON.parse(readFileSync('wrangler.jsonc','utf8'));
+ assert(!html.includes('name="robots"'));
+ assert(!headers.includes('X-Robots-Tag: noindex'));
+ assert.deepEqual(cfg.assets.run_worker_first,['/api/*','/','/index.html']);
+ assert.equal(cfg.vars.APP_ENV,'production');
+ assert.equal(cfg.previews.vars.APP_ENV,'preview');
+ assert(client.includes('badge.hidden=!isPreview()'));
+ assert(client.includes("t(isPreview()?'privacyText':'privacyProduction')"));
+ env.ASSETS={fetch:async()=>new Response('<html>example</html>',{headers:{'content-type':'text/html','X-Robots-Tag':'noindex, nofollow'}})};
+ env.APP_ENV='production';
+ assert.equal((await call('/api/health')).data.environment,'production');
+ for(const p of ['/','/index.html']){
+  const r=await worker.fetch(new Request('https://spine.nbn369.com'+p),env);
+  assert.equal(r.headers.get('X-Robots-Tag'),null);
+ }
+ env.APP_ENV='preview';
+ assert.equal((await call('/api/health')).data.environment,'preview');
+ for(const p of ['/','/index.html']){
+  const r=await worker.fetch(new Request('https://preview.test'+p),env);
+  assert.equal(r.headers.get('X-Robots-Tag'),'noindex, nofollow');
+ }
+});

@@ -10,7 +10,16 @@ import {collectRoute} from './collect';
 export default {
  async fetch(req:Request,env:Env):Promise<Response>{
   const url=new URL(req.url),path=url.pathname;
-  if(!path.startsWith('/api/'))return env.ASSETS.fetch(req);
+  if(!path.startsWith('/api/')){
+   const asset=await env.ASSETS.fetch(req);
+   if(path==='/'||path==='/index.html'){
+    const headers=new Headers(asset.headers);
+    if(env.APP_ENV==='preview')headers.set('X-Robots-Tag','noindex, nofollow');
+    else headers.delete('X-Robots-Tag');
+    return new Response(asset.body,{status:asset.status,statusText:asset.statusText,headers});
+   }
+   return asset;
+  }
   try{
    if(path==='/api/import'||path.startsWith('/api/import/'))return await importRoute(req,env,path);
    if(path==='/api/collect'||path.startsWith('/api/collect/'))return await collectRoute(req,env,path);
