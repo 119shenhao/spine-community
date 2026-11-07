@@ -10,7 +10,7 @@ export function collectEnabled(req:Request,env:Env):boolean {
  return env.COLLECT_ENABLED==='true' && importEnabled(req,env);
 }
 function validSite(v:unknown):string {
- if(typeof v!=='string'||! /^(?:[a-z][a-z0-9_-]{1,31})$/.test(v))fail(400,'invalid_site');
+ if(typeof v!=='string'||! /^(?:[a-z0-9][a-z0-9_-]{1,31})$/.test(v))fail(400,'invalid_site');
  return v;
 }
 function validSource(v:unknown,site:string):string {
