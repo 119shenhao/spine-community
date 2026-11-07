@@ -240,13 +240,12 @@ test('one-time production SQL snapshot writes topic and nested replies, and repe
 
 
 // Collection coordination test fixtures never access the network or production database.
-const COLLECT_TEST_KEY='local-only-integration-test-token-1234567890abcdef';
 async function collectFixture(){
  const f=await importFixture();
- Object.assign(f.env,{COLLECT_ENABLED:'true',COLLECT_API_TOKEN:COLLECT_TEST_KEY});
+ Object.assign(f.env,{COLLECT_ENABLED:'true'});
  f.collect=async(path,data,options={})=>{
   const method=options.method||'POST',search=options.search||'';
-  const headers={'Authorization':'Bearer '+(options.key??COLLECT_TEST_KEY),...(data!==undefined?{'Content-Type':'application/json'}:{}),...options.headers};
+  const headers={...(data!==undefined?{'Content-Type':'application/json'}:{}),...options.headers};
   const req=new Request((options.origin||IMPORT_ORIGIN)+path+search,{method,headers,body:data===undefined?undefined:JSON.stringify(data)});
   const res=await worker.fetch(req,options.env||f.env);
   return {status:res.status,data:await res.json()};
@@ -255,19 +254,26 @@ async function collectFixture(){
  f.exclude=async(site='tieba',search='')=>f.collect('/api/collect/exclusions',undefined,{method:'GET',search:'?site='+site+search});
  return f;
 }
-test('collector is fail-closed before DB access and requires a separate secret',async()=>{
+test('collector is available on preview without credentials and blocked in production before touching DB',async()=>{
  const poison={prepare(){throw Error('A DB was accessed');},batch(){throw Error('A DB was accessed');}};
- const base={DB:poison,IMPORT_DB:poison,APP_ENV:'preview',IMPORT_ENABLED:'true',COLLECT_ENABLED:'true',COLLECT_API_TOKEN:COLLECT_TEST_KEY};
+ const base={DB:poison,IMPORT_DB:poison,APP_ENV:'preview',IMPORT_ENABLED:'true',COLLECT_ENABLED:'true'};
  for(const env of [{}, {...base,APP_ENV:'production'}, {...base,COLLECT_ENABLED:'false'}, {...base,IMPORT_DB:undefined}]){
   const r=await worker.fetch(new Request(IMPORT_ORIGIN+'/api/collect/exclusions?site=tieba'),env);
   assert.equal(r.status,403);
   assert.equal((await r.json()).error,'collect_disabled');
  }
- const unset=await worker.fetch(new Request(IMPORT_ORIGIN+'/api/collect/exclusions?site=tieba'),{...base,COLLECT_API_TOKEN:undefined});
- assert.equal(unset.status,503);
- assert.equal((await unset.json()).error,'collect_secret_not_configured');
- const wrong=await worker.fetch(new Request(IMPORT_ORIGIN+'/api/collect/exclusions?site=tieba',{headers:{Authorization:'Bearer not-the-secret-but-long-enough'}}),base);
- assert.equal(wrong.status,401);assert.equal((await wrong.json()).error,'collector_unauthorized');
+ const {collect,claim,exclude}=await collectFixture();
+ const list=await exclude();
+ assert.equal(list.status,200);
+ assert.deepEqual(list.data.items,[]);
+ const result=await claim('tieba',['12345']);
+ assert.equal(result.status,200);
+ assert.equal(result.data.results[0].result,'granted');
+ assert.equal(result.data.lease_seconds,6*60*60);
+ const remaining=result.data.results[0].lease_expires_at-now();
+ assert(remaining>=6*60*60-5 && remaining<=6*60*60+1,remaining);
+ const release=await collect('/api/collect/release',{site:'tieba',source_id:'12345',lease_token:result.data.results[0].lease_token});
+ assert.equal(release.status,200);
 });
 test('exclusions page through active claims and completed entries, omitting expired leases',async()=>{
  const {claim,exclude,DB}=await collectFixture();
