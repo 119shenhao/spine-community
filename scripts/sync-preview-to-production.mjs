@@ -78,7 +78,7 @@ function verifyTopic(topic,hash){
  if(prod.length&&prod[0].id===topic.id&&(prod[0].title!==topic.title||prod[0].body!==topic.body))throw Error('Production topic ID collision for '+topic.id);
  return prod[0]||null;
 }
-function buildInserts(topic,comments,terms,hash){
+export function buildInserts(topic,comments,terms,hash){
  const lines=[
   '-- Single source thread; stable IDs and OR IGNORE allow safe retry after failure.',
   'INSERT OR IGNORE INTO topics(id,author_id,title,body,source_lang,status,symptom_duration_days,content_hash,created_at) VALUES('+
