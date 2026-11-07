@@ -74,6 +74,17 @@
 
 官方参考：[Workers Preview 资源与 D1 迁移](https://developers.cloudflare.com/workers/previews/resources/) · [D1 Migrations](https://developers.cloudflare.com/d1/reference/migrations/)。
 
+### 生产 D1 的手动 GitHub Actions 工作流
+
+生产 D1 继续按次批准。长期授权只允许仓库的手动 Actions 工作流使用加密凭据，日常推送和站点构建不会执行生产迁移。
+
+- 在 Cloudflare Worker 的构建监视路径中保留现有排除项，并额外排除 `.github/workflows/production-d1.yml`。这样首次将工作流安装到默认分支时，Cloudflare 不会因工作流文件而部署站点。
+- 使用仅授予目标 Cloudflare 账户 `Account → D1 → Edit` 的专用 Token。用户在本私有仓库的 **Settings → Secrets and variables → Actions** 添加加密 Secret `CLOUDFLARE_PROD_D1_API_TOKEN`。这是仅用于生产 D1 工作流的凭据存储例外。Token 的值禁止出现在源码、提交、日志、聊天或预览环境中。
+- 在 **Actions → Production D1 → Run workflow** 选择 `main`。输入已审核、来自本仓库 `main` 或 `release/*` 的完整提交 SHA。工作流只从该提交读取 `migrations/v1` 下的版本化 SQL，使用独立配置固定生产库名称和 UUID。
+- 先运行 `inspect`，查看任务摘要里的表名、迁移历史和待执行迁移。未知旧表、缺失的核心表或历史不匹配时，须先处理兼容性。
+- 逐次获得迁移批准后，用同一 SHA 选择 `apply`，在确认栏输入 `spine-community-db`。工作流重新核对生产库，记录 Time Travel 恢复点，再执行待应用的迁移。正式库的恢复操作单独批准。
+- 本次 v1 迁移只通过已审核的 SQL 初始化表结构和分类、「未知用户」等种子数据。迁移工作流不连接预览数据库。应用完成后，独立合并发布 PR，并在 `https://spine.nbn369.com` 验证站点和 Google 登录。
+
 ## 4. 正式发布的完整检查（必须人工确认发布）
 
 ### 4.1 发布申请
