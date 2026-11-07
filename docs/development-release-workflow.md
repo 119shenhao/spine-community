@@ -74,7 +74,7 @@
 
 官方参考：[Workers Preview 资源与 D1 迁移](https://developers.cloudflare.com/workers/previews/resources/) · [D1 Migrations](https://developers.cloudflare.com/d1/reference/migrations/)。
 
-### 生产 D1 的手动 GitHub Actions 工作流
+### 生产 D1 的受控 GitHub Actions 工作流（ChatGPT 触发，网页手动备用）
 
 **只有发布涉及尚未应用的 SQL 迁移时，才需要操作生产 D1。** 纯界面或程序改动且确认没有待执行的迁移时，跳过数据库步骤，按第 4 节发布代码。生产库和开发预览库各自独立，迁移使用同一套版本化 SQL。分类、默认设置、「未知用户」等必要初始记录由 SQL 生成。开发库的帖子、回帖、楼中楼、用户和测试数据不随迁移复制。
 
@@ -82,13 +82,13 @@
 
 - 在 Cloudflare Worker `spine-community` 的「设置 → 构建 → 构建监视路径」里保留 `docs/*`，并排除 `.github/workflows/production-d1.yml`。单独更新这些文件时，Cloudflare 会跳过站点构建。
 - 创建专用 Cloudflare Token，权限为 **Account → D1 → Edit**，范围限论坛所属账户。在本私有仓库 **Settings → Secrets and variables → Actions** 下保存为 `CLOUDFLARE_PROD_D1_API_TOKEN`。已配置的有效凭据可供后续迁移复用。令牌值只填 GitHub Secret，禁止放进源码、日志、聊天或预览环境。
-- [Production D1 工作流](https://github.com/119shenhao/spine-community/actions/workflows/production-d1.yml)已安装在 `main`，当前由 GitHub 页面手动触发。日常推送和站点构建不执行生产迁移。
+- [Production D1 工作流](https://github.com/119shenhao/spine-community/actions/workflows/production-d1.yml) 已安装在 `main`。2026-11-07 增加了由 ChatGPT 向 `main/docs/release-requests/production-d1.json` 提交**明确的版本化请求**而触发原有 `workflow_dispatch` 的方式，先 `inspect`、必要时经明确授权才 `apply`；[实际只读验证 #42381742609](https://github.com/119shenhao/spine-community/actions/runs/42381742609) 已成功。GitHub 网页上的 Run workflow 保留为备用，用户默认**不需要手动点**。普通代码、文档推送和 Cloudflare 网站构建不会执行生产迁移；具体见 [固定任务：发布新版本](release-version-workflow.md)。
 
 #### 每次有迁移时
 
 1. **先验证开发预览库。** 在开发分支的 `migrations/v1/` 增加按序编号的 SQL，保留已应用的历史文件。先通过本地测试，再应用到 `spine-community-db-preview` 验证。准备发布 PR，记录包含已审核 SQL 的完整 40 位提交 SHA。这个提交须来自本仓库的 `main` 或 `release/*`。
-2. **只读检查生产库。** 在 **Actions → Production D1 → Run workflow** 选择分支 `main`，按下表填写 `inspect`。打开运行结果的 **Summary → Production D1 inspection**，查看 `Tables`、`Applied`、`Pending`。`Pending` 为空时跳过 `apply`；出现 `Migration blocked`、未知旧表、核心表缺失或迁移历史不一致时，先排查兼容性。运行状态为 `Success` 仍须查看摘要。
-3. **获当次授权后应用。** 用同一 SHA 新建一次 `apply` 运行。工作流会重新核对生产库名称、UUID 和迁移历史，先记录 Time Travel 恢复点，再执行待应用的 SQL。若记录恢复点或执行 SQL 失败，先看日志与迁移历史，再判断如何安全续跑。恢复数据库需单独获批。
+2. **只读检查生产库。** 默认由 ChatGPT 在主分支写入对应的 `inspect` 请求，通过 GitHub 自动触发旧工作流；网页备用方法为在 **Actions → Production D1 → Run workflow** 选择 `main` 并填写 `inspect`。打开运行结果的 **Summary → Production D1 inspection**，查看 `Tables`、`Applied`、`Pending`。`Pending` 为空时跳过 `apply`；出现 `Migration blocked`、未知旧表、核心表缺失或迁移历史不一致时，先排查兼容性。运行状态为 `Success` 仍须查看摘要。
+3. **获当次授权后应用。** 默认由 ChatGPT 用同一 SHA 提交明确批准的 `apply` 请求并自动触发原有工作流；网页备用方法为用同一 SHA 新建一次 `apply` 运行。工作流会重新核对生产库名称、UUID 和迁移历史，先记录 Time Travel 恢复点，再执行待应用的 SQL。若记录恢复点或执行 SQL 失败，先看日志与迁移历史，再判断如何安全续跑。恢复数据库需单独获批。
 4. **核验后发布代码。** 在 `apply` 日志里确认每个待办迁移都成功，保留运行链接与恢复点。`apply` 摘要开头的 `Tables`、`Applied`、`Pending` 是执行前快照；如需确认执行后状态，用同一 SHA 再运行一次 `inspect`，检查 `Applied` 和 `Pending`。随后按第 4 节合并已获批的发布 PR，等待 Cloudflare 部署，并验证正式站 `/api/health` 的 `databaseReady=true`、受影响的接口与页面。
 
 | GitHub 表单字段 | 只读检查 | 执行迁移 |
