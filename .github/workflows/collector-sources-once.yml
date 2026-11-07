@@ -1,4 +1,4 @@
-name: One-time remaining-source check
+name: One-time XYWY and HealthUnlocked collection
 on:
   push:
     branches: [feature/v1-community-build-20261106]
@@ -6,11 +6,11 @@ on:
   workflow_dispatch:
 permissions: {}
 jobs:
-  inspect:
+  collect:
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
-      - name: Check public XYWY and HealthUnlocked threads after claim
+      - name: Collect authorized XYWY posts and search HealthUnlocked
         shell: bash
         run: |
           set -euo pipefail
@@ -18,98 +18,154 @@ jobs:
           "$RUNNER_TEMP/source-venv/bin/pip" install -q beautifulsoup4 playwright
           "$RUNNER_TEMP/source-venv/bin/python" -m playwright install chromium
           "$RUNNER_TEMP/source-venv/bin/python" - <<'PY'
+          import collections
           import json
+          import re
           import subprocess
           import time
           from urllib.parse import urlencode,urlsplit
-          from bs4 import BeautifulSoup
+          from bs4 import BeautifulSoup,Comment,NavigableString
           from playwright.sync_api import sync_playwright
+          
           BASE='https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev'
           def request(url,payload=None):
            cmd=['curl','-sS','-L','--connect-timeout','8','--max-time','30','--compressed','-w','\n%{http_code}']
            if payload is not None:cmd+=['-H','Content-Type: application/json','--data-binary','@-']
-           out=subprocess.run(cmd+[url],input=json.dumps(payload).encode() if payload is not None else None,stdout=subprocess.PIPE,check=True).stdout
+           out=subprocess.run(cmd+[url],input=json.dumps(payload,ensure_ascii=False).encode() if payload is not None else None,stdout=subprocess.PIPE,check=True).stdout
            body,status=out.rsplit(b'\n',1);return int(status),body
-          def api(path,payload=None):
-           code,body=request(BASE+path,payload);data=json.loads(body)
+          def api(site,path,payload=None):
+           code,body=request(BASE+path,payload)
+           try:data=json.loads(body)
+           except ValueError:raise RuntimeError('preview HTTP '+str(code)+' non-JSON') from None
            if code not in (200,201):raise RuntimeError('preview HTTP '+str(code)+' '+str(data.get('error')))
            return data
           def exclusions(site):
            params={'site':site,'limit':200};seen=set();out={}
            while True:
-            d=api('/api/collect/exclusions?'+urlencode(params));out.update((i['source_id'],i['status']) for i in d['items'])
-            if d['next_cursor'] is None:return out
-            if d['next_cursor'] in seen:raise ValueError('cursor repeated')
-            seen.add(d['next_cursor']);params['cursor']=d['next_cursor']
-          site='xywy'
-          items=[('198793816','https://club.xywy.com/wenda/198793816.htm'),('198728918','https://club.xywy.com/wenda/198728918.htm'),('198223887','https://club.xywy.com/wenda/198223887.htm'),('198649183','https://club.xywy.com/wenda/198649183.htm'),('198739706','https://club.xywy.com/wenda/198739706.htm'),('198713340','https://club.xywy.com/wenda/198713340.htm')]
-          before=exclusions(site);fresh=[x for x in items if x[0] not in before];records=[]
+            d=api(site,'/api/collect/exclusions?'+urlencode(params))
+            if d.get('site')!=site:raise ValueError('wrong exclusion site')
+            out.update((i['source_id'],i['status']) for i in d['items'])
+            cur=d['next_cursor']
+            if cur is None:return out
+            if cur in seen:raise ValueError('repeated cursor')
+            seen.add(cur);params['cursor']=cur
+          def extract_text(markup):
+           soup=BeautifulSoup(markup,'html.parser')
+           for node in soup.select('script,style,noscript,button'):node.decompose()
+           for node in soup.find_all(string=lambda s:isinstance(s,Comment)):node.extract()
+           chunks=[]
+           def walk(node):
+            if isinstance(node,NavigableString):chunks.append(re.sub(r'[\t\r\n ]+',' ',str(node)))
+            elif getattr(node,'name',None)=='br':chunks.append('\n')
+            elif getattr(node,'name',None) not in ('script','style','noscript'):
+             block=getattr(node,'name',None) in ('p','div','li','blockquote','pre')
+             if block and chunks:chunks.append('\n')
+             for child in getattr(node,'children',[]):walk(child)
+             if block:chunks.append('\n')
+           walk(soup)
+           return '\n'.join(x.strip() for x in ''.join(chunks).splitlines() if x.strip()).strip()
+          def verify(site,topic_id,draft,total):
+           result=api(site,'/api/topics/'+topic_id)
+           topic,rows=result.get('topic',{}),result.get('comments',[])
+           if any(topic.get(k)!=draft[k] for k in ('title','body','source_lang')):return False
+           if len(rows)!=total or result.get('next') is not None:return False
+           if any(row.get('nickname') not in ('未知用户','Unknown User') for row in rows):return False
+           if any(row.get('parent_comment_id') is not None for row in rows):return False
+           return collections.Counter(r['body'] for r in rows)==collections.Counter(c['body'] for c in draft['comments'])
+          
+          # XYWY public Q&A pages, opened only after source-ID claims.
+          SITE='xywy'
+          ITEMS=[
+          ('198793816','https://club.xywy.com/wenda/198793816.htm'),
+          ('198728918','https://club.xywy.com/wenda/198728918.htm'),
+          ('198223887','https://club.xywy.com/wenda/198223887.htm'),
+          ('198649183','https://club.xywy.com/wenda/198649183.htm'),
+          ('198739706','https://club.xywy.com/wenda/198739706.htm'),
+          ('198713340','https://club.xywy.com/wenda/198713340.htm')]
+          old=exclusions(SITE);eligible=[x for x in ITEMS if x[0] not in old]
+          print('XYWY candidates',len(ITEMS),'excluded',len(ITEMS)-len(eligible),flush=True)
+          records=[];completed=set();new_topics=new_comments=0;opened=0
           try:
-           if fresh:records=api('/api/collect/claim',{'site':site,'collector_id':'chatgpt-hourly-xywy','source_ids':[x[0] for x in fresh]})['results']
-           print('XYWY claim states',[(x['source_id'],x['result']) for x in records],flush=True)
+           if eligible:records=api(SITE,'/api/collect/claim',{'site':SITE,'collector_id':'chatgpt-hourly-xywy','source_ids':[x[0] for x in eligible]})['results']
+           print('XYWY claims',dict(collections.Counter(r['result'] for r in records)),flush=True)
            with sync_playwright() as p:
             browser=p.chromium.launch()
-            for rec in records:
-             if rec['result']!='granted':continue
-             sid=rec['source_id']
+            for record in records:
+             if record['result']!='granted':continue
+             sid=record['source_id'];url=dict(ITEMS)[sid]
              try:
-              page=browser.new_page();events=[]
-              page.on('response',lambda resp:events.append((urlsplit(resp.url).hostname,urlsplit(resp.url).path,resp.status,resp.request.resource_type)) if resp.request.resource_type in ('xhr','fetch') else None)
-              response=page.goto(dict(items)[sid],wait_until='domcontentloaded',timeout=30000);page.wait_for_timeout(6000)
+              page=browser.new_page();response=page.goto(url,wait_until='domcontentloaded',timeout=30000);page.wait_for_timeout(5000)
               soup=BeautifulSoup(page.content(),'html.parser')
-              selectors=['h1','.static-ask-box','.ask-th-box','.ask-details-box','.ask_doct_reply_div','.ask_doct_reply_class','.ask-title','.ask-con','.ask-doc-box']
-              shapes=[]
-              for selector in selectors:
-               nodes=soup.select(selector)
-               shapes.append((selector,len(nodes),[(len(n.get_text(' ',strip=True)),n.parent.get('class',[])) for n in nodes[:10]]))
-              print('XYWY DOM',sid,response.status if response else None,shapes,'XHR',events[:30],flush=True)
+              heading=soup.select_one('h1');question=soup.select_one('.ask-th-box');details=soup.select_one('.ask-details-box')
+              title=extract_text(str(heading)) if heading else ''
+              body_parts=[extract_text(str(el)) for el in (question,details) if el]
+              body='\n'.join(part for index,part in enumerate(body_parts) if part and part not in body_parts[:index]).strip()
+              answer_items=soup.select('.ask-doc-box')
+              answer_titles=soup.select('.ask-title')
+              answer_nodes=soup.select('.ask-con')
+              if response is None or response.status!=200:raise ValueError('source HTTP status unavailable')
+              if not title or len(body)<10 or not answer_nodes:raise ValueError('question_or_answers_incomplete')
+              if len(answer_items)!=len(answer_titles) or len(answer_items)!=len(answer_nodes):raise ValueError('answer_structure_mismatch')
+              if len(answer_nodes)>49:raise ValueError('reply_limit_exceeded')
+              if any('更多回答' in extract_text(str(a)) or '展开全部' in extract_text(str(a)) for a in soup.select('a,button')):
+               raise ValueError('source_page_has_unloaded_answers')
+              comments=[{'body':extract_text(str(node)),'source_lang':'zh-CN'} for node in answer_nodes]
+              if any(not c['body'] for c in comments):raise ValueError('empty_answer')
+              content='\n'.join([title,body]+[c['body'] for c in comments])
+              if re.search(r'(?<!\d)(?:1[3-9]\d{9}|\d{17}[\dXx])(?!\d)|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|(?:身份证号|手机号码|联系电话|家庭住址)\s*[:：]',content):raise ValueError('possible_personal_identifier')
+              if any(node.select('img,video,iframe') for node in [question,details,*answer_nodes] if node):raise ValueError('content_has_uncollected_media')
+              draft={'title':title,'body':body,'source_lang':'zh-CN','comments':comments}
+              opened+=1
+              result=api(SITE,'/api/collect/complete',{'site':SITE,'source_id':sid,'lease_token':record['lease_token'],'topic':draft})
+              completed.add(sid);counts=result.get('imported',{})
+              new_topics+=counts.get('topics',0);new_comments+=counts.get('comments',0)
+              topic_id=result.get('topic_id')
+              checked=True if not counts.get('topics') else verify(SITE,topic_id,draft,len(comments))
+              print('XYWY result',json.dumps({'source_id':sid,'url':url,'duplicate':bool(result.get('duplicate')),'topic_id':topic_id,'reply_count':len(comments),'readback':checked}),flush=True)
               page.close()
-             except Exception as err:print('XYWY inspection error',sid,type(err).__name__,flush=True)
+             except (ValueError,RuntimeError,subprocess.SubprocessError) as error:
+              print('XYWY skipped',sid,str(error) if isinstance(error,(ValueError,RuntimeError)) else type(error).__name__,flush=True)
+              try:page.close()
+              except Exception:pass
             browser.close()
           finally:
-           for rec in records:
-            if rec['result']=='granted':
-             try:api('/api/collect/release',{'site':site,'source_id':rec['source_id'],'lease_token':rec['lease_token']})
-             except Exception:print('XYWY release unconfirmed',rec['source_id'],flush=True)
+           for record in records:
+            if record['result']!='granted' or record['source_id'] in completed:continue
+            try:
+             api(SITE,'/api/collect/release',{'site':SITE,'source_id':record['source_id'],'lease_token':record['lease_token']})
+             print('XYWY released',record['source_id'],flush=True)
+            except Exception:print('XYWY release unconfirmed',record['source_id'],flush=True)
+           print('XYWY totals',json.dumps({'granted':sum(r['result']=='granted' for r in records),'opened':opened,'completed':len(completed),'new_topics':new_topics,'new_replies':new_comments}),flush=True)
+           if completed:
+            marks=exclusions(SITE)
+            print('XYWY completed marks',json.dumps({key:marks.get(key) for key in sorted(completed)}),flush=True)
           
-          site='healthunlocked'
-          old=exclusions(site)
+          # HealthUnlocked normal public search only. Stop if no stable public post links surface.
+          SITE='healthunlocked'
+          old=exclusions(SITE)
           print('HealthUnlocked exclusions',len(old),flush=True)
-          queries=['lumbar','cervical spine surgery','spinal fusion','cervical myelopathy']
           found={}
-          for query in queries:
-           url='https://healthunlocked.com/search/posts?'+urlencode({'query':query})
-           code,body=request(url)
-           soup=BeautifulSoup(body,'html.parser')
-           for a in soup.select('a[href]'):
-            href=a['href'].split('?')[0]
-            host=urlsplit(href).hostname
-            path=urlsplit(href).path.strip('/')
-            pieces=path.split('/')
-            if host in ('healthunlocked.com','www.healthunlocked.com') and any(piece.isdigit() for piece in pieces):
-             sid=next((piece for piece in reversed(pieces) if piece.isdigit()),None)
-             if sid:found[sid]=href
-           print('HealthUnlocked search',query,code,len(found),flush=True)
-           time.sleep(1)
+          with sync_playwright() as p:
+           browser=p.chromium.launch()
+           for term in ('lumbar','cervical spine surgery','spinal fusion','cervical myelopathy'):
+            page=browser.new_page()
+            page.goto('https://healthunlocked.com/search/posts?'+urlencode({'query':term}),wait_until='domcontentloaded',timeout=30000)
+            page.wait_for_timeout(5000)
+            soup=BeautifulSoup(page.content(),'html.parser')
+            for anchor in soup.select('a[href]'):
+             href=anchor['href'].split('?')[0]
+             if href.startswith('/'):href='https://healthunlocked.com'+href
+             path=urlsplit(href).path.strip('/')
+             parts=path.split('/')
+             if urlsplit(href).hostname not in ('healthunlocked.com','www.healthunlocked.com'):continue
+             if not any(piece in ('post','posts','discussion','discussions') for piece in parts):continue
+             stable=next((piece for piece in reversed(parts) if re.fullmatch(r'[A-Za-z0-9_-]{3,80}',piece) and piece not in ('post','posts','discussion','discussions')),None)
+             if stable:found[stable]=href
+            print('HealthUnlocked search',term,'candidate_count',len(found),flush=True)
+            page.close();time.sleep(1)
+           browser.close()
           eligible=[(sid,url) for sid,url in found.items() if sid not in old]
-          print('HealthUnlocked candidates',len(found),'excluded',len(found)-len(eligible),[(sid,url) for sid,url in eligible[:12]],flush=True)
-          if eligible:
-           records=[]
-           try:
-            records=api('/api/collect/claim',{'site':site,'collector_id':'chatgpt-hourly-healthunlocked','source_ids':[sid for sid,url in eligible[:20]]})['results']
-            print('HealthUnlocked claims',[(r['source_id'],r['result']) for r in records],flush=True)
-            with sync_playwright() as p:
-             browser=p.chromium.launch()
-             for rec in records:
-              if rec['result']!='granted':continue
-              page=browser.new_page();response=page.goto(dict(eligible)[rec['source_id']],wait_until='domcontentloaded',timeout=30000);page.wait_for_timeout(5000);soup=BeautifulSoup(page.content(),'html.parser')
-              print('HealthUnlocked post',rec['source_id'],response.status if response else None,[(e.name,e.get('class',[]),len(e.get_text(' ',strip=True))) for e in soup.select('h1,article,[class*=post],[class*=comment],[class*=reply]')[:30]],flush=True)
-              page.close()
-             browser.close()
-           finally:
-            for rec in records:
-             if rec['result']=='granted':
-              try:api('/api/collect/release',{'site':site,'source_id':rec['source_id'],'lease_token':rec['lease_token']})
-              except Exception:print('HealthUnlocked release unconfirmed',rec['source_id'],flush=True)
-          else:print('HealthUnlocked no stable public candidates surfaced',flush=True)
+          print('HealthUnlocked candidates',len(found),'excluded',len(found)-len(eligible),flush=True)
+          if not eligible:print('HealthUnlocked result no stable public spine-post URLs surfaced',flush=True)
+          else:print('HealthUnlocked result needs a source-specific full-thread parser',len(eligible),flush=True)
           PY
