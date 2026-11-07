@@ -2,7 +2,14 @@
 
 日期：2026-11-06。分支：`feature/v1-community-build-20261106`。此记录区分代码、自测和远程环境，不将代码存在等同于可公开上线。
 
-## 当前交接状态（本次开发结束后同步）
+## v1 正式发布记录（2026-11-07）
+
+- [生产 D1 迁移运行](https://github.com/119shenhao/spine-community/actions/runs/42365746245)已完成。执行前确认生产库 `spine-community-db` 没有应用表，记录了 Time Travel 恢复点，随后成功执行 `0001` 至 `0005`。迁移初始化分类、设置和「未知用户」系统账号。开发库的帖子、回帖和楼中楼未复制。
+- [发布 PR #1](https://github.com/119shenhao/spine-community/pull/1)已合并到 `main`，部署提交为 `a11d4b9e5a00c27c46e5fe7608c393875abb43b8`。发布内容以 PR 锁定的候选版本为准；下文后续开发分支上的界面修复属于其他提交。
+- [正式站](https://spine.nbn369.com/)首页返回 HTTP 200；`/api/health` 返回 `databaseReady=true`、`googleConfigured=true` 和 `importEnabled=false`；分类接口返回 11 个分类，帖子接口返回空列表。
+- 实测 Google 登录接口用生产客户端跳转到 Google 登录页，回调地址为 `https://spine.nbn369.com/api/auth/callback`。使用真实账号完成授权回跳、登录会话及登录后的写操作仍待验收。
+
+## 2026-11-06 开发交接快照
 
 **结论：第一版核心代码已提交并部署到开发预览，测试 D1 已初始化；尚未达到真实用户登录和正式运营的验收条件。**
 
