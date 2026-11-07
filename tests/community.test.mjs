@@ -237,3 +237,163 @@ test('one-time production SQL snapshot writes topic and nested replies, and repe
  assert.equal(DB.db.prepare('SELECT content_hash FROM topics WHERE id=?').get(src.id).content_hash,hashValue);
  assert.equal(DB.db.prepare('PRAGMA foreign_key_check').all().length,0);
 });
+
+
+// Collection coordination test fixtures never access the network or production database.
+const COLLECT_TEST_KEY='local-only-integration-test-token-1234567890abcdef';
+async function collectFixture(){
+ const f=await importFixture();
+ Object.assign(f.env,{COLLECT_ENABLED:'true',COLLECT_API_TOKEN:COLLECT_TEST_KEY});
+ f.collect=async(path,data,options={})=>{
+  const method=options.method||'POST',search=options.search||'';
+  const headers={'Authorization':'Bearer '+(options.key??COLLECT_TEST_KEY),...(data!==undefined?{'Content-Type':'application/json'}:{}),...options.headers};
+  const req=new Request((options.origin||IMPORT_ORIGIN)+path+search,{method,headers,body:data===undefined?undefined:JSON.stringify(data)});
+  const res=await worker.fetch(req,options.env||f.env);
+  return {status:res.status,data:await res.json()};
+ };
+ f.claim=async(site,ids,collector='deepseek')=>f.collect('/api/collect/claim',{site,source_ids:ids,collector_id:collector});
+ f.exclude=async(site='tieba',search='')=>f.collect('/api/collect/exclusions',undefined,{method:'GET',search:'?site='+site+search});
+ return f;
+}
+test('collector is fail-closed before DB access and requires a separate secret',async()=>{
+ const poison={prepare(){throw Error('A DB was accessed');},batch(){throw Error('A DB was accessed');}};
+ const base={DB:poison,IMPORT_DB:poison,APP_ENV:'preview',IMPORT_ENABLED:'true',COLLECT_ENABLED:'true',COLLECT_API_TOKEN:COLLECT_TEST_KEY};
+ for(const env of [{}, {...base,APP_ENV:'production'}, {...base,COLLECT_ENABLED:'false'}, {...base,IMPORT_DB:undefined}]){
+  const r=await worker.fetch(new Request(IMPORT_ORIGIN+'/api/collect/exclusions?site=tieba'),env);
+  assert.equal(r.status,403);
+  assert.equal((await r.json()).error,'collect_disabled');
+ }
+ const unset=await worker.fetch(new Request(IMPORT_ORIGIN+'/api/collect/exclusions?site=tieba'),{...base,COLLECT_API_TOKEN:undefined});
+ assert.equal(unset.status,503);
+ assert.equal((await unset.json()).error,'collect_secret_not_configured');
+ const wrong=await worker.fetch(new Request(IMPORT_ORIGIN+'/api/collect/exclusions?site=tieba',{headers:{Authorization:'Bearer not-the-secret-but-long-enough'}}),base);
+ assert.equal(wrong.status,401);assert.equal((await wrong.json()).error,'collector_unauthorized');
+});
+test('exclusions page through active claims and completed entries, omitting expired leases',async()=>{
+ const {claim,exclude,DB}=await collectFixture();
+ const result=await claim('tieba',['100','300','200']);
+ assert.equal(result.status,200,JSON.stringify(result));
+ assert(result.data.results.every(r=>r.result==='granted'&&r.lease_token.length>=32));
+ const first=await exclude('tieba','&limit=2');
+ assert.deepEqual(first.data.items.map(x=>x.source_id),['100','200']);
+ assert.equal(first.data.next_cursor,'200');
+ const later=await exclude('tieba','&limit=2&cursor=200');
+ assert.deepEqual(later.data.items.map(x=>x.source_id),['300']);
+ DB.db.prepare('UPDATE collect_sources SET lease_expires_at=? WHERE site=? AND source_id=?').run(now()-5,'tieba','200');
+ const fresh=await exclude();
+ assert.deepEqual(fresh.data.items.map(x=>x.source_id),['100','300']);
+ assert.equal((await exclude('tieba','&limit=999')).status,400);
+ assert.equal((await exclude('tieba','&cursor=%2Fbad')).status,400);
+});
+test('atomic claim grants only one worker; expiry and release make a source claimable again',async()=>{
+ const {claim,exclude,collect,DB}=await collectFixture();
+ const [a,b]=await Promise.all([claim('tieba',['95153'],'deepseek'),claim('tieba',['95153'],'claude')]);
+ const outcomes=[a.data.results[0],b.data.results[0]];
+ assert.deepEqual(outcomes.map(x=>x.result).sort(),['granted','in_progress']);
+ const first=outcomes.find(x=>x.result==='granted');
+ const denied=await collect('/api/collect/release',{site:'tieba',source_id:'95153',lease_token:'fake-token-with-sufficient-length-00000000000'});
+ assert.equal(denied.status,409);
+ const release=await collect('/api/collect/release',{site:'tieba',source_id:'95153',lease_token:first.lease_token});
+ assert.equal(release.status,200);
+ assert.equal((await exclude()).data.items.length,0);
+ const next=await claim('tieba',['95153'],'claude');
+ assert.equal(next.data.results[0].result,'granted');
+ DB.db.prepare('UPDATE collect_sources SET lease_expires_at=? WHERE site=? AND source_id=?').run(now()-5,'tieba','95153');
+ assert.equal((await exclude()).data.items.length,0);
+ const retry=await claim('tieba',['95153'],'deepseek');
+ assert.equal(retry.data.results[0].result,'granted');
+ assert.notEqual(retry.data.results[0].lease_token,next.data.results[0].lease_token);
+ const old=await collect('/api/collect/complete',{site:'tieba',source_id:'95153',lease_token:next.data.results[0].lease_token,topic:{title:'Old lease',body:'Old lease is invalid'}});
+ assert.equal(old.status,409);assert.equal(old.data.error,'claim_not_owned_or_expired');
+});
+test('complete atomically stores original-language nested replies and immediately updates future exclusions',async()=>{
+ const {claim,collect,exclude,DB}=await collectFixture();
+ const r=await claim('reddit',['f72abc']);const lease=r.data.results[0].lease_token;
+ const topic={title:'Life after back pain',body:'I can walk again after rehab.',source_lang:'en',
+  comments:[{body:'Take your time.',source_lang:'en',replies:[{body:'Thank you!',source_lang:'en'}]}]};
+ const first=await collect('/api/collect/complete',{site:'reddit',source_id:'f72abc',lease_token:lease,topic});
+ assert.equal(first.status,201,JSON.stringify(first));
+ assert.deepEqual(first.data.imported,{topics:1,comments:2});
+ assert.equal(first.data.duplicate,false);
+ const dbTopic=DB.db.prepare('SELECT title,body,source_lang,content_hash FROM topics WHERE id=?').get(first.data.topic_id);
+ assert.equal(dbTopic.title,topic.title);assert.equal(dbTopic.body,topic.body);assert.equal(dbTopic.source_lang,'en');
+ assert.equal(dbTopic.content_hash.length,64);
+ const comments=DB.db.prepare('SELECT id,parent_comment_id,body,source_lang FROM comments WHERE topic_id=? ORDER BY rowid').all(first.data.topic_id);
+ assert.equal(comments.length,2);assert.equal(comments[1].parent_comment_id,comments[0].id);
+ assert.deepEqual(comments.map(x=>x.body),['Take your time.','Thank you!']);
+ assert.deepEqual((await exclude('reddit')).data.items,[{source_id:'f72abc',status:'completed',lease_expires_at:null}]);
+ assert.equal((await claim('reddit',['f72abc'])).data.results[0].result,'completed');
+ const replay=await collect('/api/collect/complete',{site:'reddit',source_id:'f72abc',lease_token:lease,topic});
+ assert.equal(replay.status,200);assert.equal(replay.data.already_completed,true);
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM topics').get().n,1);
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM comments').get().n,2);
+ const altered=await collect('/api/collect/complete',{site:'reddit',source_id:'f72abc',lease_token:lease,topic:{...topic,body:'Altered'}});
+ assert.equal(altered.status,409);assert.equal(altered.data.error,'completion_payload_mismatch');
+});
+test('same source cannot finalize with another collector token or without active lease',async()=>{
+ const {claim,collect,DB}=await collectFixture();
+ const r=await claim('tieba',['19547']);const lease=r.data.results[0].lease_token;
+ assert.throws(()=>DB.db.prepare('INSERT INTO collect_finalize_guard(site,source_id,lease_token_hash) VALUES(?,?,?)').run('tieba','19547','fake'));
+ const forged=await collect('/api/collect/complete',{site:'tieba',source_id:'19547',lease_token:'a'.repeat(64),topic:{title:'Forged',body:'Bad'}});
+ assert.equal(forged.status,409);
+ DB.db.prepare('UPDATE collect_sources SET lease_expires_at=? WHERE site=? AND source_id=?').run(now()-1,'tieba','19547');
+ const late=await collect('/api/collect/complete',{site:'tieba',source_id:'19547',lease_token:lease,topic:{title:'Late',body:'Expired'}});
+ assert.equal(late.status,409);
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM topics').get().n,0);
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM collect_finalize_guard').get().n,0);
+});
+test('same content from another original site is not re-imported, but both source IDs enter exclusions',async()=>{
+ const {claim,collect,exclude,DB}=await collectFixture();
+ const one=await claim('tieba',['111']);
+ const draft={title:'Same discussion',body:'My back feels better this week.',source_lang:'en',comments:[{body:'Earlier reply.'}]};
+ const first=await collect('/api/collect/complete',{site:'tieba',source_id:'111',lease_token:one.data.results[0].lease_token,topic:draft});
+ assert.equal(first.status,201);
+ const two=await claim('reddit',['a12bc']);
+ const duplicate=await collect('/api/collect/complete',{site:'reddit',source_id:'a12bc',lease_token:two.data.results[0].lease_token,topic:{...draft,comments:[{body:'This reply should never be added'}]}});
+ assert.equal(duplicate.status,200,JSON.stringify(duplicate));
+ assert.equal(duplicate.data.duplicate,true);
+ assert.equal(duplicate.data.topic_id,first.data.topic_id);
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM topics').get().n,1);
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM comments').get().n,1);
+ assert.equal((await exclude('tieba')).data.items[0].status,'completed');
+ assert.equal((await exclude('reddit')).data.items[0].status,'completed');
+});
+test('existing posts from direct import are matched by fingerprint and recorded as collected',async()=>{
+ const {imp,claim,collect,DB}=await collectFixture();
+ const draft={title:'A pre-existing imported post',body:'A post already in the database.',source_lang:'en',comments:[{body:'First comment'}]};
+ const imported=await imp('/api/import/topics',draft);assert.equal(imported.status,201);
+ const claimed=await claim('tieba',['212']);
+ const response=await collect('/api/collect/complete',{site:'tieba',source_id:'212',lease_token:claimed.data.results[0].lease_token,topic:draft});
+ assert.equal(response.status,200);assert.equal(response.data.duplicate,true);
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM comments').get().n,1);
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM topics').get().n,1);
+});
+test('completion failure rolls back content and claim status, and retry can succeed',async()=>{
+ const {claim,collect,DB}=await collectFixture();
+ const r=await claim('tieba',['221']);const lease=r.data.results[0].lease_token;
+ DB.db.exec("CREATE TRIGGER forced_collect_failure BEFORE INSERT ON topics BEGIN SELECT RAISE(ABORT,'forced'); END");
+ const payload={site:'tieba',source_id:'221',lease_token:lease,topic:{title:'Rollback case',body:'This should rollback.',comments:[{body:'A reply'}]}};
+ const failed=await collect('/api/collect/complete',payload);
+ assert.equal(failed.status,503,JSON.stringify(failed));
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM topics').get().n,0);
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM comments').get().n,0);
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM collect_finalize_guard').get().n,0);
+ assert.equal(DB.db.prepare("SELECT state FROM collect_sources WHERE site='tieba' AND source_id='221'").get().state,'claimed');
+ DB.db.exec('DROP TRIGGER forced_collect_failure');
+ const success=await collect('/api/collect/complete',payload);
+ assert.equal(success.status,201,JSON.stringify(success));
+});
+test('collection input validation, origin checks, ID validation and comment depth enforce limits',async()=>{
+ const {claim,collect,DB}=await collectFixture();
+ assert.equal((await claim('tieba',['bad-id'])).status,400);
+ assert.equal((await claim('tieba',Array(31).fill('12'))).status,400);
+ assert.equal((await claim('tieba',['1','1'])).status,400);
+ assert.equal((await collect('/api/collect/claim',{site:'tieba',source_ids:['1'],collector_id:'evil user'})).status,400);
+ assert.equal((await collect('/api/collect/claim',{site:'tieba',source_ids:['1'],collector_id:'ai'}, {headers:{origin:'https://evil.test'}})).status,403);
+ const got=await claim('tieba',['1234']);
+ let deep={body:'nested'};
+ for(let i=0;i<8;i++)deep={body:'nested',replies:[deep]};
+ const bad=await collect('/api/collect/complete',{site:'tieba',source_id:'1234',lease_token:got.data.results[0].lease_token,topic:{title:'Deep replies',body:'Too deep',comments:[deep]}});
+ assert.equal(bad.status,400);assert.equal(bad.data.error,'reply_depth_exceeded');
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM topics').get().n,0);
+});
