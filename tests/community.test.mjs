@@ -608,5 +608,6 @@ test('reply form locally inserts and focuses posted comment without full page re
  assert.match(app,/insertAdjacentHTML\('beforeend',commentHtml\(comment\)\)/);
  assert.match(app,/scrollIntoView\(\{behavior:'smooth',block:'center'\}\)/);
  assert.match(app,/data-reply-count/);
+ assert.match(app,/data\.comments\.filter\(c=>!existing\.has\(c\.id\)\)/);
  assert.match(css,/\.comment\.just-posted/);
 });
