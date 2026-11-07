@@ -440,3 +440,33 @@ test('numeric-leading source site 120ask supports exclusions, claim, complete an
  assert.equal((await exclude('tieba')).status,200);
  assert.equal((await exclude('reddit')).status,200);
 });
+
+test('preview and production environment labels and robots directives stay isolated',async()=>{
+ const {env,call}=await fixture();
+ const html=readFileSync('public/index.html','utf8');
+ const headers=readFileSync('public/_headers','utf8');
+ const client=readFileSync('public/app.js','utf8');
+ const config=JSON.parse(readFileSync('wrangler.jsonc','utf8'));
+ assert(!html.includes('name="robots"'));
+ assert(!headers.includes('X-Robots-Tag: noindex'));
+ assert.deepEqual(config.assets.run_worker_first,['/api/*','/','/index.html']);
+ assert.equal(config.vars.APP_ENV,'production');
+ assert.equal(config.previews.vars.APP_ENV,'preview');
+ assert(client.includes("const isPreview=()=>state.health?.environment==='preview'"));
+ assert(client.includes("t(isPreview()?'privacyText':'privacyProduction')"));
+ env.ASSETS={fetch:async()=>new Response('<html>example</html>',{headers:{'content-type':'text/html','X-Robots-Tag':'noindex, nofollow'}})};
+ env.APP_ENV='production';
+ assert.equal((await call('/api/health')).data.environment,'production');
+ for(const page of ['/','/index.html']){
+  const result=await worker.fetch(new Request('https://site.test'+page),env);
+  assert.equal(result.status,200);
+  assert.equal(result.headers.get('X-Robots-Tag'),null);
+ }
+ env.APP_ENV='preview';
+ assert.equal((await call('/api/health')).data.environment,'preview');
+ for(const page of ['/','/index.html']){
+  const result=await worker.fetch(new Request('https://preview.test'+page),env);
+  assert.equal(result.status,200);
+  assert.equal(result.headers.get('X-Robots-Tag'),'noindex, nofollow');
+ }
+});
