@@ -1,0 +1,36 @@
+name: Inspect 120ask real post for safe preview import
+on:
+  push:
+    branches: [feature/v1-community-build-20261106]
+    paths: [.github/workflows/collector-120ask-oneoff.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - run: python3 -m pip install --quiet --break-system-packages beautifulsoup4
+      - name: Inspect HTML document without importing or exposing identifiers
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import urllib.request,re,json
+          from bs4 import BeautifulSoup
+          u='https://m.120ask.com/askg/posts_detail/22185258'
+          req=urllib.request.Request(u,headers={'User-Agent':'Mozilla/5.0 (compatible; SpineCommunity/1.0)'})
+          with urllib.request.urlopen(req,timeout=25) as response:
+              html=response.read().decode('utf-8','replace')
+          soup=BeautifulSoup(html,'html.parser')
+          print('PAGE_TITLE:',(soup.title.get_text(' ',strip=True) if soup.title else '')[:200])
+          for t in soup(['script','style','noscript','svg','footer','header']):t.decompose()
+          text=soup.get_text(' ',strip=True)
+          text=re.sub(r'1[3-9]\d{9}','[phone]',text)
+          print('RAW_TEXT_CHARS:',len(text))
+          for keyword in ['病情描述','医生回复','医生回答','患者追问','追问','回答','问题描述','治疗','康复','术后']:
+              idx=text.find(keyword)
+              print('KEYWORD',keyword,idx,'SAMPLE',text[max(0,idx-80):idx+270] if idx>=0 else '')
+          print('TOP_TEXT_SAMPLE:',text[:1800])
+          print('HEADINGS:',[(h.name,h.get_text(' ',strip=True)[:100]) for h in soup.find_all(re.compile('^h[1-6]$'))][:20])
+          PY
