@@ -58,8 +58,16 @@ function writeFile(dest,sql){
   const args=['node_modules/wrangler/bin/wrangler.js','d1','execute',dest.binding,'--remote','--config',dest.config,'--file',file,'--json','--yes'];
   const r=spawnSync(process.execPath,args,{encoding:'utf8',maxBuffer:12*1024*1024,env:process.env});
   if(r.status!==0)throw Error('D1 file import failed ('+dest.binding+'): '+(r.stderr||r.stdout).slice(0,900));
-  let payload;try{payload=JSON.parse(r.stdout);}catch{throw Error('D1 import returned non-JSON output');}
-  if(!Array.isArray(payload)||payload.some(p=>p.success===false))throw Error('D1 import reported a failed statement');
+  // Wrangler's --file mode can exit successfully while emitting progress text
+  // rather than pure JSON, even when --json is passed. A zero exit status alone
+  // is not enough to mark a thread synced: run() checks the persisted topic and
+  // every expected reply in production before writing its preview receipt.
+  let payload=null;
+  try{payload=JSON.parse(r.stdout);}catch{}
+  if(payload!==null&&(
+    (Array.isArray(payload)&&payload.some(p=>p.success===false))||
+    (!Array.isArray(payload)&&payload?.success===false)
+  ))throw Error('D1 import reported a failed statement');
  }finally{rmSync(temp,{recursive:true,force:true});}
 }
 function assertReady(){
