@@ -34,6 +34,8 @@
 | feature | `migrations/v1/0004_content_fingerprint_sync.sql` | 主帖内容指纹唯一索引、同步回执表 |
 | feature | `src/core.ts`、`src/import.ts`、`src/content.ts` | 统一生成指纹、跨批次主帖去重、正常发帖同样检查 |
 | feature | `scripts/sync-preview-to-production.mjs` | 独立受保护的同步 CLI，默认只读 |
+| feature | `scripts/backfill-topic-fingerprints.mjs` | 历史主帖指纹补算，默认只读，先排查历史重复和冲突 |
+| feature | `.github/workflows/feature-verify.yml` | 仅开发分支 TypeScript 与 SQLite 集成测试，不连接生产数据库 |
 | feature | `wrangler.production-sync.jsonc` | 明确锁定生产 D1 绑定，防止误用开发配置 |
 | feature | `tests/community.test.mjs` | 主帖去重、回执、指纹一致性和楼中楼测试 |
 | main | `docs/topic-dedup-and-sync.md` | 本规范（文档仅维护于 main） |
@@ -41,7 +43,7 @@
 ### 验证与上线顺序
 
 1. 在开发分支执行 `npm run verify`。开发预览环境按原有隔离迁移流程应用 `0004`，确认预览构建与 API 测试通过。
-2. 旧数据的 `content_hash` 初始为 NULL。要获得对**历史主帖**同等级的规范化指纹保障，必须先对其进行受控补算和冲突检查；迁移不会自动删除、合并历史重复内容。目前导入接口还会检查既有标题正文完全一致的旧帖子。
+2. 旧数据的 `content_hash` 初始为 NULL。使用 `npm run db:backfill-hashes -- --target=preview` **只读检查**历史重复，审核通过后才在已批准的环境执行 `--apply` 补算指纹；生产补算同样需要单独批准和备份。发生重复冲突则停止并人工处理，不自动删帖。迁移不会自动删除、合并历史重复内容。目前导入接口还会检查既有标题正文完全一致的旧帖子。
 3. 单独评审并批准生产 D1 的表结构升级、数据库备份、主站应用发布和开发内容同步。**目前未批准，不能提前执行。**
 4. 生产升级并核对目标 UUID、审核内容后，先运行只读计划：
    `npm run sync:production -- --limit=20`
@@ -55,5 +57,10 @@
 - 开发库的回复如果来自其他真实用户，任务会停止，而不会假冒“未知用户”移入生产库；如未来要同步真实用户互动，需单独设计身份与许可规则。
 - 脚本是命令行任务，不是管理后台按钮或已配置的 GitHub Actions。自动化触发和生产写权限需要另行部署/配置。
 - 本次仅提交程序与规范；**没有实际把开发数据写入生产**。
+
+### 开发测试记录
+
+- GitHub Actions 本地自动验证：[run 42329131928](https://github.com/119shenhao/spine-community/actions/runs/42329131928)，**success**，包含 TypeScript 类型检查和 SQLite 集成测试：跨批次去重、同批次重复跳过、回复树不重复导入、回执永久排除已同步主题、原文保留、同步 SQL 反复执行幂等。
+- 自动化测试成功不等于 Cloudflare 预览构建/远程 D1 验收成功。尚未在本次对生产 D1 执行迁移、补算或同步。
 
 相关文档：[原导入接口](import-api.md) · [开发/生产发布规范](development-release-workflow.md)。
