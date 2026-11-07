@@ -52,7 +52,7 @@ jobs:
           print('Preflight read-only check passed:',json.dumps(stats,ensure_ascii=False))
           with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:
               f.write('### Approved content publication (read-only preflight)\n\n')
-              f.write('Source: isolated preview D1. Destination: production D1. Only published Unknown User threads, replies, and nested replies.\n\n')
+              f.write('Source: isolated preview D1. Destination: production D1. Only published preview threads and visible replies; map source authors to production Unknown User.\n\n')
               f.write('First batch: '+json.dumps(stats,ensure_ascii=False)+'\n\n')
           PY
       - name: Record production D1 Time Travel restore bookmark before writing
@@ -101,4 +101,5 @@ jobs:
           print('Completed: no eligible unsynced source threads remain.',json.dumps(total,ensure_ascii=False))
           PY
 
-# Retry after verified Wrangler parser fix, authorized by forum owner.
+# Retry after verified mixed-author / progress sync fix, explicitly requested by forum owner on 2026-11-07.
+# Keep this run separate from Release Version; existing source receipts prevent reimport.
