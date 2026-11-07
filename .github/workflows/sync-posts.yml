@@ -1,0 +1,139 @@
+name: 同步帖子，从开发环境到生产环境
+run-name: 同步帖子 / ${{ inputs.mode }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Inspect only (default), or publish new eligible posts
+        type: choice
+        options: [inspect, sync]
+        default: inspect
+        required: true
+      confirmation:
+        description: For sync, enter spine-community-db
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spine-community-approved-production-content-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == '119shenhao/spine-community' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PROD_D1_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: 289976272520a38732bef34108585e11
+      SPINE_SYNC_PRODUCTION_CONFIRM: 5919ff78-b8fc-46ab-85f0-01fe5e6a41b0
+    steps:
+      - name: Check requested mode and require confirmation for production writes
+        shell: bash
+        env:
+          MODE: ${{ inputs.mode }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          case "$MODE" in
+            inspect) ;;
+            sync)
+              if [[ "$CONFIRMATION" != "spine-community-db" ]]; then
+                echo "::error::Confirm production writes by entering the exact production D1 name."
+                exit 1
+              fi
+              ;;
+            *) echo "::error::Unknown mode."; exit 1 ;;
+          esac
+      - name: Checkout the last verified sync implementation
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # Commit used by successful production sync run 42375764551.
+          # Pinning avoids executing future unreviewed feature-branch code with production D1 access.
+          ref: 4580263f1ec66feed1d1f2d2722873068455f2bb
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Verify tests before any data writes
+        run: npm run verify
+      - name: Preflight read-only D1 checks and preview publication plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_API_TOKEN"
+          python3 - <<'PY'
+          import subprocess,json,re,sys,os
+          p=subprocess.run(['npm','run','sync:production','--','--limit=100'],capture_output=True,text=True)
+          if p.returncode:
+              print('Read-only preflight failed; NO content has been copied.',file=sys.stderr)
+              print(p.stderr[-900:],file=sys.stderr)
+              sys.exit(p.returncode)
+          m=re.search(r'(?m)^\{\s*"mode":\s*"dry_run"',p.stdout)
+          if not m: raise SystemExit('Could not parse preflight summary; refusing to proceed')
+          stats=json.loads(p.stdout[m.start():])
+          print('Preflight read-only check passed:',json.dumps(stats,ensure_ascii=False))
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:
+              f.write('### Approved content publication (read-only preflight)\n\n')
+              f.write('Source: isolated preview D1. Destination: production D1. Only published preview threads and visible replies; map source authors to production Unknown User.\n\n')
+              f.write('First batch: '+json.dumps(stats,ensure_ascii=False)+'\n\n')
+          PY
+      - name: Record production D1 Time Travel restore bookmark before writing
+        if: inputs.mode == 'sync'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./node_modules/.bin/wrangler d1 time-travel info spine-community-db --config wrangler.production-sync.jsonc --json > "$RUNNER_TEMP/production-bookmark.json"
+          python3 - <<'PY'
+          import json,os
+          bookmark=json.load(open(os.path.join(os.environ['RUNNER_TEMP'],'production-bookmark.json'))).get('bookmark')
+          if not isinstance(bookmark,str) or not bookmark:
+              raise SystemExit('Could not establish a production Time Travel restore point; refusing to write')
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:
+              f.write('Production backup restore bookmark: `'+bookmark+'`\n\n')
+          print('Production Time Travel bookmark recorded before writing.')
+          PY
+      - name: Publish all eligible unsynced threads in idempotent batches
+        if: inputs.mode == 'sync'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import subprocess,json,re,os,sys
+          total={'new':0,'existing':0,'comments':0,'marked':0}
+          for batch in range(1,201):
+              p=subprocess.run(['npm','run','sync:production','--','--limit=100','--apply'],capture_output=True,text=True)
+              if p.returncode:
+                  print(f'Batch {batch} failed. Previous batches are preserved and receipts permit safe retries.',file=sys.stderr)
+                  print(p.stderr[-1100:],file=sys.stderr)
+                  raise SystemExit(p.returncode)
+              m=re.search(r'(?m)^\{\s*"mode":\s*"apply"',p.stdout)
+              if not m:
+                  raise SystemExit(f'Batch {batch} produced no machine-readable summary; STOP')
+              stats=json.loads(p.stdout[m.start():])
+              if stats.get('marked')!=stats.get('examined'):
+                  raise SystemExit(f'Batch {batch} receipts mismatch; STOP: {stats}')
+              print('Batch',batch,json.dumps(stats,ensure_ascii=False),flush=True)
+              for key in total: total[key]+=stats[key]
+              if stats['examined']==0:
+                  break
+          else:
+              raise SystemExit('Hit maximum of 200 batches; may be partially complete. Inspect and rerun safely.')
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:
+              f.write('### Content publication completed\n\n')
+              f.write('Aggregate: '+json.dumps(total,ensure_ascii=False)+'\n\n')
+              f.write('Final batch examined 0 remaining source threads. Existing content and synced threads were skipped.\n')
+          print('Completed: no eligible unsynced source threads remain.',json.dumps(total,ensure_ascii=False))
+          PY
+
+# Permanent manual workflow. The previous one-time successful workflow remains historical.
+# No schedule: production D1 may only be written after a deliberate 'sync' invocation.
+# Existing receipts ensure each topic (and current visible reply tree) is synced only once.
