@@ -101,7 +101,7 @@ export async function contentRoute(req:Request,env:Env,u:Row|null,path:string):P
     if(c.kind==='progress'){const t=await one(env.DB,'SELECT author_id FROM topics WHERE id=?',c.topic_id);if(t?.author_id!==user.id)fail(403,'progress_author_required');}
     if(method==='DELETE')await env.DB.batch(purge(env.DB,'comment',c.id));
     else{const b=await body(req),text=textField(b.body,1,12000),status=c.status==='hidden'?'pending_review':risk('',text);await stmt(env.DB,'UPDATE comments SET body=?,status=?,source_lang=?,content_version=content_version+1,updated_at=? WHERE id=?',text,status,lang(b.source_lang||c.source_lang),now(),c.id).run();}
-    if(method==='PATCH'){const changed=await getContent(env,'comment',c.id,user);await decorate(env,[changed],user,'comment');const counts=await one(env.DB,'SELECT reply_count FROM topics WHERE id=?',c.topic_id);return json({ok:true,comment:changed,reply_count:counts?.reply_count});}
+    if(method==='PATCH'){const changed=await getContent(env,'comment',c.id,user);await decorate(env,[changed],user,'comment');const counts=await one(env.DB,'SELECT reply_count FROM topics WHERE id=?',c.topic_id);return json({ok:true,status:changed.status,comment:changed,reply_count:counts?.reply_count});}
     return json({ok:true});
   }
   const interaction=path.match(/^\/api\/(topics|comments)\/([^/]+)\/(like|bookmark|follow)$/);
