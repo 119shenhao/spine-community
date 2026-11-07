@@ -112,3 +112,12 @@
 - 改动仅涉及前端代码和测试，无 D1 表结构迁移或正式环境写操作。前端提交 `16f10b6a33efd60ec09e4047954a748f70d7faef`；新增测试的最终提交 `d4908a9af468f22c2aeafd5c6a7f97f53942b197`。
 - GitHub Actions [verify](https://github.com/119shenhao/spine-community/actions/runs/42366425368) 结果 `completed/success`；Cloudflare Workers Preview 构建 `completed/success`（Build ID `5540170f-a208-4a17-b659-5a3e014a34b9`）。
 - 当前执行环境无法访问 Worker Preview URL，尚未完成真实手机点击与滚动位置的人工验收；只在开发预览部署，不把这次程序代码推送到生产 `main`。
+
+## 回复发表、编辑后仅局部更新（2026-11-07）
+
+- 用户在移动端反馈：帖子回复、楼中楼发布后整页重新加载并滚动跳动，要求提交后直接显示新回复并定位到它。
+- 开发分支 `feature/v1-community-build-20261106`：`src/content.ts` 的新增／编辑回复 API 保持原路由与鉴权，额外返回可直接渲染的完整评论、审核状态和由 D1 触发器维护的最新主帖回复数；不增加数据库迁移。
+- 前端新增 `public/reply-ui.js`，`public/app.js` 在创建普通评论、楼中楼、楼主进展或编辑回复成功后更新内存数组与对应评论 DOM，局部修正回复计数和进展摘要；不调用整页 `render()`，不修改路由哈希。发表成功后关闭弹窗／清空输入框，滚动聚焦新增回复并在 `public/styles.css` 中短暂高亮。待审核、拦截状态继续按服务端状态显示，不误增加公开回复数量。
+- 新增三组回归测试，覆盖发表普通／楼中楼／进展、编辑的完整 API 数据、局部状态合并及不再整页刷新的前端行为。
+- 最终开发代码提交 `f0977d7613d4cb8348b7ce6c813a2f4a5870e99a`；GitHub Actions [verify](https://github.com/119shenhao/spine-community/actions/runs/42367153766) `completed/success`。Cloudflare 预览构建和手机真机点击效果另行验收（GitHub 测试成功并不等于远端预览已经更新）。
+- 无生产 D1 写入、无 schema 变化，未将这次程序代码合并入生产 `main`。
