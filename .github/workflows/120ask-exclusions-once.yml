@@ -1,0 +1,36 @@
+name: 120ask exclusions check
+on:
+  push:
+    branches: [feature/v1-community-build-20261106]
+    paths: [.github/workflows/120ask-exclusions-once.yml]
+permissions: {}
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Read all 120ask exclusions from the preview API
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from urllib.parse import urlencode
+          from urllib.request import urlopen
+          base = 'https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev/api/collect/exclusions'
+          params = {'site': '120ask', 'limit': 200}
+          seen = set()
+          while True:
+              with urlopen(base + '?' + urlencode(params), timeout=15) as response:
+                  page = json.load(response)
+              if page['site'] != '120ask':
+                  raise ValueError('Wrong site in exclusion response')
+              print(json.dumps([(item['source_id'], item['status']) for item in page['items']]), flush=True)
+              cursor = page['next_cursor']
+              if cursor is None:
+                  print('Exclusion pagination complete', flush=True)
+                  break
+              if cursor in seen:
+                  raise ValueError('Repeated exclusion cursor')
+              seen.add(cursor)
+              params['cursor'] = cursor
+          PY
