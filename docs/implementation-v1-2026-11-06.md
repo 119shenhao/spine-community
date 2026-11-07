@@ -2,6 +2,18 @@
 
 日期：2026-11-06。分支：`feature/v1-community-build-20261106`。此记录区分代码、自测和远程环境，不将代码存在等同于可公开上线。
 
+## 第三次正式发布：繁体中文与首页帖子优先（2026-11-07）
+
+- 用户直接发出固定任务指令“发布新版本从开发环境到生产环境”；按 `docs/release-version-workflow.md` 的**现有** Production D1 / PR / Cloudflare 流程执行，没有新建发布工作流，也没有要求用户手动点击 Run workflow。
+- 源分支：`feature/v1-community-build-20261106`；锁定开发版本 `1b367062f1746a385d5ddbf513ffdfcdcfe1fa4a`。GitHub [verify #42385258327](https://github.com/119shenhao/spine-community/actions/runs/42385258327) 和 Cloudflare Preview 构建均为 `success`。
+- 由于开发分支与 `main` 历史分叉，以生产主分支为基线准备 `release/spine-20261107-zh-tw-home`，候选完整 SHA `99aca4fa5f5db3acf78099b51a23d5c0f7173e26`，**仅携带 11 个已审查程序/测试/迁移文件**，保留现有生产文档、管理员代理说明、工作流、Google 登录配置和业务数据。
+- 功能：进入首页立即看到最新帖子列表（搜索卡片和首页大横幅移除）、导航栏在“个人中心”旁新增“发帖”、繁体中文 `zh-TW` 及台湾／香港／澳门浏览器自动选择、150 条繁体界面词条、后台语言校验、未来翻译目标 `zh-Hant` 兼容映射（实际内容自动翻译仍关闭）。
+- 数据库差异：仅新增 `migrations/v1/0006_zh_tw_labels.sql`，对 11 个现有分类/标签增加 `zh-TW` 名称，使用 `INSERT OR IGNORE`，不修改表结构、不覆盖已有标签及用户帖子。以前 0001–0005 的迁移文件未变更。
+- 生产 D1 目标经现有工作流校验为 `spine-community-db`、UUID `5919ff78-b8fc-46ab-85f0-01fe5e6a41b0`：[迁移前只读检查 #42386604067](https://github.com/119shenhao/spine-community/actions/runs/42386604067) `success`；[受控 apply #42386727659](https://github.com/119shenhao/spine-community/actions/runs/42386727659) `success`，真实工作日志明确显示 `0006_zh_tw_labels.sql ✅`，且“Record a restore point and apply migrations”步骤成功（恢复 bookmark 写入该工作流 Summary，未另行对外展示）；[迁移后再次只读检查 #42386835903](https://github.com/119shenhao/spine-community/actions/runs/42386835903) `success`，本次未再次执行 apply。
+- 代码发布：[PR #8](https://github.com/119shenhao/spine-community/pull/8) 合并成功，生产程序提交 `14ceb14a40a1140d5aeda29eac82d9209248b12b`。Cloudflare 生产 Worker 构建 `b8cf9096-5126-4a3d-9897-c087e06ca64c`：`completed / success`，完成时间 `2026-11-07T15:33:11Z`。
+- 没有复制预览库的测试账户、帖子、回帖或楼中楼；“同步帖子”仍是独立任务。恢复数据库需要另行审批，切勿直接执行 Time Travel 回滚导致后续真实数据丢失。
+- **验证边界**：GitHub CI、生产 D1 迁移执行及复查、PR 合并和 Cloudflare 生产构建均已核实。当前访问 `https://spine.nbn369.com/` 及 `/api/health` 的工具遇到 DNS/访问限制，**尚未完成真实浏览器中的首页、Google 登录或生产 HTTP 健康复验**；不得把构建成功等同于这些实测已通过。
+
 ## 开发预览：繁體中文（台灣、香港、澳門共用）（2026-11-07）
 
 - 根据用户明确要求，在既有开发分支 `feature/v1-community-build-20261106` 新增第八种界面语言 `zh-TW`，下拉菜单显示「繁體中文」。实现独立的繁体中文界面词典，**150 条文案完整翻译**（包括发帖、评论、登录、个人中心、隐私、管理员及通知），而非从英文回退；保留原有七种语言。
