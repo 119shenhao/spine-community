@@ -2,6 +2,17 @@
 
 日期：2026-11-06。分支：`feature/v1-community-build-20261106`。此记录区分代码、自测和远程环境，不将代码存在等同于可公开上线。
 
+## 第二次正式发布：开发环境 → 生产环境（2026-11-07）
+
+- 用户在 ChatGPT 中明确发出固定任务指令“发布新版本从开发环境到生产环境”；本次按照 [固定发布流程](release-version-workflow.md) 执行，没有要求用户手动点击 GitHub Run workflow。
+- 源开发分支：`feature/v1-community-build-20261106`，批准发布候选源 SHA：`30318a2eab9c4cfd516e0c1fb1d739a8c1d251b1`。该提交的 [GitHub 测试](https://github.com/119shenhao/spine-community/actions/runs/42383210910) 和 Cloudflare Worker Preview 构建均为 success。
+- 因主分支与开发分支历史分叉，不能直接把整个功能分支合并到 `main`，否则会删除生产 `docs/` 与已有工作流。为确保安全，以主分支 `fed307ad9d843dbf59b1be2cc46cfc2a0b779bec` 为基线，创建发布候选 `release/spine-20261107-30318a2`，精准叠加 **10 个程序相关文件**。保留 `main/docs/`、`AGENTS.md`、所有 `.github/workflows/`，不带入开发分支的旧文档。
+- 发布内容：访客语言在 Google 登录/刷新后保持（支持中文、其他浏览器语言和手动切换）、移动端标识和界面改良、帖子点赞/收藏/关注及回帖无需整页刷新、回帖结果接口扩展、帖子同步脚本校验完善、预览与生产 Google OAuth Client ID 分离。
+- [发布 PR #7](https://github.com/119shenhao/spine-community/pull/7) 从上述发布候选合并进 `main`，生产合并提交：`afd9945674df11ac6376ae0d4df64f6dd8cfe17c`。
+- 生产 Cloudflare Workers 构建结果：**completed / success**，构建 ID：`f12780ee-239e-4aba-b529-db5686ba5218`，Cloudflare 构建完成时间 2026-11-07T14:52:50Z。部署运行由 Cloudflare 提供，未使用新的发布工作流。
+- 数据库：两分支的 `migrations/v1/` 全部 SQL 文件哈希完全一致，正式生产此前已有 0001–0005 迁移成功的执行记录，因此本次不调用 Production D1，不执行生产 SQL 和业务数据复制。生产帖子及账号不经这次发布复制/替换；“同步帖子”仍独立执行。
+- 验证边界：已核验候选构建成功、合并成功、`main` 指向发布提交及生产 Cloudflare 构建 success。当前外部请求工具与容器访问 `spine.nbn369.com` / 预览域名均遇到 DNS / 访问限制，因此**没有完成生产 HTTP /api/health、Google 真实登录回跳或移动端浏览器端到端复验**；不可把构建 success 等同于已进行这些实测。
+
 ## v1 正式发布记录（2026-11-07）
 
 - [生产 D1 迁移运行](https://github.com/119shenhao/spine-community/actions/runs/42365746245)已完成。执行前确认生产库 `spine-community-db` 没有应用表，记录了 Time Travel 恢复点，随后成功执行 `0001` 至 `0005`。迁移初始化分类、设置和「未知用户」系统账号。开发库的帖子、回帖和楼中楼未复制。
