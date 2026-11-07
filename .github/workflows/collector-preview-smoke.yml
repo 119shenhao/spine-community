@@ -1,0 +1,55 @@
+name: Preview collector keyless read-only smoke
+on:
+  push:
+    branches: [feature/v1-community-build-20261106]
+    paths: [.github/workflows/collector-preview-smoke.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  read-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Verify preview works without API key and remains read-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          base='https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev'
+          ready=0
+          for i in $(seq 1 24); do
+            curl -sS --connect-timeout 5 --max-time 20 -o health.json "$base/api/health" || true
+            collect_code=$(curl -sS --connect-timeout 5 --max-time 20 -o collect.json -w '%{http_code}' "$base/api/collect/exclusions?site=tieba" || true)
+            if [[ "$collect_code" == 200 ]]; then
+              if python3 -c 'import json; h=json.load(open("health.json")); c=json.load(open("collect.json")); assert h.get("databaseReady") is True and h.get("importEnabled") is True; assert c.get("site")=="tieba" and isinstance(c.get("items"),list) and "next_cursor" in c; print("Preview keyless collection exclusions returned HTTP 200")'; then
+                ready=1
+                break
+              fi
+            fi
+            echo "Waiting for keyless preview deployment: attempt $i; code=$collect_code"
+            sleep 5
+          done
+          if [[ "$ready" != 1 ]]; then
+            echo "Keyless preview collector endpoint was not ready after polling" >&2
+            exit 1
+          fi
+          # Exercise a real six-hour lease against a dedicated synthetic site.
+          # Only metadata is briefly claimed then released; no forum post is created.
+          test_id="ci-$GITHUB_RUN_ID"
+          curl -fsS --connect-timeout 5 --max-time 30 -o claim.json \
+            -H 'Content-Type: application/json' \
+            --data "{\"site\":\"smoke\",\"collector_id\":\"github_ci\",\"source_ids\":[\"$test_id\"]}" \
+            "$base/api/collect/claim"
+          python3 -c 'import json,time; r=json.load(open("claim.json")); assert r["site"]=="smoke" and r["lease_seconds"]==21600,r; i=r["results"][0]; assert i["result"]=="granted",i; assert 21580<=i["lease_expires_at"]-int(time.time())<=21600,i; print("Verified real remote claim expires in six hours.")'
+          python3 -c 'import json; i=json.load(open("claim.json"))["results"][0]; json.dump({"site":"smoke","source_id":i["source_id"],"lease_token":i["lease_token"]},open("release.json","w"))'
+          curl -fsS --connect-timeout 5 --max-time 30 -o release-response.json \
+            -H 'Content-Type: application/json' \
+            --data-binary @release.json \
+            "$base/api/collect/release"
+          python3 -c 'import json; d=json.load(open("release-response.json")); assert d["status"]=="released"; print("Verified claim released without creating a forum post.")'
+          # Confirm a numeric-leading external site code is accepted by the actual deployed Worker.
+          extra_status=$(curl -sS --connect-timeout 5 --max-time 30 -o 120ask.json -w '%{http_code}' "$base/api/collect/exclusions?site=120ask")
+          test "$extra_status" = "200"
+          python3 -c 'import json; r=json.load(open("120ask.json")); assert r["site"]=="120ask" and isinstance(r["items"],list) and "next_cursor" in r; print("Verified numeric-leading site 120ask is supported in remote preview")'
+          echo "Preview keyless collection, six-hour lease, and 120ask site verification passed."
+

@@ -1,0 +1,10 @@
+import {spawnSync,spawn} from 'node:child_process';
+const args=process.argv.slice(2),value=key=>{const n=args.indexOf(key);return n>=0?args[n+1]:undefined;};
+const port=value('--port')||process.env.PORT||'8787',host=value('--host')||value('--ip')||'0.0.0.0';
+if(!/^\d{2,5}$/.test(port))throw Error('Invalid development port');
+const cli='node_modules/wrangler/bin/wrangler.js';
+const init=spawnSync(process.execPath,[cli,'d1','migrations','apply','DB','--local','--config','wrangler.local.jsonc'],{stdio:'inherit'});
+if(init.status!==0)process.exit(init.status||1);
+const child=spawn(process.execPath,[cli,'dev','--config','wrangler.local.jsonc','--ip',host,'--port',port],{stdio:'inherit'});
+for(const sig of ['SIGINT','SIGTERM'])process.on(sig,()=>child.kill(sig));
+child.on('exit',code=>process.exit(code||0));

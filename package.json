@@ -1,16 +1,26 @@
 {
   "name": "spine-community",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "node scripts/dev.mjs",
     "deploy": "wrangler deploy",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "preview": "wrangler preview",
+    "test": "node --test tests/community.test.mjs",
+    "db:local": "wrangler d1 migrations apply DB --local --config wrangler.local.jsonc",
+    "db:preview": "wrangler d1 migrations apply PREVIEW_DB --remote --config wrangler.preview-migrations.jsonc",
+    "verify": "npm run check && npm test",
+    "sync:production": "node scripts/sync-preview-to-production.mjs",
+    "db:backfill-hashes": "node scripts/backfill-topic-fingerprints.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261104.1",
     "typescript": "^5.9.0",
-    "wrangler": "^4.0.0"
+    "wrangler": "^4.135.0"
+  },
+  "engines": {
+    "node": ">=22.13"
   }
 }

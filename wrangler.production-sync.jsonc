@@ -1,0 +1,13 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "spine-community-production-sync-cli",
+  "compatibility_date": "2026-11-06",
+  "d1_databases": [
+    {
+      "binding": "PRODUCTION_DB",
+      "database_name": "spine-community-db",
+      "database_id": "5919ff78-b8fc-46ab-85f0-01fe5e6a41b0",
+      "migrations_dir": "migrations/v1"
+    }
+  ]
+}

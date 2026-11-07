@@ -1,58 +1,37 @@
-// Spine Community read-only scaffold. No public writes are allowed.
-interface Env {
-  ASSETS: Fetcher;
-  DB?: D1Database;
-}
-type Category = { slug: string; name: string; description: string };
-const categories: Category[] = [
-  { slug: "neck", name: "Neck & Cervical Spine", description: "Neck pain, stiffness, and cervical spine experiences." },
-  { slug: "lower-back", name: "Lower Back & Lumbar Spine", description: "Low back pain, sciatica, and lumbar spine experiences." },
-  { slug: "patient-stories", name: "Patient Stories", description: "First-person stories without claims of medical verification." },
-  { slug: "recovery-journals", name: "Recovery Journals", description: "Personal progress updates over time." },
-];
-function json(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store",
-      "x-content-type-options": "nosniff",
-    },
-  });
-}
+import {Env,HttpError,now,hash,rate,json,fail,sameOrigin,currentUser,one,all,stmt} from './core';
+import {authRoute} from './auth';
+import {contentRoute} from './content';
+import {searchRoute} from './search';
+import {communityRoute} from './community';
+import {translationRoute} from './translation';
+import {adminRoute} from './admin';
+import {importRoute,importEnabled} from './import';
+import {collectRoute} from './collect';
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url);
-    const { pathname } = url;
-    if (pathname.startsWith("/api/")) {
-      if (pathname === "/api/health" && request.method === "GET") {
-        return json({ status: "ok", stage: "read-only-scaffold", databaseConfigured: Boolean(env.DB), imageUploadsEnabled: false });
-      }
-      if (pathname === "/api/categories" && request.method === "GET") {
-        return json({ categories });
-      }
-      // Security: both storage writes AND reads are disabled until access
-      // control, abuse limits, and private R2 bindings have been implemented.
-      if (pathname === "/api/uploads" || pathname.startsWith("/api/uploads/")) {
-        return json({ error: "image_feature_disabled" }, 403);
-      }
-      if (request.method !== "GET" && request.method !== "HEAD") {
-        return json({ error: "community_not_open_for_posting" }, 403);
-      }
-      if (pathname === "/api/topics" && request.method === "GET") {
-        if (!env.DB) return json({ error: "database_not_configured", topics: [] }, 503);
-        try {
-          const result = await env.DB.prepare(
-            "SELECT id, category, kind, title, created_at FROM topics WHERE status = ? ORDER BY created_at DESC LIMIT 20"
-          ).bind("published").all();
-          return json({ topics: result.results ?? [] });
-        } catch {
-          // Do not leak SQL errors or account details to the public API.
-          return json({ error: "forum_not_ready", topics: [] }, 503);
-        }
-      }
-      return json({ error: "not_found" }, 404);
-    }
-    return env.ASSETS.fetch(request);
-  },
+ async fetch(req:Request,env:Env):Promise<Response>{
+  const url=new URL(req.url),path=url.pathname;
+  if(!path.startsWith('/api/'))return env.ASSETS.fetch(req);
+  try{
+   if(path==='/api/import'||path.startsWith('/api/import/'))return await importRoute(req,env,path);
+   if(path==='/api/collect'||path.startsWith('/api/collect/'))return await collectRoute(req,env,path);
+   if(path==='/api/uploads'||path.startsWith('/api/uploads/'))fail(403,'image_feature_disabled');
+   if(path==='/api/health'){
+    let ready=false;try{ready=Boolean(env.DB&&await one(env.DB,"SELECT value FROM settings WHERE key='schema_version' AND value='1'"));}catch{}
+    return json({status:ready?'ok':'setup_required',stage:'v1-development',version:'0.2.0-preview.2',databaseConfigured:Boolean(env.DB),databaseReady:ready,imageUploadsEnabled:false,importEnabled:importEnabled(req,env),googleConfigured:Boolean(env.GOOGLE_CLIENT_ID&&env.GOOGLE_CLIENT_SECRET),translationConfigured:env.TRANSLATION_ENABLED==='true'&&Boolean(env.TRANSLATOR_KEY),analyticsConfigured:Boolean(env.ANALYTICS_SALT)},ready?200:503);
+   }
+   if(!env.DB)fail(503,'database_not_configured');
+   if(!['GET','HEAD'].includes(req.method))sameOrigin(req);
+   const ip=req.headers.get('cf-connecting-ip')||'local';
+   await rate(env.DB,'api:'+await hash(ip+new Date().toISOString().slice(0,10)),180);
+   const user=await currentUser(req,env);
+   for(const route of [authRoute,communityRoute,contentRoute,searchRoute,translationRoute,adminRoute]){
+    const response=await route(req,env,user,path);
+    if(response){response.headers.set('x-content-type-options','nosniff');response.headers.set('referrer-policy','no-referrer');return response;}
+   }
+   fail(404,'not_found');
+  }catch(error){
+   if(error instanceof HttpError)return json({error:error.message},error.status);
+   return json({error:'service_unavailable'},503);
+  }
+ }
 } satisfies ExportedHandler<Env>;

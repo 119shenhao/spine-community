@@ -1,0 +1,30 @@
+name: Spine collector on demand
+on:
+  push:
+    branches: [feature/v1-community-build-20261106]
+    paths: [.github/spine-collector-request.json]
+
+permissions:
+  contents: read
+
+jobs:
+  collector:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install parser and optional Chromium
+        shell: bash
+        run: |
+          python -m pip install 'beautifulsoup4==4.13.4'
+          if python -c 'import json,sys; r=json.load(open(".github/spine-collector-request.json")); sys.exit(0 if r.get("mode")=="collect" and r.get("candidates",{}).get("xywy") else 1)'; then
+            python -m pip install 'playwright==1.54.0'
+            python -m playwright install chromium
+          fi
+      - name: Run request against development preview
+        run: python scripts/spine_collect.py .github/spine-collector-request.json
