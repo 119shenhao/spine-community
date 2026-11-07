@@ -6,12 +6,14 @@ import {communityRoute} from './community';
 import {translationRoute} from './translation';
 import {adminRoute} from './admin';
 import {importRoute,importEnabled} from './import';
+import {collectRoute} from './collect';
 export default {
  async fetch(req:Request,env:Env):Promise<Response>{
   const url=new URL(req.url),path=url.pathname;
   if(!path.startsWith('/api/'))return env.ASSETS.fetch(req);
   try{
    if(path==='/api/import'||path.startsWith('/api/import/'))return await importRoute(req,env,path);
+   if(path==='/api/collect'||path.startsWith('/api/collect/'))return await collectRoute(req,env,path);
    if(path==='/api/uploads'||path.startsWith('/api/uploads/'))fail(403,'image_feature_disabled');
    if(path==='/api/health'){
     let ready=false;try{ready=Boolean(env.DB&&await one(env.DB,"SELECT value FROM settings WHERE key='schema_version' AND value='1'"));}catch{}
