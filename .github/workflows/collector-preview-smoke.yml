@@ -47,5 +47,9 @@ jobs:
             --data-binary @release.json \
             "$base/api/collect/release"
           python3 -c 'import json; d=json.load(open("release-response.json")); assert d["status"]=="released"; print("Verified claim released without creating a forum post.")'
-          echo "Preview keyless collection and six-hour remote lease passed."
+          # Confirm a numeric-leading external site code is accepted by the actual deployed Worker.
+          extra_status=$(curl -sS --connect-timeout 5 --max-time 30 -o 120ask.json -w '%{http_code}' "$base/api/collect/exclusions?site=120ask")
+          test "$extra_status" = "200"
+          python3 -c 'import json; r=json.load(open("120ask.json")); assert r["site"]=="120ask" and isinstance(r["items"],list) and "next_cursor" in r; print("Verified numeric-leading site 120ask is supported in remote preview")'
+          echo "Preview keyless collection, six-hour lease, and 120ask site verification passed."
 
