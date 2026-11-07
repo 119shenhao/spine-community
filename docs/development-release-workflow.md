@@ -76,14 +76,29 @@
 
 ### 生产 D1 的手动 GitHub Actions 工作流
 
-生产 D1 继续按次批准。长期授权只允许仓库的手动 Actions 工作流使用加密凭据，日常推送和站点构建不会执行生产迁移。
+**只有发布涉及尚未应用的 SQL 迁移时，才需要操作生产 D1。** 纯界面或程序改动且确认没有待执行的迁移时，跳过数据库步骤，按第 4 节发布代码。生产库和开发预览库各自独立，迁移使用同一套版本化 SQL。分类、默认设置、「未知用户」等必要初始记录由 SQL 生成。开发库的帖子、回帖、楼中楼、用户和测试数据不随迁移复制。
 
-- 在 Cloudflare Worker 的构建监视路径中保留现有排除项，并额外排除 `.github/workflows/production-d1.yml`。这样首次将工作流安装到默认分支时，Cloudflare 不会因工作流文件而部署站点。
-- 使用仅授予目标 Cloudflare 账户 `Account → D1 → Edit` 的专用 Token。用户在本私有仓库的 **Settings → Secrets and variables → Actions** 添加加密 Secret `CLOUDFLARE_PROD_D1_API_TOKEN`。这是仅用于生产 D1 工作流的凭据存储例外。Token 的值禁止出现在源码、提交、日志、聊天或预览环境中。
-- 在 **Actions → Production D1 → Run workflow** 选择 `main`。输入已审核、来自本仓库 `main` 或 `release/*` 的完整提交 SHA。工作流只从该提交读取 `migrations/v1` 下的版本化 SQL，使用独立配置固定生产库名称和 UUID。
-- 先运行 `inspect`，查看任务摘要里的表名、迁移历史和待执行迁移。未知旧表、缺失的核心表或历史不匹配时，须先处理兼容性。
-- 逐次获得迁移批准后，用同一 SHA 选择 `apply`，在确认栏输入 `spine-community-db`。工作流重新核对生产库，记录 Time Travel 恢复点，再执行待应用的迁移。正式库的恢复操作单独批准。
-- 本次 v1 迁移只通过已审核的 SQL 初始化表结构和分类、「未知用户」等种子数据。迁移工作流不连接预览数据库。应用完成后，独立合并发布 PR，并在 `https://spine.nbn369.com` 验证站点和 Google 登录。
+#### 一次性配置
+
+- 在 Cloudflare Worker `spine-community` 的「设置 → 构建 → 构建监视路径」里保留 `docs/*`，并排除 `.github/workflows/production-d1.yml`。单独更新这些文件时，Cloudflare 会跳过站点构建。
+- 创建专用 Cloudflare Token，权限为 **Account → D1 → Edit**，范围限论坛所属账户。在本私有仓库 **Settings → Secrets and variables → Actions** 下保存为 `CLOUDFLARE_PROD_D1_API_TOKEN`。已配置的有效凭据可供后续迁移复用。令牌值只填 GitHub Secret，禁止放进源码、日志、聊天或预览环境。
+- [Production D1 工作流](https://github.com/119shenhao/spine-community/actions/workflows/production-d1.yml)已安装在 `main`，当前由 GitHub 页面手动触发。日常推送和站点构建不执行生产迁移。
+
+#### 每次有迁移时
+
+1. **先验证开发预览库。** 在开发分支的 `migrations/v1/` 增加按序编号的 SQL，保留已应用的历史文件。先通过本地测试，再应用到 `spine-community-db-preview` 验证。准备发布 PR，记录包含已审核 SQL 的完整 40 位提交 SHA。这个提交须来自本仓库的 `main` 或 `release/*`。
+2. **只读检查生产库。** 在 **Actions → Production D1 → Run workflow** 选择分支 `main`，按下表填写 `inspect`。打开运行结果的 **Summary → Production D1 inspection**，查看 `Tables`、`Applied`、`Pending`。`Pending` 为空时跳过 `apply`；出现 `Migration blocked`、未知旧表、核心表缺失或迁移历史不一致时，先排查兼容性。运行状态为 `Success` 仍须查看摘要。
+3. **获当次授权后应用。** 用同一 SHA 新建一次 `apply` 运行。工作流会重新核对生产库名称、UUID 和迁移历史，先记录 Time Travel 恢复点，再执行待应用的 SQL。若记录恢复点或执行 SQL 失败，先看日志与迁移历史，再判断如何安全续跑。恢复数据库需单独获批。
+4. **核验后发布代码。** 在 `apply` 日志里确认每个待办迁移都成功，保留运行链接与恢复点。`apply` 摘要开头的 `Tables`、`Applied`、`Pending` 是执行前快照；如需确认执行后状态，用同一 SHA 再运行一次 `inspect`，检查 `Applied` 和 `Pending`。随后按第 4 节合并已获批的发布 PR，等待 Cloudflare 部署，并验证正式站 `/api/health` 的 `databaseReady=true`、受影响的接口与页面。
+
+| GitHub 表单字段 | 只读检查 | 执行迁移 |
+| --- | --- | --- |
+| Use workflow from | `main` | `main` |
+| `operation` | `inspect` | `apply` |
+| `migration_sha` | 本次已审核发布提交的完整 SHA | 与只读检查相同 |
+| `confirmation` | 留空 | `spine-community-db` |
+
+2026-11-07 首次生产迁移已按此流程验证，完成 `0001` 至 `0005`。后续发布使用对应的发布提交，首次运行的 SHA 仅供追溯。 [只读检查](https://github.com/119shenhao/spine-community/actions/runs/42365305326) · [迁移执行与恢复点](https://github.com/119shenhao/spine-community/actions/runs/42365746245) · [正式发布记录](implementation-v1-2026-11-06.md#v1-正式发布记录2026-11-07)
 
 ## 4. 正式发布的完整检查（必须人工确认发布）
 
@@ -101,7 +116,7 @@
 
 1. 确认生产备份与可恢复性（保留恢复点；注意 D1 Time Travel 恢复到旧时间可能丢失之后的新数据，不可无审核直接回滚整库）。
 2. 对兼容式升级采用 **Expand → Migrate → Contract**：先增加兼容性表/字段、验证旧代码仍可运行，再发布新代码；删除旧字段应另选维护窗口。生产迁移前再次检查目标 DB ID。
-3. 仅执行已获批且在预览环境验证过的生产迁移。需要凭证时由用户配置或授权，不得通过聊天、提交、日志泄漏。
+3. 有待执行的 SQL 时，按第 3 节执行已获批且在预览环境验证过的生产迁移；没有待执行的 SQL 时跳过此步。
 4. 合并目标代码到 `main` 并触发生产 Worker 构建；**检查 Cloudflare 显示已部署版本，不因 GitHub 合并成功就宣布上线成功**。
 5. 上线后进行必要的真实请求验证：网页、主要 API、Google 登录、读写权限、搜索、错误日志、生产 DB 核查；不创建真实患者假数据。
 6. 将上线版本、迁移版本、测试结果和异常写入发布记录。如验证失败：优先回滚应用代码到兼容版本；数据库回退必须评估数据丢失风险并单独获批。禁止“自动覆盖生产库”。
@@ -133,7 +148,7 @@
 6. 所有文档均在 **main 分支只改 `docs/`**；不再在开发分支新写或更新文档，避免无意义触发 Cloudflare 发布。
 7. 文档政策变更需用户明确同意，不得自行降低生产保护要求。
 
-## 7. 当前状态（记录于 2026-11-06）
+## 7. 开发阶段历史快照（2026-11-06）
 
 - ✅ 用户已创建并浏览器验证 Worker 的独立预览网站；
 - ✅ Cloudflare 预览环境绑定 `spine-community-db-preview`，生产绑定 `spine-community-db`；
@@ -143,7 +158,7 @@
 - ✅ 预览迁移专用配置和严格限分支/限UUID的测试库准备脚本已实现；
 - ⏳ Google OAuth凭据、站长subject和统计盐值尚未配置；目前不能实际登录发帖；
 - ⏳ 真实Google登录、登录后的远程全流程、翻译服务联调、手机验收及正式上线检查仍待完成；翻译保持关闭；
-- ⛔ **当前阶段未批准生产 D1 迁移、数据同步或正式版本发布。**
+- ⛔ **截至该快照日期，生产 D1 迁移、数据同步及正式版本发布尚未获批。**
 
 这套流程是长期规范；以后可按任务创建新 feature 分支，但**生产与预览隔离、生产审批、按版本迁移而不复制数据**三条原则不得因为分支名称变化而失效。
 
@@ -155,7 +170,7 @@
 
 **目标：讨论期间持续把需求保存在 GitHub，但不要因此重新构建或发布网站。**
 
-### 当前已生效的 Cloudflare Workers 设置
+### 2026-11-06 验证时的 Cloudflare Workers 设置
 - 项目：`spine-community`，生产分支：`main`
 - 控制台位置：Workers & Pages → spine-community → 设置 → 构建 → 构建监视路径（Build watch paths）
 - **包含路径（Include paths）：`*`**
