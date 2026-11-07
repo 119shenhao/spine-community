@@ -1,4 +1,4 @@
-import {Env,Row,all,one,stmt,now,id,fail,json,body,textField,lang,requireUser,writable,rate,risk,metric} from './core';
+import {Env,Row,all,one,stmt,now,id,fail,json,body,textField,lang,requireUser,writable,rate,risk,metric,topicFingerprint} from './core';
 export async function getContent(env:Env,type:string,contentId:string,u:Row|null,placeholder=false):Promise<Row>{
   const table=type==='topic'?'topics':'comments';
   const row=await one(env.DB,`SELECT c.*,u.nickname,u.public_region FROM ${table} c JOIN users u ON u.id=c.author_id WHERE c.id=?`,contentId);
@@ -45,9 +45,10 @@ export async function contentRoute(req:Request,env:Env,u:Row|null,path:string):P
     const user=await writable(env.DB,u);await rate(env.DB,'topic:'+user.id,6,3600);const b=await body(req);
     const title=textField(b.title,1,200,'title'),text=textField(b.body,1,30000),tags=await terms(env,b.terms);
     const duration=b.symptom_duration_days==null||b.symptom_duration_days===''?null:Number(b.symptom_duration_days);if(duration!==null&&(!Number.isInteger(duration)||duration<0||duration>36500))fail(400,'invalid_duration');
-    const duplicate=await one(env.DB,'SELECT id FROM topics WHERE author_id=? AND title=? AND body=? AND created_at>?',user.id,title,text,now()-3600);if(duplicate)fail(409,'duplicate_content');
+    const contentHash=await topicFingerprint(title,text);
+    const duplicate=await one(env.DB,'SELECT id FROM topics WHERE content_hash=? OR (title=? AND body=?) LIMIT 1',contentHash,title,text);if(duplicate)fail(409,'duplicate_content');
     const topicId=id(),status=risk(title,text);
-    await env.DB.batch([stmt(env.DB,'INSERT INTO topics(id,author_id,title,body,source_lang,status,symptom_duration_days) VALUES(?,?,?,?,?,?,?)',topicId,user.id,title,text,lang(b.source_lang),status,duration),...tags.map(t=>stmt(env.DB,'INSERT INTO topic_terms VALUES(?,?)',topicId,t)),metric(env.DB,'new_topics')]);
+    await env.DB.batch([stmt(env.DB,'INSERT INTO topics(id,author_id,title,body,source_lang,status,symptom_duration_days,content_hash) VALUES(?,?,?,?,?,?,?,?)',topicId,user.id,title,text,lang(b.source_lang),status,duration,contentHash),...tags.map(t=>stmt(env.DB,'INSERT INTO topic_terms VALUES(?,?)',topicId,t)),metric(env.DB,'new_topics')]);
     return json({id:topicId,status},201);
   }
   const topicMatch=path.match(/^\/api\/topics\/([^/]+)$/);
@@ -70,7 +71,9 @@ export async function contentRoute(req:Request,env:Env,u:Row|null,path:string):P
     if(method==='DELETE'){await env.DB.batch(purge(env.DB,'topic',topicId));return json({ok:true});}
     if(method==='PATCH'){
       const b=await body(req),title=textField(b.title,1,200,'title'),text=textField(b.body,1,30000),tags=await terms(env,b.terms);
-      const status=topic.status==='hidden'?'pending_review':risk(title,text);const duration=b.symptom_duration_days==null||b.symptom_duration_days===''?null:Number(b.symptom_duration_days);if(duration!==null&&(!Number.isInteger(duration)||duration<0||duration>36500))fail(400,'invalid_duration');const writes=[stmt(env.DB,'UPDATE topics SET title=?,body=?,status=?,source_lang=?,symptom_duration_days=?,content_version=content_version+1,updated_at=? WHERE id=?',title,text,status,lang(b.source_lang||topic.source_lang),duration,now(),topicId)];
+      const contentHash=await topicFingerprint(title,text);
+      const duplicate=await one(env.DB,'SELECT id FROM topics WHERE id<>? AND (content_hash=? OR (title=? AND body=?)) LIMIT 1',topicId,contentHash,title,text);if(duplicate)fail(409,'duplicate_content');
+      const status=topic.status==='hidden'?'pending_review':risk(title,text);const duration=b.symptom_duration_days==null||b.symptom_duration_days===''?null:Number(b.symptom_duration_days);if(duration!==null&&(!Number.isInteger(duration)||duration<0||duration>36500))fail(400,'invalid_duration');const writes=[stmt(env.DB,'UPDATE topics SET title=?,body=?,status=?,source_lang=?,symptom_duration_days=?,content_hash=?,content_version=content_version+1,updated_at=? WHERE id=?',title,text,status,lang(b.source_lang||topic.source_lang),duration,contentHash,now(),topicId)];
       if(b.terms!==undefined){writes.push(stmt(env.DB,'DELETE FROM topic_terms WHERE topic_id=?',topicId),...tags.map(t=>stmt(env.DB,'INSERT INTO topic_terms VALUES(?,?)',topicId,t)));}
       await env.DB.batch(writes);return json({ok:true,status});
     }
