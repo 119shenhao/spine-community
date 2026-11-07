@@ -440,3 +440,27 @@ test('numeric-leading source site 120ask supports exclusions, claim, complete an
  assert.equal((await exclude('tieba')).status,200);
  assert.equal((await exclude('reddit')).status,200);
 });
+
+
+test('sign out revokes the session and clears the cookie, including for repeated requests',async()=>{
+ const {call,DB}=await fixture();
+ const before=await call('/api/me');assert.equal(before.status,200);assert.equal(before.data.user.id,'alice');
+ const response=await call('/api/auth/logout','POST',{});
+ assert.equal(response.status,200);assert.equal(response.data.ok,true);
+ assert.match(response.headers.get('set-cookie')||'',/sc_session=;/);
+ assert.match(response.headers.get('set-cookie')||'',/Max-Age=0/);
+ assert(DB.db.prepare("SELECT revoked_at FROM user_sessions WHERE id='alice'").get().revoked_at);
+ const after=await call('/api/me');assert.equal(after.status,200);assert.equal(after.data.user,null);
+ assert.equal((await call('/api/auth/logout','POST',{})).status,200);
+});
+
+test('the desktop and mobile account menu exposes a discoverable sign out action',()=>{
+ const app=readFileSync('public/app.js','utf8');
+ const css=readFileSync('public/styles.css','utf8');
+ assert.match(app,/<details class="account-menu"><summary/);
+ assert.match(app,/data-action="logout"/);
+ assert.match(app,/account-dropdown/);
+ assert.match(css,/\.account-dropdown\{/);
+ assert.match(css,/\.account-trigger:focus-visible/);
+ assert.match(css,/@media\(max-width:700px\)/);
+});
