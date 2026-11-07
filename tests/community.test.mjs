@@ -216,3 +216,24 @@ test('sync helper fingerprint matches Worker and maintains parent-first ordering
  const source=[{id:'child',parent_comment_id:'root',status:'published'},{id:'hiddenChild',parent_comment_id:'hidden',status:'published'},{id:'root',parent_comment_id:null,status:'published'},{id:'hidden',parent_comment_id:null,status:'hidden'}];
  assert.deepEqual(sortComments(source).map(x=>x.id),['root','child']);
 });
+
+
+test('one-time production SQL snapshot writes topic and nested replies, and repeated execution stays idempotent',async()=>{
+ const {DB}=await fixture();
+ const {buildInserts,fingerprint}=await import('../scripts/sync-preview-to-production.mjs');
+ const src={id:'source-topic-1',title:"Patient's original experience",body:'English discussion',source_lang:'en',symptom_duration_days:null,created_at:1234567};
+ const hashValue=fingerprint(src.title,src.body);
+ const comments=[
+  {id:'parent1',parent_comment_id:null,kind:'regular',author_id:'system-unknown-import',body:"I'm recovering",source_lang:'en',status:'published',created_at:1234568},
+  {id:'child1',parent_comment_id:'parent1',kind:'regular',author_id:'system-unknown-import',body:'Thank you',source_lang:'en',status:'published',created_at:1234569}
+ ];
+ const sql=buildInserts(src,comments,[],hashValue);
+ DB.db.exec(sql);
+ DB.db.exec(sql);
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM topics WHERE id=?').get(src.id).n,1);
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM comments WHERE topic_id=?').get(src.id).n,2);
+ assert.equal(DB.db.prepare('SELECT reply_count FROM topics WHERE id=?').get(src.id).reply_count,2);
+ assert.equal(DB.db.prepare('SELECT parent_comment_id FROM comments WHERE id=?').get('child1').parent_comment_id,'parent1');
+ assert.equal(DB.db.prepare('SELECT content_hash FROM topics WHERE id=?').get(src.id).content_hash,hashValue);
+ assert.equal(DB.db.prepare('PRAGMA foreign_key_check').all().length,0);
+});
