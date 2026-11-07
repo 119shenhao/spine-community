@@ -1,4 +1,4 @@
-name: One-time source diagnostics
+name: One-time Patient.info collection
 on:
   push:
     branches: [feature/v1-community-build-20261106]
@@ -6,99 +6,165 @@ on:
   workflow_dispatch:
 permissions: {}
 jobs:
-  inspect:
+  collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 12
     steps:
-      - name: Inspect public source pages after claiming
+      - name: Collect complete authorized forum threads to the preview database
         shell: bash
         run: |
           set -euo pipefail
           python3 -m venv "$RUNNER_TEMP/collector-venv"
           "$RUNNER_TEMP/collector-venv/bin/pip" install -q beautifulsoup4
           "$RUNNER_TEMP/collector-venv/bin/python" - <<'PY'
+          import collections
           import json
+          import re
           import subprocess
-          import time
           from urllib.parse import urlencode, urlsplit
-          from bs4 import BeautifulSoup
+          from bs4 import BeautifulSoup, Comment, NavigableString
           
           BASE='https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev'
-          SOURCES={
-           'xywy': [
-            ('198793816','https://club.xywy.com/wenda/198793816.htm'),
-            ('198728918','https://club.xywy.com/wenda/198728918.htm'),
-            ('198223887','https://club.xywy.com/wenda/198223887.htm'),
-            ('198649183','https://club.xywy.com/wenda/198649183.htm'),
-            ('198739706','https://club.xywy.com/wenda/198739706.htm'),
-            ('198713340','https://club.xywy.com/wenda/198713340.htm')],
-           'patientinfo': [
-            ('563724','https://patient.info/forums/discuss/cervical-stenosis-3-level-acdf-563724'),
-            ('686154','https://patient.info/forums/discuss/lumbar-spine-surgery-686154'),
-            ('506340','https://patient.info/forums/discuss/lumbar-spine-fusion-506340'),
-            ('584713','https://patient.info/forums/discuss/c5-c6-post-op-acdf-584713'),
-            ('437895','https://patient.info/forums/discuss/almost-3-weeks-post-op-2-level-lumbar-fusion-437895'),
-            ('714224','https://patient.info/forums/discuss/cervical-spinal-stenosis-714224'),
-            ('489553','https://patient.info/forums/discuss/any-advice-much-appreciated-489553')],
-           'mayoclinic': [
-            ('how-do-i-get-thru-this-recovery-i-think-i-need-people-to-talk-to','https://connect.mayoclinic.org/discussion/how-do-i-get-thru-this-recovery-i-think-i-need-people-to-talk-to/'),
-            ('cervical-spine-operation','https://connect.mayoclinic.org/discussion/cervical-spine-operation/'),
-            ('told-i-would-not-walk-without-surgery','https://connect.mayoclinic.org/discussion/told-i-would-not-walk-without-surgery/'),
-            ('anyone-who-has-had-cervical-spinal-compression-surgery','https://connect.mayoclinic.org/discussion/anyone-who-has-had-cervical-spinal-compression-surgery/'),
-            ('lumbar-fusion-another-reprieve-or-am-i-just-delaying-the-inevitable','https://connect.mayoclinic.org/discussion/lumbar-fusion-another-reprieve-or-am-i-just-delaying-the-inevitable/'),
-            ('post-surgery-from-cervical-myelopathy-timeline-of-recovery','https://connect.mayoclinic.org/discussion/post-surgery-from-cervical-myelopathy-timeline-of-recovery/'),
-            ('acdf-scheduled-for-wednesday','https://connect.mayoclinic.org/discussion/acdf-scheduled-for-wednesday/')]
-          }
-          
-          def call(url,payload=None):
-           cmd=['curl','-sS','-L','--connect-timeout','8','--max-time','25','--compressed','-w','\n%{http_code}']
-           if payload is not None: cmd+=['-H','Content-Type: application/json','--data-binary','@-']
-           out=subprocess.run(cmd+[url],input=json.dumps(payload).encode() if payload is not None else None,stdout=subprocess.PIPE,check=True).stdout
-           body,status=out.rsplit(b'\n',1)
-           try: data=json.loads(body)
-           except ValueError: data=body
-           return int(status),data
+          SITE='patientinfo'
+          COLLECTOR='chatgpt-hourly-patientinfo'
+          SOURCES=[
+          ('563724','https://patient.info/forums/discuss/cervical-stenosis-3-level-acdf-563724'),
+          ('686154','https://patient.info/forums/discuss/lumbar-spine-surgery-686154'),
+          ('506340','https://patient.info/forums/discuss/lumbar-spine-fusion-506340'),
+          ('584713','https://patient.info/forums/discuss/c5-c6-post-op-acdf-584713'),
+          ('437895','https://patient.info/forums/discuss/almost-3-weeks-post-op-2-level-lumbar-fusion-437895'),
+          ('714224','https://patient.info/forums/discuss/cervical-spinal-stenosis-714224'),
+          ('489553','https://patient.info/forums/discuss/any-advice-much-appreciated-489553'),
+          ]
+          def request(url,payload=None):
+           cmd=['curl','-sS','-L','--connect-timeout','8','--max-time','30','--compressed','-w','\n%{http_code}']
+           if payload is not None:cmd+=['-H','Content-Type: application/json','--data-binary','@-']
+           result=subprocess.run(cmd+[url],input=json.dumps(payload,ensure_ascii=False).encode() if payload is not None else None,stdout=subprocess.PIPE,check=True)
+           body,status=result.stdout.rsplit(b'\n',1)
+           return int(status),body
           def api(path,payload=None):
-           code,d=call(BASE+path,payload)
-           if code not in (200,201): raise RuntimeError('preview HTTP '+str(code)+' '+str(d.get('error') if isinstance(d,dict) else 'non-JSON'))
-           return d
-          def exclusions(site):
-           query={'site':site,'limit':200}; known=set(); data={}
+           code,body=request(BASE+path,payload)
+           try:data=json.loads(body)
+           except ValueError:raise RuntimeError('preview HTTP '+str(code)+' non-JSON') from None
+           if code not in (200,201):raise RuntimeError('preview HTTP '+str(code)+' '+str(data.get('error')))
+           return data
+          def exclusions():
+           params={'site':SITE,'limit':200};seen=set();result={}
            while True:
-            d=api('/api/collect/exclusions?'+urlencode(query))
-            if d['site']!=site: raise ValueError('wrong exclusions site')
-            data.update((i['source_id'],i['status']) for i in d['items'])
-            cursor=d['next_cursor']
-            if cursor is None:return data
-            if cursor in known:raise ValueError('exclusions cursor repeated')
-            known.add(cursor);query['cursor']=cursor
-          for site,items in SOURCES.items():
-           old=exclusions(site)
-           fresh=[item for item in items if item[0] not in old]
-           print('Source candidates',site,len(items),'excluded',len(items)-len(fresh),'states',json.dumps(old,ensure_ascii=False),flush=True)
-           # Probe at most two at once, preserving lock cleanup.
-           records=[]
-           try:
-            if fresh:
-             records=api('/api/collect/claim',{'site':site,'collector_id':'chatgpt-on-demand-'+site,'source_ids':[item[0] for item in fresh[:min(2,len(fresh))] ]})['results']
-            for record in records:
-             source_id=record['source_id']
-             print('Candidate claim',site,source_id,record['result'],flush=True)
-             if record['result']!='granted':continue
-             url=dict(items)[source_id]
-             try:
-              code,page=call(url)
-              time.sleep(1)
-              print('Original status',site,source_id,code,'bytes',len(page) if isinstance(page,bytes) else 0,flush=True)
-              if code!=200 or not isinstance(page,bytes):continue
-              soup=BeautifulSoup(page,'html.parser')
-              print('Page headings',site,source_id,[h.get_text(' ',strip=True)[:90] for h in soup.select('h1,h2')[:4]],flush=True)
-              print('Page metadata',site,source_id,[(m.get('name'),m.get('content','')[:90]) for m in soup.select('meta[name=description],meta[property="og:title"]')[:3]],flush=True)
-              print('Relevant structure',site,source_id,[(el.name,' '.join(el.get('class',[]))[:100],len(el.get_text(' ',strip=True))) for el in soup.select('article,.entry-content,[class*=post],[class*=comment],[class*=reply],[class*=answer],[class*=question],[id*=comment],[id*=answer]')[:30]],flush=True)
-              print('Site markers',site,source_id,'scripts',[(s.get('src') or '')[-100:] for s in soup.select('script[src]')[:8]],flush=True)
-             finally:
-              d=api('/api/collect/release',{'site':site,'source_id':source_id,'lease_token':record['lease_token']})
-              print('Probe release',site,source_id,d['status'],flush=True)
-           finally:
-            pass
+            page=api('/api/collect/exclusions?'+urlencode(params))
+            if page.get('site')!=SITE:raise ValueError('wrong exclusion site')
+            result.update((item['source_id'],item['status']) for item in page['items'])
+            cursor=page['next_cursor']
+            if cursor is None:return result
+            if cursor in seen:raise ValueError('repeated exclusion cursor')
+            seen.add(cursor);params['cursor']=cursor
+          def text_of_html(markup):
+           soup=BeautifulSoup(markup,'html.parser')
+           for node in soup.select('script,style,noscript,button'):node.decompose()
+           for node in soup.find_all(string=lambda s:isinstance(s,Comment)):node.extract()
+           chunks=[]
+           def walk(node):
+            if isinstance(node,NavigableString):chunks.append(re.sub(r'[\t\r\n ]+',' ',str(node)))
+            elif getattr(node,'name',None)=='br':chunks.append('\n')
+            elif getattr(node,'name',None) not in ('script','style','noscript'):
+             block=getattr(node,'name',None) in ('p','div','li','blockquote','pre')
+             if block and chunks:chunks.append('\n')
+             for child in getattr(node,'children',[]):walk(child)
+             if block:chunks.append('\n')
+           walk(soup)
+           return '\n'.join(line.strip() for line in ''.join(chunks).splitlines()).strip()
+          def make_topic(source_id,url):
+           slug=re.search(r'/discuss/(.+)-'+re.escape(source_id)+r'/?$',urlsplit(url).path)
+           if not slug:raise ValueError('unstable source URL')
+           json_url='https://community.patient.info/t/'+slug.group(1)+'/'+source_id+'.json'
+           code,raw=request(json_url)
+           if code!=200:raise ValueError('public forum JSON HTTP '+str(code))
+           try:data=json.loads(raw)
+           except ValueError:raise ValueError('forum JSON unavailable') from None
+           posts=data.get('post_stream',{}).get('posts',[])
+           stream=data.get('post_stream',{}).get('stream',[])
+           if not posts or len(posts)!=len(stream):raise ValueError('topic reply list is incomplete')
+           posts=sorted(posts,key=lambda post:post.get('post_number',0))
+           first=next((post for post in posts if post.get('post_number')==1),None)
+           if not first:raise ValueError('first post missing')
+           title=(data.get('title') or '').strip()
+           body=text_of_html(first.get('cooked') or '')
+           if not title or len(body)<50:raise ValueError('topic title or body incomplete')
+           all_posts=posts[1:]
+           if len(all_posts)<2:raise ValueError('fewer than two public replies')
+           if len(all_posts)>49:raise ValueError('reply limit exceeded')
+           if any(post.get('deleted_at') or post.get('cooked') is None for post in all_posts):raise ValueError('deleted or missing replies')
+           full_text=title+'\n'+body+'\n'+'\n'.join(text_of_html(post.get('cooked','')) for post in all_posts)
+           if re.search(r'\[?image\d*\]?|attachment://|<img|<iframe',first.get('cooked',''),re.I):raise ValueError('question has uncollected media')
+           if re.search(r'(?<!\d)(?:1[3-9]\d{9}|\d{17}[\dXx])(?!\d)|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|(?:phone number|email address|my full name is)\s*[:：]?',full_text,re.I):raise ValueError('possible personal identifier')
+           by_number={}
+           for post in all_posts:
+            number=post.get('post_number')
+            if not isinstance(number,int):raise ValueError('reply number missing')
+            by_number[number]={'body':text_of_html(post['cooked']),'source_lang':'en','replies':[]}
+            if not by_number[number]['body']:raise ValueError('empty reply')
+           roots=[]
+           for post in all_posts:
+            node=by_number[post['post_number']]
+            parent=post.get('reply_to_post_number')
+            if parent in (None,0,1):roots.append(node)
+            elif parent in by_number:by_number[parent]['replies'].append(node)
+            else:raise ValueError('reply parent not present in complete source stream')
+           return {'title':title,'body':body,'source_lang':'en','comments':roots},len(all_posts)
+          def api_flatten(comments):
+           result=[]
+           def walk(items,parent=None):
+            for item in items:
+             result.append((item['body'],parent))
+             walk(item.get('replies',[]),item['body'])
+           walk(comments)
+           return result
+          def verify(topic_id,draft,total):
+           result=api('/api/topics/'+topic_id)
+           topic,rows=result.get('topic',{}),result.get('comments',[])
+           if any(topic.get(k)!=draft[k] for k in ('title','body','source_lang')):return False
+           if result.get('next') is not None or len(rows)!=total:return False
+           if any(row.get('nickname') not in ('未知用户','Unknown User') for row in rows):return False
+           expected=collections.Counter(body for body,parent in api_flatten(draft['comments']))
+           actual=collections.Counter(row.get('body') for row in rows)
+           byid={row.get('id'):row for row in rows}
+           if any(row.get('parent_comment_id') is not None and row['parent_comment_id'] not in byid for row in rows):return False
+           return expected==actual
+          
+          before=exclusions()
+          eligible=[(key,url) for key,url in SOURCES if key not in before]
+          print('Patient.info run',json.dumps({'candidate_count':len(SOURCES),'excluded':len(SOURCES)-len(eligible),'prior_states':dict(collections.Counter(before.values()))}),flush=True)
+          records=[]
+          completed=set();new_topics=new_comments=opened=0
+          if eligible:
+           records=api('/api/collect/claim',{'site':SITE,'collector_id':COLLECTOR,'source_ids':[key for key,url in eligible[:14]]})['results']
+          print('Claims',json.dumps(dict(collections.Counter(record['result'] for record in records))),flush=True)
+          try:
+           for record in records:
+            key=record['source_id']
+            if record['result']!='granted':continue
+            url=dict(SOURCES)[key]
+            try:
+             draft,count=make_topic(key,url);opened+=1
+             result=api('/api/collect/complete',{'site':SITE,'source_id':key,'lease_token':record['lease_token'],'topic':draft})
+             completed.add(key);imported=result.get('imported',{})
+             new_topics+=imported.get('topics',0);new_comments+=imported.get('comments',0)
+             topic_id=result.get('topic_id')
+             checked=True if not imported.get('topics') else verify(topic_id,draft,count)
+             print('Patient.info result',json.dumps({'source_id':key,'url':url,'duplicate':bool(result.get('duplicate')),'topic_id':topic_id,'reply_count':count,'readback':checked}),flush=True)
+            except (ValueError,RuntimeError,subprocess.SubprocessError) as error:
+             reason=str(error) if isinstance(error,(ValueError,RuntimeError)) else type(error).__name__
+             print('Patient.info skipped',json.dumps({'source_id':key,'reason':reason}),flush=True)
+          finally:
+           for record in records:
+            key=record['source_id']
+            if record['result']!='granted' or key in completed:continue
+            try:
+             api('/api/collect/release',{'site':SITE,'source_id':key,'lease_token':record['lease_token']})
+             print('Released',key,flush=True)
+            except (RuntimeError,subprocess.SubprocessError):print('Release unconfirmed',key,flush=True)
+           print('Patient.info totals',json.dumps({'granted':sum(record['result']=='granted' for record in records),'opened':opened,'completed':len(completed),'new_topics':new_topics,'new_replies':new_comments}),flush=True)
+           if completed:
+            after=exclusions()
+            print('Completed marks',json.dumps({key:after.get(key) for key in sorted(completed)}),flush=True)
           PY
