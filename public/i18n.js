@@ -1,4 +1,5 @@
-export const languages=['en','zh-CN','es','pt-BR','de','fr','ja'];
+import {traditionalChinese} from './i18n-zh-tw.js';
+export const languages=['en','zh-CN','zh-TW','es','pt-BR','de','fr','ja'];
 const rows={
 preview:['Development preview','开发环境','Vista de desarrollo','Prévia de desenvolvimento','Entwicklungsvorschau','Aperçu de développement','開発プレビュー'],
 home:['All discussions','全部讨论','Todas las conversaciones','Todas as conversas','Alle Diskussionen','Toutes les discussions','すべての投稿'],
@@ -8,6 +9,7 @@ neck:['Neck & cervical spine','颈部与颈椎','Cuello y columna cervical','Pes
 back:['Lower back & lumbar spine','腰部与腰椎','Zona lumbar','Lombar e coluna lombar','Unterer Rücken und Lendenwirbelsäule','Bas du dos et colonne lombaire','腰・腰椎'],
 stories:['Personal experiences','个人经历','Experiencias personales','Experiências pessoais','Persönliche Erfahrungen','Expériences personnelles','体験談'],
 mySpace:['My space','个人中心','Mi espacio','Meu espaço','Mein Bereich','Mon espace','マイページ'],
+newPost:['New post','发帖','Nueva publicación','Nova publicação','Neuen Beitrag','Nouvelle publication','新規投稿'],
 admin:['Community management','社区管理','Administración','Administração','Verwaltung','Administration','コミュニティ管理'],
 login:['Sign in','登录','Iniciar sesión','Entrar','Anmelden','Se connecter','ログイン'],
 logout:['Sign out','退出登录','Cerrar sesión','Sair','Abmelden','Se déconnecter','ログアウト'],
@@ -150,4 +152,6 @@ analyticsNote:['UTC · UV and 5-minute active peaks are estimates. Only page vie
 analyticsSetup:['Traffic statistics are not configured yet.','流量统计尚未配置。','Las estadísticas de tráfico aún no están configuradas.','As estatísticas de tráfego ainda não estão configuradas.','Besucherstatistiken sind noch nicht eingerichtet.','Les statistiques de trafic ne sont pas encore configurées.','アクセス統計はまだ設定されていません。'],
 privacyText:['This development preview is for fictional test data. Public posts and replies can be read by anyone. Use a nickname. Deleted text is removed from public pages, translations and search; discussion placeholders preserve other people’s replies. Google is used only to sign in. Content translation stays disabled until a provider and privacy terms are configured. No image uploads, email notifications or paid services are enabled. Data export and deletion requests are available in your account. Public launch requires a finalized privacy policy and retention rules.','此开发预览仅用于虚构测试数据。公开帖子与回复可被所有人阅读，请使用昵称。删除后，正文会从公开页面、译文及搜索中移除，保留占位以维持他人回复的关系。Google 仅用于登录。内容翻译在服务及隐私条款配置完成前保持关闭。不开放图片、邮件通知或付费服务。个人中心提供数据导出及删除申请。正式开放前仍需完成隐私政策及数据保留规则。','Esta vista previa es solo para datos ficticios. Las publicaciones son públicas. Usa un apodo. Al eliminar contenido, se retira el texto y se conservan las respuestas de otras personas. Google se usa para iniciar sesión. La traducción permanece desactivada hasta su configuración. No hay imágenes, correos ni servicios de pago. Las solicitudes de datos están en tu cuenta.','Esta prévia é apenas para dados fictícios. As publicações são públicas. Use um apelido. O texto excluído é removido e as respostas de outras pessoas são preservadas. Google é usado para login. A tradução permanece desativada até a configuração. Não há imagens, e-mails ou serviços pagos. Solicitações de dados ficam na sua conta.','Diese Vorschau ist nur für fiktive Testdaten. Beiträge sind öffentlich. Nutze einen Spitznamen. Gelöschter Text wird entfernt, Antworten anderer bleiben erhalten. Google dient der Anmeldung. Übersetzung bleibt bis zur Konfiguration deaktiviert. Keine Bilder, E-Mails oder kostenpflichtigen Dienste. Datenanfragen sind im Konto verfügbar.','Cet aperçu est réservé aux données fictives. Les publications sont publiques. Utilisez un pseudonyme. Le texte supprimé est retiré et les réponses des autres sont conservées. Google sert à la connexion. La traduction reste désactivée avant configuration. Pas d’images, d’e-mails ou de services payants. Les demandes de données sont dans votre compte.','このプレビューには架空のデータのみ入力してください。投稿は公開されます。ニックネームを使いましょう。削除した本文は公開画面・翻訳・検索から除去し、他の方の返信は残します。Googleはログインに使用します。翻訳は設定完了まで無効です。画像、メール通知、有料サービスは利用しません。データ出力・削除申請はアカウント画面から行えます。']
 };
-export const dictionaries=Object.fromEntries(languages.map((l,i)=>[l,Object.fromEntries(Object.entries(rows).map(([k,v])=>[k,v[i]||v[0]]))]));
+const baseLanguages=['en','zh-CN','es','pt-BR','de','fr','ja'];
+export const dictionaries=Object.fromEntries(baseLanguages.map((l,i)=>[l,Object.fromEntries(Object.entries(rows).map(([k,v])=>[k,v[i]||v[0]]))]));
+dictionaries['zh-TW']=traditionalChinese;
