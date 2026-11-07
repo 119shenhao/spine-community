@@ -1,10 +1,11 @@
 import {dictionaries,languages} from './i18n.js';
+import {initialLocale} from './locale.js';
 import {applyInteractionResult} from './interaction-ui.js';
 import {applyReplyResult} from './reply-ui.js';
 const $=(s,root=document)=>root.querySelector(s),$$=(s,root=document)=>[...root.querySelectorAll(s)];
-const saved=localStorage.getItem('sc_locale');
-const browser=navigator.language.toLowerCase();
-let locale=languages.includes(saved)?saved:browser.startsWith('zh')?'zh-CN':browser.startsWith('pt')?'pt-BR':languages.find(l=>browser.startsWith(l))||'en';
+// Resolve and persist the visitor's language before any Google sign-in redirect.
+// An account's database default ('en') must not reset the UI language on login.
+let locale=initialLocale(localStorage,navigator.language,languages);
 const state={user:null,google:false,health:null,terms:[],next:null,feed:[],highlights:[],topic:null,comments:[],notificationItems:[],unread:0,admin:null};
 let sequence=0,observer,toastTimer;const translationCache=new Map();
 const t=k=>dictionaries[locale][k]||k;
@@ -150,5 +151,5 @@ $('#language').addEventListener('change',async e=>{locale=e.target.value;localSt
 document.addEventListener('change',e=>{if(e.target.id==='sort'){const p=route().params;p.set('sort',e.target.value);location.hash='/search?'+p;}});
 document.addEventListener('keydown',event=>{if(event.key==='Escape')document.querySelector('.account-menu[open]')?.removeAttribute('open');});
 window.addEventListener('hashchange',()=>{window.scrollTo({top:0});render();});
-async function boot(){renderChrome();await Promise.allSettled([refreshMe(),api('/api/health').then(r=>state.health=r),api('/api/taxonomy?locale='+locale).then(r=>state.terms=r.terms)]);if(!saved&&state.user&&languages.includes(state.user.preferred_locale))locale=state.user.preferred_locale;await render();refreshUnread();}
+async function boot(){renderChrome();await Promise.allSettled([refreshMe(),api('/api/health').then(r=>state.health=r),api('/api/taxonomy?locale='+locale).then(r=>state.terms=r.terms)]);await render();refreshUnread();}
 boot();setInterval(()=>{if(document.visibilityState==='visible')refreshUnread();},60000);

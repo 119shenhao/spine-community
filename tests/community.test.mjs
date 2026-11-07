@@ -672,3 +672,31 @@ test('production pages are indexable while preview pages and indicators stay iso
   assert.equal(r.headers.get('X-Robots-Tag'),'noindex, nofollow');
  }
 });
+
+test('visitor language survives a Google login callback and account default English',async()=>{
+ const {initialLocale}=await import('../public/locale.js');
+ const {languages}=await import('../public/i18n.js');
+ const store=new Map();
+ const storage={getItem:key=>store.get(key)??null,setItem:(key,value)=>store.set(key,value)};
+ // A first-time Chinese browser has not manually opened the language selector.
+ assert.equal(initialLocale(storage,'zh-CN',languages),'zh-CN');
+ assert.equal(store.get('sc_locale'),'zh-CN');
+ // After OAuth redirect, the logged-in user can have preferred_locale='en'.
+ // The interface remains Chinese because local browser choice was persisted.
+ const account={preferred_locale:'en'};
+ assert.equal(account.preferred_locale,'en');
+ assert.equal(initialLocale(storage,'en-US',languages),'zh-CN');
+ // An explicit language selection must win over browser and database defaults.
+ storage.setItem('sc_locale','ja');
+ assert.equal(initialLocale(storage,'zh-CN',languages),'ja');
+ store.delete('sc_locale');
+ assert.equal(initialLocale(storage,'pt-PT',languages),'pt-BR');
+ store.delete('sc_locale');
+ assert.equal(initialLocale(storage,'fr-FR',languages),'fr');
+ store.delete('sc_locale');
+ assert.equal(initialLocale(storage,'unknown',languages),'en');
+ const client=readFileSync('public/app.js','utf8');
+ assert(client.includes("initialLocale(localStorage,navigator.language,languages)"));
+ assert(!client.includes("state.user.preferred_locale))locale="));
+ assert(client.includes("localStorage.setItem('sc_locale',locale)"));
+});
