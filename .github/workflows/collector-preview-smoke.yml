@@ -20,15 +20,12 @@ jobs:
           for i in $(seq 1 24); do
             health=$(curl -sS --connect-timeout 5 --max-time 20 "$base/api/health" || true)
             collect_code=$(curl -sS --connect-timeout 5 --max-time 20 -o collect.json -w '%{http_code}' "$base/api/collect/exclusions?site=tieba" || true)
-            if echo "$health" | python3 -c 'import json,sys;d=json.load(sys.stdin);assert d.get("databaseReady") is True and d.get("importEnabled") is True'; then
+            if echo "$health" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("databaseReady") is True and d.get("importEnabled") is True' >/dev/null 2>&1; then
               if [[ "$collect_code" == 401 || "$collect_code" == 503 ]]; then
-                if python3 - <<'PY'
-import json
-d=json.load(open('collect.json'))
-assert d.get('error') in ('collector_unauthorized','collect_secret_not_configured'),d
-print('Expected collector protection:',d['error'])
-PY
-                then ready=1; break; fi
+                if python3 -c 'import json; d=json.load(open("collect.json")); assert d.get("error") in ("collector_unauthorized","collect_secret_not_configured"),d; print("Expected collector protection:",d["error"])'; then
+                  ready=1
+                  break
+                fi
               fi
             fi
             echo "Waiting for collector deployment; attempt $i, response status=$collect_code"
