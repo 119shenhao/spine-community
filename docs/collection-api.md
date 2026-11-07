@@ -186,3 +186,12 @@ Cloudflare 预览不再需要配置采集 Secret；本地/CI 测试通过不等�
 - [GitHub Actions 开发分支自动测试](https://github.com/119shenhao/spine-community/actions/runs/42331386739)：**success**。包含开发/生产环境隔离、未提供任何密钥时的采集认领、21600 秒期限、正文与楼中楼去重等集成测试。
 - [开发预览环境远程认领和释放测试](https://github.com/119shenhao/spine-community/actions/runs/42331386745)：**success**。没有传 Authorization/密钥，排除清单返回 HTTP 200；实际在独立预览 D1 用 `smoke` 测试站点成功认领 1 个测试编号，返回 `lease_seconds=21600`，核对到期时间后成功释放。**没有创建测试帖子，也没有访问生产 D1**。
 - 原先旧版本的 `COLLECT_API_TOKEN` 需求已经撤销；无需在 Cloudflare 配置采集密钥。
+
+## 2026-11-07 实际端到端完整回环测试（已执行并清理）
+
+- [真实远程端到端测试：GitHub Actions run 42331899579](https://github.com/119shenhao/spine-community/actions/runs/42331899579)：**success**，实际调用独立 Cloudflare Preview Worker + D1，所有九个检查点通过。
+- 先从实际公开网页检索确认 Reddit 原帖：`https://www.reddit.com/r/backpain/comments/1vfpqgs/`，原站 ID 为 `1vfpqgs`。测试服务器直接向 Reddit 发 HEAD 请求时得到 **403**；因此这是「真实公开链接与真实源 ID + 真实预览接口 + 原创模拟测试内容」的回环验证，**不代表已验证可由 GitHub Runner 抓取 Reddit 的全文或真实回帖**。
+- 实际流程：免密查询采集排除清单 → 两个模拟 AI 并发认领同一个 Reddit ID（仅一个获得 `granted`）→ 认领后排除列表实时显示 `claimed` → 检查 `lease_seconds=21600` → 提交明确标记的原创英文测试主帖、2 条英文模拟评论及 1 条中文楼中楼评论（共 3 条）→ 经论坛 GET API 读取并验证原文、语种和回复父子关系 → 排除清单出现 `completed` → 第三个 AI 无法重领 → 同请求重复完成不产生新内容、篡改正文重试返回 409 → 另一个模拟来源 ID 和同标题/正文触发指纹去重，不追加回复。
+- 测试主题 UUID：`99e0bb7d-8936-44d6-8d92-e5b5ce59dbd2`；标识标题：`[E2E TEST 42331899579-1] Public back-pain thread collection pipeline`。**没有复制 Reddit 患者原文或实际用户评论**，测试帖和回复都是明确标识的模拟内容。
+- [清理验证：GitHub Actions run 42332094193](https://github.com/119shenhao/spine-community/actions/runs/42332094193)：**success**。通过隔离 Preview D1 的定向 SQL 删除该测试主题、3 条回复、对应全文索引和两条来源采集记录；随后从真实远程接口证实主题详情返回 404，两条原站 ID 均不再出现在排除清单。用户的其他内容、生产数据库没有被删除或修改。完成后，一次性测试工作流、脚本和部署清理钩子均从代码分支撤销。
+- 结论：**开发采集接口的九个关键步骤已经做过真实 HTTP + D1 远程闭环验证**；「直接从 Reddit/百度贴吧完整抓取并合法转载原文」属于另一个外部采集环节，并未通过该测试，不能与采集协调 API 的成功混为一谈。
