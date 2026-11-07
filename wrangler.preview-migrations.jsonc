@@ -1,0 +1,11 @@
+{
+  "$schema":"./node_modules/wrangler/config-schema.json",
+  "name":"spine-community-preview-migrations",
+  "compatibility_date":"2026-11-06",
+  "d1_databases":[{
+    "binding":"PREVIEW_DB",
+    "database_name":"spine-community-db-preview",
+    "database_id":"4362537a-5748-4a05-b0c4-219c3db36996",
+    "migrations_dir":"migrations/v1"
+  }]
+}
