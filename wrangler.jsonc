@@ -37,7 +37,8 @@
     "vars": {
       "APP_ENV": "preview",
       "TRANSLATION_ENABLED": "false",
-      "IMPORT_ENABLED": "true"
+      "IMPORT_ENABLED": "true",
+      "COLLECT_ENABLED": "true"
     }
   },
   "build": {
