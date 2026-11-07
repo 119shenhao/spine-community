@@ -58,6 +58,8 @@ export const traditionalChinese = {
   "backLink": "返回討論列表",
   "title": "標題",
   "body": "經歷或問題內容",
+  "postingLanguage": "預設發帖語言",
+  "followInterface": "跟隨介面語言",
   "sourceLanguage": "原文語言",
   "otherLanguage": "其他／未指定",
   "durationDays": "症狀持續天數",

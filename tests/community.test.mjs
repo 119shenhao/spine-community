@@ -788,3 +788,63 @@ test('Traditional Chinese profile, content language, taxonomy and translation AP
  assert.equal(translation.status,200);
  assert.equal(translation.data.reason,'same_language');
 });
+
+test('Default posting language follows interface unless the user selects a fixed language',async()=>{
+ const {postingLanguage,profilePostingLanguageOptions}=await import('../public/posting-language.js');
+ const {languages,dictionaries}=await import('../public/i18n.js');
+ const {traditionalChinese}=await import('../public/i18n-zh-tw.js');
+ assert.equal(dictionaries['zh-CN'].postingLanguage,'默认发帖语言');
+ assert.equal(dictionaries['zh-CN'].followInterface,'跟随界面语言');
+ assert.equal(dictionaries['zh-TW'].postingLanguage,'預設發帖語言');
+ assert.equal(traditionalChinese.followInterface,'跟隨介面語言');
+ assert(languages.every(locale=>dictionaries[locale].postingLanguage&&dictionaries[locale].followInterface));
+ const auto={preferred_locale:'en',preferred_locale_mode:'auto'};
+ assert.equal(postingLanguage(auto,'zh-CN',languages),'zh-CN');
+ assert.equal(postingLanguage(auto,'zh-TW',languages),'zh-TW');
+ assert.equal(postingLanguage(auto,'en',languages),'en');
+ assert.equal(postingLanguage(auto,'ja',languages),'ja');
+ const fixed={preferred_locale:'fr',preferred_locale_mode:'manual'};
+ assert.equal(postingLanguage(fixed,'zh-CN',languages),'fr');
+ assert.equal(postingLanguage(fixed,'zh-TW',languages),'fr');
+ assert.equal(postingLanguage(null,'zh-CN',languages),'zh-CN');
+ const formOpts=profilePostingLanguageOptions(auto,'zh-CN',languages,key=>dictionaries['zh-CN'][key],(selected,includeOther)=>includeOther===false?'<option>'+selected+'</option>':'unexpected');
+ assert(formOpts.includes('value="auto" selected'));
+ assert(formOpts.includes('跟随界面语言'));
+ assert(formOpts.includes('简体中文'));
+ const fixedOpts=profilePostingLanguageOptions(fixed,'zh-CN',languages,key=>dictionaries['zh-CN'][key],selected=>selected);
+ assert(!fixedOpts.includes('value="auto" selected'));
+ assert(fixedOpts.includes('fr'));
+ const code=readFileSync('public/app.js','utf8');
+ assert(code.includes("t('postingLanguage')"));
+ assert(code.includes("profilePostingLanguageOptions(u,locale,languages,t,languageOptions)"));
+ assert(code.includes("languageOptions(c?.source_lang||postingLanguage(state.user,locale,languages))"));
+ assert(code.includes("languageOptions(editing?c.source_lang:postingLanguage(state.user,locale,languages))"));
+ assert(code.includes("v.source_lang||postingLanguage(state.user,locale,languages)"));
+});
+
+test('Migrated accounts preserve non-English choices, and allow returning to automatic posting language',async()=>{
+ const {call,DB}=await fixture();
+ const before=await call('/api/me');
+ assert.equal(before.data.user.preferred_locale,'en');
+ assert.equal(before.data.user.preferred_locale_mode,'auto');
+ const oldFrench=DB.db.prepare("INSERT INTO users(id,nickname,preferred_locale) VALUES('old-french','French member','fr')"); 
+ // In the migration test DB, verify the migration itself rather than rewriting applied schema.
+ const migration=readFileSync('migrations/v1/0007_default_posting_language.sql','utf8');
+ assert(migration.includes("WHERE preferred_locale<>'en'"));
+ const fixed=await call('/api/me','PATCH',{nickname:'Alice',preferred_locale:'zh-TW',public_region:'台灣'});
+ assert.equal(fixed.status,200);
+ let user=(await call('/api/me')).data.user;
+ assert.equal(user.preferred_locale,'zh-TW');
+ assert.equal(user.preferred_locale_mode,'manual');
+ assert.equal(user.public_region,'台灣');
+ const reset=await call('/api/me','PATCH',{nickname:'Alice',preferred_locale:'auto',public_region:'台灣'});
+ assert.equal(reset.status,200);
+ user=(await call('/api/me')).data.user;
+ assert.equal(user.preferred_locale_mode,'auto');
+ assert.equal(user.preferred_locale,'zh-TW','reset keeps a stored language without forcing it on the UI');
+ const invalid=await call('/api/me','PATCH',{nickname:'Alice',preferred_locale:'not-a-language'});
+ assert.equal(invalid.status,400);
+ const legacy=await call('/api/me','PATCH',{nickname:'Alice',preferred_locale:'en'});
+ assert.equal(legacy.status,200,'legacy clients with a concrete locale remain compatible');
+ assert.equal((await call('/api/me')).data.user.preferred_locale_mode,'manual');
+});

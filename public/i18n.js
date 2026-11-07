@@ -59,6 +59,8 @@ privacy:['Privacy & community guidelines','隐私与社区规则','Privacidad y 
 backLink:['Back to discussions','返回讨论','Volver a conversaciones','Voltar às conversas','Zurück zu Diskussionen','Retour aux discussions','投稿一覧へ'],
 title:['Title','标题','Título','Título','Titel','Titre','タイトル'],
 body:['Your experience or question','经历或问题正文','Tu experiencia o pregunta','Sua experiência ou dúvida','Deine Erfahrung oder Frage','Votre expérience ou question','体験や質問の内容'],
+postingLanguage:['Default posting language','默认发帖语言','Idioma predeterminado para publicar','Idioma padrão de publicação','Standardsprache für Beiträge','Langue de publication par défaut','投稿の既定言語'],
+followInterface:['Follow interface language','跟随界面语言','Seguir el idioma de la interfaz','Seguir o idioma da interface','Sprache der Oberfläche verwenden','Suivre la langue de l’interface','画面の言語に合わせる'],
 sourceLanguage:['Original language','原文语言','Idioma original','Idioma original','Originalsprache','Langue originale','原文の言語'],
 otherLanguage:['Other / not specified','其他／未指定','Otro / sin especificar','Outro / não especificado','Andere / nicht angegeben','Autre / non précisé','その他・未指定'],
 durationDays:['Symptom duration in days','症状持续天数','Duración en días','Duração em dias','Symptomdauer in Tagen','Durée des symptômes en jours','症状の期間（日数）'],
