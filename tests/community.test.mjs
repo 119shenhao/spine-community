@@ -700,3 +700,29 @@ test('visitor language survives a Google login callback and account default Engl
  assert(!client.includes("state.user.preferred_locale))locale="));
  assert(client.includes("localStorage.setItem('sc_locale',locale)"));
 });
+
+test('discussion-first home keeps search form on search page and places post button beside My space',async()=>{
+ const {feedParams,sortRoute}=await import('../public/feed-ui.js');
+ const {dictionaries,languages}=await import('../public/i18n.js');
+ const app=readFileSync('public/app.js','utf8');
+ const css=readFileSync('public/styles.css','utf8');
+ for(const locale of languages)assert(dictionaries[locale].newPost,'missing post button translation: '+locale);
+ assert.equal(dictionaries['zh-CN'].newPost,'发帖');
+ const nav=app.match(/\$\('#sidebar'\)\.innerHTML=`<nav>(.*?)<\/nav>/)?.[1];
+ assert(nav,'sidebar navigation missing');
+ assert(nav.indexOf("nav('mySpace'")>=0,'My space navigation missing');
+ assert(nav.indexOf('data-action="compose"')>nav.indexOf("nav('mySpace'"),'Post button must follow My space');
+ assert(nav.includes('class="nav-link nav-compose"'));
+ assert(app.includes("if(action==='compose')return composer()")||app.includes("if(action==='compose')return composer();"),'Post nav must use existing compose action');
+ assert(app.includes("isSearch?searchForm(query):''"),'Only the search page should render the search card');
+ assert(!app.includes('<section class="hero">'),'Home hero must not push the feed down');
+ assert(css.includes('.sidebar .nav-compose'),'Post button needs navigation styles');
+ assert.equal(feedParams(new URLSearchParams(),false).get('sort'),'latest');
+ assert.equal(feedParams(new URLSearchParams(),true).has('sort'),false);
+ assert.equal(feedParams(new URLSearchParams('sort=discussion'),false).get('sort'),'discussion');
+ assert.equal(sortRoute('/',new URLSearchParams(),'discussion'),'/?sort=discussion');
+ assert.equal(sortRoute('/search',new URLSearchParams('q=back'),'latest'),'/search?q=back&sort=latest');
+ const page2=feedParams(new URLSearchParams(),false);
+ page2.set('offset','20');
+ assert.equal(page2.toString(),'sort=latest&offset=20');
+});

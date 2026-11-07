@@ -8,6 +8,7 @@ neck:['Neck & cervical spine','颈部与颈椎','Cuello y columna cervical','Pes
 back:['Lower back & lumbar spine','腰部与腰椎','Zona lumbar','Lombar e coluna lombar','Unterer Rücken und Lendenwirbelsäule','Bas du dos et colonne lombaire','腰・腰椎'],
 stories:['Personal experiences','个人经历','Experiencias personales','Experiências pessoais','Persönliche Erfahrungen','Expériences personnelles','体験談'],
 mySpace:['My space','个人中心','Mi espacio','Meu espaço','Mein Bereich','Mon espace','マイページ'],
+newPost:['New post','发帖','Nueva publicación','Nova publicação','Neuen Beitrag','Nouvelle publication','新規投稿'],
 admin:['Community management','社区管理','Administración','Administração','Verwaltung','Administration','コミュニティ管理'],
 login:['Sign in','登录','Iniciar sesión','Entrar','Anmelden','Se connecter','ログイン'],
 logout:['Sign out','退出登录','Cerrar sesión','Sair','Abmelden','Se déconnecter','ログアウト'],

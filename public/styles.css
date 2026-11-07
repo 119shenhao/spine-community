@@ -20,3 +20,7 @@
 .comment[class-depth="2"]{ --depth:2; }
 .comment[class-depth="3"]{ --depth:3; }
 .comment[class-depth="4"]{ --depth:4; }
+/* New-post navigation matches regular links, including the compact mobile row. */
+.sidebar .nav-compose{border:0;background:transparent;text-align:left;width:100%;line-height:1.6;white-space:nowrap}
+.sidebar .nav-compose:hover{background:#e9eee4}
+@media(max-width:700px){.sidebar .nav-compose{width:auto;flex-shrink:0}}
