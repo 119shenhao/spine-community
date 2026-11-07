@@ -14,9 +14,13 @@ SOURCE_URLS = {
 }
 ASK39_LISTS = (
     "https://ask.39.net/browse/11760-1-1.html",
+    "https://ask.39.net/browse/11760-1-10.html",
     "https://ask.39.net/browse/11760-1-50.html",
+    "https://ask.39.net/browse/11760-1-100.html",
     "https://ask.39.net/browse/625-1-1.html",
+    "https://ask.39.net/browse/625-1-5.html",
     "https://ask.39.net/browse/625-1-10.html",
+    "https://ask.39.net/browse/625-1-50.html",
 )
 SPINE = re.compile(
     r"颈椎|腰椎|腰突|腰痛|腰疼|腰部|椎间盘|椎管|坐骨神经|腰[1-5]|"
@@ -123,11 +127,115 @@ def parse_patientinfo(data, expected_id):
     return {"title": data["title"], **by_number[1], "comments": roots}
 
 
+
+def source_text(node):
+    if node.select_one("img, video, iframe, audio, [data-attachment]"):
+        raise ValueError("uncollected_media")
+    return html_text(node)
+
+
+def parse_ask39(markup):
+    page = BeautifulSoup(markup, "html.parser")
+    title = page.select_one("h1.ask_tit")
+    question = page.select_one(".ask_hid .txt_ms")
+    supplement = page.select_one(".ask_hid .txt_bc span")
+    if not title or not question:
+        raise ValueError("question_structure_unverified")
+
+    title_text = source_text(title)
+    body = re.sub(r"^病情描述[：:]\s*", "", source_text(question))
+    extra = source_text(supplement) if supplement else ""
+    unique_body = re.sub(r"[\s，。？！、：；,.?!:;]", "", body)
+    unique_title = re.sub(r"[\s，。？！、：；,.?!:;]", "", title_text)
+    unique_extra = re.sub(r"[\s，。？！、：；,.?!:;]", "", extra)
+    if unique_extra and unique_extra not in (unique_title, unique_body):
+        body += "\n" + extra
+    if (len(re.sub(r"\s+", "", body)) < 30 or
+            (unique_body == unique_title and unique_extra in ("", unique_body)) or
+            not re.search(r"我|本人|家人|父亲|母亲|[年月周天岁]|术后|复发|诊断|检查", body)):
+        raise ValueError("patient_narrative_unverified")
+
+    comments = []
+    ids = set()
+    for doctor in page.select('div.doctor_all[id^="reply_"]'):
+        identifier = doctor["id"]
+        if identifier in ids:
+            raise ValueError("duplicate_answer_id")
+        ids.add(identifier)
+        wrapper = doctor.parent
+        texts = wrapper.find_all("p", class_="sele_txt", recursive=False)
+        if len(texts) != 1 or wrapper.select_one('div[id^="reply_"] div[id^="reply_"]'):
+            raise ValueError("answer_structure_unverified")
+        body_text = source_text(texts[0])
+        if not body_text or re.search(r"查看全部|展开全文|追问|继续阅读", body_text):
+            raise ValueError("answer_structure_unverified")
+        if any(re.fullmatch(r"展开.*|查看全部.*|加载更多.*|追问.*", html_text(link))
+               for link in wrapper.select("a, button") if html_text(link)):
+            raise ValueError("answer_structure_unverified")
+        comments.append({"body": body_text, "source_lang": "zh-CN"})
+    if not comments or len(comments) != len(page.select(".sele_all p.sele_txt")):
+        raise ValueError("answer_count_unverified")
+    return {"title": title_text, "body": body, "source_lang": "zh-CN", "comments": comments}
+
+
+def parse_healthunlocked(markup, expected_id):
+    page = BeautifulSoup(markup, "html.parser")
+    title = page.select_one("#js-post-heading")
+    body = page.select_one(".js-post-body")
+    count_label = page.select_one('[class*="responses__ReplyCount-"]')
+    reply_selector = '[class*="interactiveReplyItem__Response-"]'
+    replies = page.select(reply_selector)
+    if not title or not body or not count_label or not replies:
+        raise ValueError("public_thread_structure_unverified")
+    canonical = page.select_one('link[rel="canonical"][href]')
+    if canonical and source_id("healthunlocked", canonical["href"]) != expected_id:
+        raise ValueError("unexpected_source_redirect")
+    expected = re.fullmatch(r"\s*([\d,]+)\s+repl(?:y|ies)\s*", html_text(count_label), re.I)
+    if not expected or int(expected[1].replace(",", "")) != len(replies):
+        raise ValueError("public_reply_count_mismatch")
+
+    nodes = {}
+    roots = []
+    for node in replies:
+        parts = []
+        for child in node.find_all(recursive=False):
+            classes = child.get("class", [])
+            if any(name.startswith(("replyItemHeader__Header-", "replyItemBody__ReplyButtonsPanel-",
+                                     "interactiveReplyItem__Response-")) for name in classes):
+                continue
+            if child.name not in ("p", "ul", "ol", "blockquote", "pre", "div"):
+                raise ValueError("unknown_reply_content")
+            if child.select_one(reply_selector):
+                raise ValueError("unknown_reply_parent")
+            part = source_text(child)
+            if part:
+                parts.append(part)
+        if not parts:
+            raise ValueError("missing_reply_body")
+        reply = {"body": "\n".join(parts), "source_lang": "en"}
+        nodes[id(node)] = reply
+        parent = node.find_parent(class_=re.compile(r"^interactiveReplyItem__Response-"))
+        if parent:
+            if id(parent) not in nodes:
+                raise ValueError("unknown_reply_parent")
+            nodes[id(parent)].setdefault("replies", []).append(reply)
+        else:
+            roots.append(reply)
+    return {"title": source_text(title), "body": source_text(body),
+            "source_lang": "en", "comments": roots}
+
+
 def read_topic(site, identifier, url, get, render):
     if site == "120ask":
         return parse_120ask(get(url))
     if site == "xywy":
         return parse_xywy(render(url, identifier))
+    if site == "ask39":
+        return parse_ask39(get(url))
+    if site == "healthunlocked":
+        return parse_healthunlocked(get(url), identifier)
+    if site != "patientinfo":
+        raise ValueError("unsupported_direct_source")
     slug = urlsplit(url).path.split("/")[-1].rsplit("-", 1)[0]
     return parse_patientinfo(
         json.loads(get(f"https://community.patient.info/t/{slug}/{identifier}.json")), identifier

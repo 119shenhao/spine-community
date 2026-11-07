@@ -15,9 +15,7 @@ from spine_sources import (
 PREVIEW = "https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev"
 JSON_LIMIT = 150000
 SKIP = {
-    "ask39": "manual_review_required_for_patient_narrative_and_reply_completeness",
-    "healthunlocked": "public_thread_returned_403_use_authorized_export",
-    "mayoclinic": "site_terms_restrict_automated_access_use_authorized_export",
+    "mayoclinic": "public_thread_returned_403_use_authorized_export",
 }
 
 
@@ -98,7 +96,7 @@ def read_request(path):
     if not isinstance(candidates, dict) or set(candidates) - set(sites):
         raise ValueError("invalid_candidate_sites")
     for site, urls in candidates.items():
-        if not isinstance(urls, list) or len(urls) > 12:
+        if not isinstance(urls, list) or len(urls) > (36 if site == "ask39" else 12):
             raise ValueError("invalid_candidate_count")
         candidates[site] = {source_id(site, url): url for url in urls}
     return request
@@ -174,6 +172,36 @@ def inspect_ask39():
         time.sleep(1)
 
 
+
+def ask39_directory_candidates(excluded, maximum=36):
+    found = {}
+    for listing in ASK39_LISTS:
+        try:
+            page = BeautifulSoup(fetch(listing), "html.parser")
+        except FetchProblem as error:
+            emit("archive_list_unavailable", site="ask39", url=listing, reason=str(error))
+            if error.status in (401, 403, 429):
+                break
+            continue
+        added = 0
+        for link in page.select("a[href]"):
+            url = urljoin(listing, link["href"])
+            try:
+                identifier = source_id("ask39", url)
+            except ValueError:
+                continue
+            if identifier in excluded or identifier in found:
+                continue
+            found[identifier] = url
+            added += 1
+            if added == 6 or len(found) == maximum:
+                break
+        if len(found) == maximum:
+            break
+        time.sleep(1)
+    return found
+
+
 def complete(payload):
     for attempt in range(2):
         try:
@@ -187,6 +215,7 @@ def complete(payload):
 def collect(site, candidates, limit, export_dir):
     granted = new_topics = new_replies = duplicates = unverified = 0
     expected_marks = set()
+    ask39_bodies = set()
     stopped_reason = None
     for identifier, url in candidates.items():
         if new_topics >= limit:
@@ -211,6 +240,11 @@ def collect(site, candidates, limit, export_dir):
             else:
                 draft = read_topic(site, identifier, url, fetch, render_xywy)
             count = validate_topic(draft)
+            if site == "ask39" and not export_dir:
+                body_key = re.sub(r"\s+", "", draft["body"])
+                if body_key in ask39_bodies:
+                    raise ValueError("repeated_patient_narrative_in_run")
+                ask39_bodies.add(body_key)
             stage = "complete"
             result = complete({**payload, "topic": draft})
             committed = result["status"] == "completed"
@@ -257,113 +291,6 @@ def collect(site, candidates, limit, export_dir):
     return not (unverified or mark_failures or stopped_reason)
 
 
-
-def probe_sources(site, excluded, candidates):
-    from collections import Counter
-    if site == "ask39":
-        for listing in ASK39_LISTS:
-            page = BeautifulSoup(fetch(listing), "html.parser")
-            added = 0
-            for link in page.select("a[href]"):
-                url = urljoin(listing, link["href"])
-                try:
-                    identifier = source_id(site, url)
-                except ValueError:
-                    continue
-                if identifier not in excluded and identifier not in candidates:
-                    candidates[identifier] = url
-                    added += 1
-                    if added == 1:
-                        break
-            time.sleep(1)
-    for identifier, url in candidates.items():
-        if identifier in excluded:
-            emit("probe_excluded", site=site, source_id=identifier)
-            if site == "healthunlocked":
-                try:
-                    req = Request(url, method="HEAD", headers={"User-Agent": "SpineCommunityCollector/1.0"})
-                    with http.open(req, timeout=20) as response:
-                        emit("probe_access", site=site, status=response.status)
-                except HTTPError as error:
-                    emit("probe_access", site=site, status=error.code)
-            continue
-        response = api("/api/collect/claim", {
-            "site": site, "collector_id": "chatgpt-source-layout-probe", "source_ids": [identifier],
-        })
-        lease, = response["results"]
-        if lease["result"] != "granted":
-            continue
-        try:
-            doc = BeautifulSoup(fetch(url), "html.parser")
-
-            def shape(node, depth=3):
-                if not node:
-                    return None
-                return [node.name, node.get("class", []), node.get("data-testid"),
-                        len(node.get_text(strip=True)),
-                        [shape(x, depth-1) for x in node.find_all(recursive=False)[:12]] if depth else []]
-            if site == "ask39":
-                hid = doc.select_one(".ask_hid")
-                answer = doc.select_one('div[id^="reply_"]')
-                emit("layout39", source_id=identifier, question=shape(hid), reply=shape(answer, 4),
-                     parent=shape(answer.parent, 1) if answer else None,
-                     supplement=shape(doc.select_one(".txt_answer"), 2))
-            if site == "healthunlocked":
-                raw = doc.select_one("#__NEXT_DATA__")
-                embedded = json.loads(raw.string) if raw and raw.string else {}
-                def schema(val, depth):
-                    if not depth:
-                        return type(val).__name__
-                    if isinstance(val, dict):
-                        return {k:schema(v, depth-1) for k,v in list(val.items())[:18]}
-                    if isinstance(val, list):
-                        return [len(val), schema(val[0], depth-1) if val else None]
-                    return type(val).__name__
-                reply = doc.select_one('[class*="interactiveReplyItem__Response-"]')
-                count = doc.select_one('[class*="responses__ReplyCount-"]')
-                urls = []
-                for a in doc.select('a[href*="/posts/"]'):
-                    u = urljoin(url, a["href"])
-                    try:
-                        id2 = source_id(site, u)
-                    except ValueError:
-                        continue
-                    if id2 != identifier and id2 not in excluded:
-                        urls.append(u)
-                emit("layout_hu", count=re.findall(r"\d+", count.get_text(" ",strip=True)) if count else [],
-                     reply=shape(reply, 3), body=shape(doc.select_one("#js-post-body"), 2),
-                     json_keys=schema(embedded.get("props",{}).get("pageProps",{}), 4),
-                     candidates=list(dict.fromkeys(urls))[:12])
-            tags = Counter()
-            for node in doc.select("[id], [class]"):
-                for key in node.get("class", []) + ([node["id"]] if node.get("id") else []):
-                    if re.fullmatch(r"[\w-]{1,70}", key) and re.search(r"post|content|detail|entry|ask|answer|reply|comment|page|question|problem|title|info|thread", key, re.I):
-                        tags[(node.name, key)] += 1
-            links = []
-            for node in doc.select("link[href], a[href]"):
-                href = node["href"]
-                if re.search(r"[?&](?:p|pg|comment|post_id)=\d+|/comment/\d+|#comment-\d+", href):
-                    if re.fullmatch(r"[A-Za-z0-9_:/?#&=.%+-]{1,300}", href):
-                        links.append(href)
-            containers = []
-            for node in doc.select("h1,article, [class*=reply], [class*=answer], [class*=comment]"):
-                parents = [x.name + "." + ".".join(x.get("class", [])) for x in list(node.parents)[:3]]
-                shape = [node.name, node.get("id"), node.get("class"), len(node.get_text(strip=True)), parents,
-                         sorted(k for k in node.attrs if k.startswith("data-"))]
-                if shape[2] or shape[0] in ("h1", "article"):
-                    containers.append(shape)
-            emit("source_shape", site=site, source_id=identifier, counts=tags.most_common(55), links=list(dict.fromkeys(links))[:16],
-                 containers=containers[:32], meta=[n.get("property") or n.get("name") for n in doc.select("meta")][:40],
-                 scripts=[n.get("id") for n in doc.select("script[id]")][:12])
-        except FetchProblem as error:
-            emit("source_probe_error", site=site, source_id=identifier, reason=str(error))
-            if error.status in (401, 403, 429):
-                break
-        finally:
-            api("/api/collect/release", {"site":site, "source_id":identifier, "lease_token":lease["lease_token"]})
-        time.sleep(1)
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("request", type=Path)
@@ -385,16 +312,15 @@ def main():
                         raise ValueError("missing_official_discussion_id")
                     stable[identifier] = url
                 candidates = stable
+            if site == "ask39" and request["mode"] == "collect" and not candidates and not args.export_dir:
+                candidates = ask39_directory_candidates(excluded)
             eligible = {key: url for key, url in candidates.items() if key not in excluded}
             emit("plan", site=site, existing_exclusions=len(excluded), candidates=len(candidates),
                  excluded=len(candidates) - len(eligible), eligible=len(eligible))
-            if request["request_id"] == "probe-expanded-layouts-20261107":
-                probe_sources(site, excluded, eligible)
-                continue
             if site in SKIP and not args.export_dir:
                 emit("source_unavailable", site=site, reason=SKIP[site])
-                if site == "ask39" and request["mode"] == "inspect":
-                    inspect_ask39()
+            elif site == "ask39" and request["mode"] == "inspect":
+                inspect_ask39()
             elif request["mode"] == "collect":
                 ok = collect(site, eligible, request["limit"], args.export_dir) and ok
         except (FetchProblem, ValueError, TypeError, KeyError, OSError) as error:
