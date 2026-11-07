@@ -781,6 +781,9 @@ test('Traditional Chinese profile, content language, taxonomy and translation AP
  assert.equal(topic.data.topic.source_lang,'zh-TW');
  const reply=await call('/api/topics/'+post.data.id+'/comments','POST',{body:'謝謝分享',source_lang:'zh-TW'});
  assert.equal(reply.status,201);
+ const {translatorTargetLocale}=await import('../.test-build/translation.js');
+ assert.equal(translatorTargetLocale('zh-TW'),'zh-Hant');
+ assert.equal(translatorTargetLocale('zh-CN'),'zh-CN');
  const translation=await call('/api/translate','POST',{type:'topic',id:post.data.id,locale:'zh-TW'},null);
  assert.equal(translation.status,200);
  assert.equal(translation.data.reason,'same_language');
