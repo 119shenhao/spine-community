@@ -215,6 +215,7 @@ jobs:
           }]}))
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
               print("apply_needed=" + ("true" if pending else "false"), file=output)
+              print("base_main_sha=" + subprocess.run(["git", "rev-parse", "origin/main"], capture_output=True, text=True, check=True).stdout.strip(), file=output)
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as report:
               print("### Release plan (read-only)\n", file=report)
               print("- Operation: " + os.environ["OPERATION"], file=report)
@@ -263,6 +264,25 @@ jobs:
           test "$actual" = "$CANDIDATE_SHA" || { echo "::error::PR source changed after verification."; exit 1; }
           echo "pr_number=$pr" >> "$GITHUB_OUTPUT"
           echo "Release PR: #$pr" >> "$GITHUB_STEP_SUMMARY"
+      - name: Ensure the release PR is mergeable and main still matches the inspected base
+        if: inputs.operation == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+          EXPECTED_MAIN: ${{ steps.plan.outputs.base_main_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          latest="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          if [[ "$latest" != "$EXPECTED_MAIN" ]]; then
+            echo "::error::main changed after database inspection. Stop before any production migration."
+            exit 1
+          fi
+          mergeable="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json mergeable --jq '.mergeable')"
+          if [[ "$mergeable" == CONFLICTING ]]; then
+            echo "::error::Release PR conflicts with main. Stop before production migration."
+            exit 1
+          fi
       - name: Set up Node for the isolated production migration tool
         if: inputs.operation == 'release' && steps.plan.outputs.apply_needed == 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -295,6 +315,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          latest="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          if [[ "$latest" != "${{ steps.plan.outputs.base_main_sha }}" ]]; then
+            echo "::error::main moved while release was running. Do not merge unreviewed base; report any completed D1 migration."
+            exit 1
+          fi
           actual="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.head.sha')"
           if [[ "$actual" != "$CANDIDATE_SHA" ]]; then
             echo "::error::PR changed; DB migration (if any) is retained. Do not merge an unreviewed SHA."
