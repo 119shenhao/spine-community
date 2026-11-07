@@ -1,0 +1,54 @@
+name: 120ask dev collector connectivity probe
+on:
+  push:
+    branches: [feature/v1-community-build-20261106]
+    paths: [.github/workflows/collector-120ask-probe.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Check exclusions and external source connectivity without writing
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, urllib.parse, urllib.request
+          base='https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev'
+          site='120ask'
+          cursor=None
+          checked=set()
+          completed=0
+          claimed=0
+          for page in range(100):
+              params={'site':site,'limit':'500'}
+              if cursor: params['cursor']=cursor
+              url=base+'/api/collect/exclusions?'+urllib.parse.urlencode(params)
+              with urllib.request.urlopen(urllib.request.Request(url,headers={'User-Agent':'SpineCommunity-Dev-Probe/1.0'}),timeout=25) as response:
+                  assert response.status==200, response.status
+                  data=json.load(response)
+              assert data['site']==site and isinstance(data['items'],list)
+              for entry in data['items']:
+                  assert entry['source_id'] not in checked, 'duplicate exclusion ID'
+                  checked.add(entry['source_id'])
+                  completed+=entry['status']=='completed'
+                  claimed+=entry['status']=='claimed'
+              cursor=data['next_cursor']
+              if cursor is None:break
+          else:
+              raise Exception('Exclusions exceeded pagination limit')
+          print(f'exclusions_ok=true pages={page+1} records={len(checked)} completed={completed} claimed={claimed}')
+          print(f'candidate=22185258 blocked={str("22185258" in checked).lower()}')
+          source='https://m.120ask.com/askg/posts_detail/22185258'
+          try:
+              req=urllib.request.Request(source,headers={'User-Agent':'Mozilla/5.0 (compatible; SpineCommunity-Dev-Probe/1.0)'})
+              with urllib.request.urlopen(req,timeout=25) as response:
+                  html=response.read(300000).decode('utf-8','replace')
+                  status=response.status
+              print(f'source_reachable=true status={status} bytes={len(html.encode("utf-8"))} has_followup={("患者追问" in html)}')
+          except Exception as e:
+              print(f'source_reachable=false error_type={type(e).__name__} error={str(e)[:120]}')
+          PY
