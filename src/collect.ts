@@ -3,7 +3,9 @@ import {terms} from './content';
 import {UNKNOWN_USER_ID,importEnabled} from './import';
 
 // Dedicated collector endpoints have NO production HTTP write path.
-// COLLECT_API_TOKEN is a secret, never an ordinary public Worker var.
+// Preview-only collection is deliberately anonymous; per-claim lease tokens still
+// prevent one collector from completing or releasing another collector's work.
+const CLAIM_LEASE_SECONDS=6*60*60;
 export function collectEnabled(req:Request,env:Env):boolean {
  return env.COLLECT_ENABLED==='true' && importEnabled(req,env);
 }
@@ -28,18 +30,13 @@ function list(v:unknown):unknown[]{
  if(!Array.isArray(v))fail(400,'invalid_collection_list');
  return v;
 }
-async function authorize(req:Request,env:Env) {
+function allowPreviewRequest(req:Request,env:Env) {
  if(!collectEnabled(req,env))fail(403,'collect_disabled');
- if(!env.COLLECT_API_TOKEN||env.COLLECT_API_TOKEN.length<32)fail(503,'collect_secret_not_configured');
- const auth=req.headers.get('authorization')||'';
- if(!auth.startsWith('Bearer ')||auth.length>256||auth.length<40)fail(401,'collector_unauthorized');
- const token=auth.slice(7);
- const [a,b]=await Promise.all([hash(token),hash(env.COLLECT_API_TOKEN)]);
- let mismatch=0;for(let i=0;i<a.length;i++)mismatch|=a.charCodeAt(i)^b.charCodeAt(i);
- if(mismatch)fail(401,'collector_unauthorized');
+ // No API key or cookie required. Production binding/host gating happens first.
  const origin=req.headers.get('origin');
  if((origin&&origin!==new URL(req.url).origin)||req.headers.get('sec-fetch-site')==='cross-site')fail(403,'invalid_origin');
 }
+
 type DraftComment={id:string,parent:string|null,body:string,source_lang:string,status:string};
 async function parseTopic(env:Env,db:D1Database,value:unknown){
  const t=plainObject(value,['title','body','source_lang','terms','symptom_duration_days','comments']);
@@ -94,8 +91,8 @@ function finished(row:Row,fp:string,leaseHash:string){
  return json({status:'completed',already_completed:true,duplicate:Boolean(row.completed_duplicate),topic_id:row.topic_id,imported:{topics:0,comments:0}});
 }
 export async function collectRoute(req:Request,env:Env,path:string):Promise<Response>{
- // Authorization and environment gating happen BEFORE touching either database.
- await authorize(req,env);
+ // Preview-only environment gating happens BEFORE touching either database.
+ allowPreviewRequest(req,env);
  if(!['/api/collect/exclusions','/api/collect/claim','/api/collect/complete','/api/collect/release'].includes(path))fail(404,'not_found');
  const db=env.IMPORT_DB!;
  if(path==='/api/collect/exclusions'){
@@ -129,7 +126,7 @@ export async function collectRoute(req:Request,env:Env,path:string):Promise<Resp
   const results=[];
   for(const sourceId of sourceIds){
    const secret=crypto.randomUUID()+'-'+crypto.randomUUID();
-   const secretHash=await hash(secret),timestamp=now(),expiry=timestamp+1800;
+   const secretHash=await hash(secret),timestamp=now(),expiry=timestamp+CLAIM_LEASE_SECONDS;
    // One conditional UPSERT is the lock: two concurrent collectors cannot both win.
    const claimed=await one(db,`INSERT INTO collect_sources(site,source_id,state,collector_id,lease_token_hash,lease_expires_at,claimed_at,updated_at)
      VALUES(?,?,'claimed',?,?,?, ?,?)
@@ -146,7 +143,7 @@ export async function collectRoute(req:Request,env:Env,path:string):Promise<Resp
      lease_expires_at:row?.state==='claimed'?row.lease_expires_at:null});
    }
   }
-  return json({site,lease_seconds:1800,results});
+  return json({site,lease_seconds:CLAIM_LEASE_SECONDS,results});
  }
  if(path==='/api/collect/release'){
   const b=plainObject(input,['site','source_id','lease_token']);
