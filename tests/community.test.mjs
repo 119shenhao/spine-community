@@ -169,3 +169,50 @@ test('preview import uses only IMPORT_DB and never falls back to the normal DB b
  for(let i=0;i<30;i++)await imp('/api/import/batch',{comments:[]});
  assert.equal((await imp('/api/import/topics',{title:'Over limit',body:'test'})).status,429);
 });
+
+
+test('main-topic content fingerprints prevent same source across different API batches and preserve original language',async()=>{
+ const {imp,DB}=await importFixture();
+ const first=await imp('/api/import/batch',{topics:[{title:'  BACK  pain ',body:'Pain\nwhen sitting',source_lang:'en',comments:[{body:'First reply',replies:[{body:'Child reply'}]}]}]});
+ assert.equal(first.status,201,JSON.stringify(first));
+ const duplicate=await imp('/api/import/topics',{title:'back pain',body:'pain when sitting',source_lang:'en',comments:[{body:'A new reply must not be added'}]});
+ assert.equal(duplicate.status,200,JSON.stringify(duplicate));
+ assert.equal(duplicate.data.imported.topics,0);
+ assert.equal(duplicate.data.imported.comments,0);
+ assert.equal(duplicate.data.skipped.topics,1);
+ assert.equal(duplicate.data.results[0].id,first.data.results[0].id);
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM topics').get().n,1);
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM comments').get().n,2);
+ const stored=DB.db.prepare('SELECT title,body,source_lang,content_hash FROM topics').get();
+ assert.equal(stored.title,'BACK  pain');
+ assert.equal(stored.body,'Pain\nwhen sitting');
+ assert.equal(stored.source_lang,'en');
+ assert.equal(stored.content_hash.length,64);
+ assert.throws(()=>DB.db.prepare("INSERT INTO topics(id,author_id,title,body,status,content_hash) VALUES('duplicate','system-unknown-import','X','X','published',?)").run(stored.content_hash));
+});
+test('same batch repeated topic is skipped, including replies; normal topic writes participate in fingerprint dedup',async()=>{
+ const {imp,DB,topic,call}=await importFixture();
+ const a=await imp('/api/import/batch',{topics:[{title:'ABC',body:'DEF',comments:[{body:'Only this reply'}]},{title:'abc',body:'def',comments:[{body:'Skipped reply'}]}]});
+ assert.equal(a.status,201);assert.equal(a.data.imported.topics,1);assert.equal(a.data.skipped.topics,1);assert.equal(a.data.imported.comments,1);
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM topics').get().n,1);assert.equal(DB.db.prepare('SELECT count(*) n FROM comments').get().n,1);
+ const duplicateUser=await call('/api/topics','POST',{title:'Abc',body:'Def'},'bob');assert.equal(duplicateUser.status,409);
+ const fresh=await topic('Another','Other body');
+ const edited=await call('/api/topics/'+fresh,'PATCH',{title:'ABC',body:'DEF'},'alice');assert.equal(edited.status,409);
+});
+test('source sync receipt excludes a thread forever even after its replies change',async()=>{
+ const {imp,DB}=await importFixture();
+ const a=await imp('/api/import/topics',{title:'Snapshot',body:'Original content',comments:[{body:'At first sync'}]});
+ const id=a.data.results[0].id;
+ DB.db.prepare("INSERT INTO topic_sync_receipts(source_topic_id,production_topic_id,content_hash,transferred_comments) SELECT id,id,content_hash,1 FROM topics WHERE id=?").run(id);
+ await imp('/api/import/comments',{topic_id:id,body:'Added later'});
+ const pending=DB.db.prepare("SELECT count(*) n FROM topics t WHERE author_id='system-unknown-import' AND status='published' AND NOT EXISTS(SELECT 1 FROM topic_sync_receipts s WHERE s.source_topic_id=t.id)").get();
+ assert.equal(pending.n,0);
+ assert.equal(DB.db.prepare('SELECT transferred_comments FROM topic_sync_receipts WHERE source_topic_id=?').get(id).transferred_comments,1);
+});
+test('sync helper fingerprint matches Worker and maintains parent-first ordering without copying hidden-parent branches',async()=>{
+ const {topicFingerprint}=await import('../.test-build/core.js');
+ const {fingerprint,sortComments}=await import('../scripts/sync-preview-to-production.mjs');
+ assert.equal(fingerprint('  BACK  Pain ',' A\nB '),await topicFingerprint('back pain','a b'));
+ const source=[{id:'child',parent_comment_id:'root',status:'published'},{id:'hiddenChild',parent_comment_id:'hidden',status:'published'},{id:'root',parent_comment_id:null,status:'published'},{id:'hidden',parent_comment_id:null,status:'hidden'}];
+ assert.deepEqual(sortComments(source).map(x=>x.id),['root','child']);
+});
