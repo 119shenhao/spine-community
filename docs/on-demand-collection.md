@@ -2,7 +2,7 @@
 
 ## 在 ChatGPT 里调用
 
-- **执行 Spine 论坛采集**：检查全部六个来源，对已接通的来源采集，默认每站最多新增 7 篇。
+- **执行 Spine 论坛采集**：检查全部六个来源，对已接通的来源采集，每站以新增 10 篇为目标。
 - **执行 120ask 采集，优先腰椎术后康复**：只采指定来源，主题可随指令变化。也可以指定 Patient.info 或寻医问药。
 - **执行 39 问医生和 HealthUnlocked 采集**：仅处理这两个来源。39 问医生可自动补充候选，HealthUnlocked 用公开原帖链接作为候选。
 - **检查 39 问医生、HealthUnlocked、Mayo 的采集状态**：仅检查，不认领、不入库。
@@ -26,7 +26,7 @@
 1. 先通过 GitHub 读取私有仓库 `119shenhao/spine-community` 的 `main/AGENTS.md`、[采集 SOP](ai-collector-sop.md)、[采集 API](collection-api.md)、[去重与同步规则](topic-dedup-and-sync.md) 和本文。代码及任务配置位于 `feature/v1-community-build-20261106`。
 2. 用 GitHub 连接器读取开发分支上的 `.github/spine-collector-request.json`，取得其当前 blob SHA。用 `github_update_file` 提交一条新请求，`request_id` 每次唯一。仅修改该请求文件，脚本和工作流已固定。请求提交触发 `.github/workflows/spine-collector-on-demand.yml`。不需要 Actions dispatch 权限。
 3. 新搜索前，先以 `mode: "inspect"`、空 `candidates` 获取选定来源的完整排除清单并确认预览接口可达。检查 Actions 日志中的 `plan` 和 `site_error`。已接通的来源再用搜索工具找公开候选链接，使用搜索结果的 URL 和简要元数据筛选，正文和回复由采集器在获准认领后打开。若只有候选检查需求，可把链接交给 `inspect` 对照排除清单。39 问医生的只读检查额外探测十页官方目录。
-4. 只有用户要求采集时，才提交新的 `mode: "collect"` 请求，选定 `sites` 并填入对应 `candidates`。每站最多提交 12 个规范 HTTPS 主题链接，39 问医生可提供最多 36 个。39 问医生未提供候选时，采集器会在读取排除清单后从目录选择最多 36 个新候选。每站 `limit` 为 1–7 个新增主题，重复和不合格候选不计入新增。工具在搜索后再次完整读取 exclusions，过滤、逐帖 claim，只处理 granted，原子 complete，失败 release。成功后回读标题、正文、原文语言、回复数量及父子关系，并复核 completed 标记。
+4. 只有用户要求采集时，才提交新的 `mode: "collect"` 请求，选定 `sites` 并填入对应 `candidates`。每站最多提交 12 个规范 HTTPS 主题链接，39 问医生可提供最多 36 个。39 问医生未提供候选时，采集器会在读取排除清单后从目录选择最多 36 个新候选。每站 `limit` 默认为 10，可显式设为 1–10。重复和不合格候选不计入新增。符合条件的候选少于目标时，报告实际新增数量。工具在搜索后再次完整读取 exclusions，过滤、逐帖 claim，只处理 granted，原子 complete，失败 release。成功后回读标题、正文、原文语言、回复数量及父子关系，并复核 completed 标记。
 5. 通过 GitHub Actions 查询 **对应提交 SHA** 的运行，等待完成后读取 `collector` job 的日志。按站报告候选、已排除、认领、已验证新增帖与回复、重复、待核对和跳过原因。逐帖报告 `imported` 事件的来源链接及 `topic_id`。带 `unverified` 或 `mark_failures` 的条目必须如实标出。若需再次运行，提交新的请求并重新去重。
 
 最小请求示例（仅检查）：
@@ -37,7 +37,7 @@
   "mode": "inspect",
   "sites": ["ask39", "healthunlocked", "mayoclinic"],
   "candidates": {},
-  "limit": 7
+  "limit": 10
 }
 ```
 
