@@ -1,6 +1,12 @@
 name: Production D1
 
 on:
+  # ChatGPT can submit an approved request through a docs-only commit.
+  # The request file is excluded from Cloudflare production builds.
+  push:
+    branches: [main]
+    paths:
+      - docs/release-requests/production-d1.json
   workflow_dispatch:
     inputs:
       operation:
@@ -24,8 +30,66 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  dispatch-chatgpt-request:
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Read reviewed ChatGPT release request
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: docs/release-requests/production-d1.json
+      - name: Validate request without using production secrets
+        id: request
+        shell: bash
+        env:
+          MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,os,re
+          from pathlib import Path
+          data=json.loads(Path('docs/release-requests/production-d1.json').read_text('utf8'))
+          op=data.get('operation')
+          sha=data.get('migration_sha')
+          if op not in ('inspect','apply') or not isinstance(sha,str) or not re.fullmatch('[0-9a-f]{40}',sha):
+              raise SystemExit('Invalid operation or migration SHA')
+          if os.environ['MESSAGE'] != f'chatgpt-release-d1 {op} {sha}':
+              raise SystemExit('Request must match the explicit GitHub commit message')
+          if data.get('repository')!='119shenhao/spine-community' or data.get('production_db_id')!='5919ff78-b8fc-46ab-85f0-01fe5e6a41b0':
+              raise SystemExit('Wrong repository or production D1 target')
+          confirmation = data.get('confirmation','')
+          if op=='apply' and (confirmation!='spine-community-db' or data.get('user_authorized') is not True):
+              raise SystemExit('Production apply requires a specific approved request')
+          if op=='inspect' and confirmation:
+              raise SystemExit('Inspect must not carry a production write confirmation')
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f:
+              print('operation='+op,file=f)
+              print('migration_sha='+sha,file=f)
+              print('confirmation='+confirmation,file=f)
+          print('Validated '+op+' request for reviewed SHA '+sha)
+          PY
+      - name: Dispatch the existing Production D1 workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OPERATION: ${{ steps.request.outputs.operation }}
+          MIGRATION_SHA: ${{ steps.request.outputs.migration_sha }}
+          CONFIRMATION: ${{ steps.request.outputs.confirmation }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run production-d1.yml --repo "$GITHUB_REPOSITORY" --ref main \
+            --field "operation=$OPERATION" --field "migration_sha=$MIGRATION_SHA" \
+            --field "confirmation=$CONFIRMATION"
+          echo "Dispatched existing Production D1: $OPERATION, SHA $MIGRATION_SHA. This relay succeeding does not mean migration succeeded." >> "$GITHUB_STEP_SUMMARY"
+
   production-d1:
-    if: ${{ github.ref == 'refs/heads/main' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
