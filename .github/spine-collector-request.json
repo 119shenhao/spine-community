@@ -1,0 +1,27 @@
+{
+  "request_id": "setup-read-only-20261107",
+  "mode": "inspect",
+  "sites": [
+    "120ask",
+    "xywy",
+    "patientinfo",
+    "ask39",
+    "healthunlocked",
+    "mayoclinic"
+  ],
+  "candidates": {
+    "xywy": [
+      "https://club.xywy.com/wenda/198223887.htm"
+    ],
+    "patientinfo": [
+      "https://patient.info/forums/discuss/cervical-stenosis-3-level-acdf-563724"
+    ],
+    "ask39": [
+      "https://ask.39.net/question/38519664.html"
+    ],
+    "healthunlocked": [
+      "https://healthunlocked.com/painconcern/posts/153215969/piriformis-pain"
+    ]
+  },
+  "limit": 7
+}
