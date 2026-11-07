@@ -1,0 +1,18 @@
+name: One-time real collector end-to-end verification
+on:
+  push:
+    branches: [feature/v1-community-build-20261106]
+    paths: [.github/workflows/collector-full-e2e-once.yml]
+permissions:
+  contents: read
+jobs:
+  real-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Full preview D1 collection, comment tree and dedup test
+        run: node scripts/e2e-collector-preview.mjs
