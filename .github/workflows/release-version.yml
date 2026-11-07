@@ -1,0 +1,355 @@
+# Maintained on main after review. Building this workflow does not itself release anything.
+name: 发布新版本，从开发环境到生产环境
+run-name: 发布新版本 / ${{ inputs.operation }} / ${{ inputs.candidate_branch }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "Inspect only (default), or release to production"
+        type: choice
+        options: [inspect, release]
+        default: inspect
+        required: true
+      candidate_branch:
+        description: "Existing reviewed feature/* or release/* branch"
+        type: string
+        default: feature/v1-community-build-20261106
+        required: true
+      candidate_sha:
+        description: "For release: exact reviewed 40-character candidate commit SHA"
+        type: string
+        required: false
+      confirmation:
+        description: "For release only, type: RELEASE spine-community"
+        type: string
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+  checks: read
+
+concurrency:
+  group: spine-community-release-version-production
+  cancel-in-progress: false
+
+jobs:
+  test-candidate:
+    if: github.repository == '119shenhao/spine-community' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      candidate_sha: ${{ steps.lock.outputs.candidate_sha }}
+    steps:
+      - name: Verify branch name and release approval
+        shell: bash
+        env:
+          CANDIDATE: ${{ inputs.candidate_branch }}
+          OPERATION: ${{ inputs.operation }}
+          EXPECTED_SHA: ${{ inputs.candidate_sha }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$CANDIDATE" =~ ^(feature|release)/[a-zA-Z0-9._/-]+$ ]] || [[ "$CANDIDATE" == *..* ]] || [[ "$CANDIDATE" == *//* ]]; then
+            echo "::error::Candidate must be an existing feature/* or release/* branch."
+            exit 1
+          fi
+          if [[ "$OPERATION" == release ]]; then
+            if [[ ! "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || [[ "$CONFIRMATION" != 'RELEASE spine-community' ]]; then
+              echo "::error::Release requires an exact candidate SHA and explicit production confirmation."
+              exit 1
+            fi
+          elif [[ "$OPERATION" != inspect ]]; then
+            exit 1
+          fi
+      - name: Check out candidate without persisting credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.candidate_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Lock candidate commit
+        id: lock
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ inputs.candidate_sha }}
+          OPERATION: ${{ inputs.operation }}
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          if [[ "$OPERATION" == release && "$sha" != "$EXPECTED_SHA" ]]; then
+            echo "::error::The candidate branch changed. Review the new SHA before releasing."
+            exit 1
+          fi
+          echo "candidate_sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Candidate commit: $sha" >> "$GITHUB_STEP_SUMMARY"
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install candidate dependencies (no production secrets in this job)
+        run: npm ci --no-audit --no-fund
+      - name: Verify candidate TypeScript and integration tests
+        run: npm run verify
+
+  plan-and-release:
+    needs: test-candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      merge_sha: ${{ steps.merge.outputs.merge_sha }}
+      released: ${{ steps.merge.outputs.released }}
+    env:
+      PROD_DB_NAME: spine-community-db
+      PROD_DB_ID: 5919ff78-b8fc-46ab-85f0-01fe5e6a41b0
+      PREVIEW_DB_ID: 4362537a-5748-4a05-b0c4-219c3db36996
+      ACCOUNT_ID: 289976272520a38732bef34108585e11
+    steps:
+      - name: Check out locked candidate migration and binding files only
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.test-candidate.outputs.candidate_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          sparse-checkout: |
+            migrations/v1
+            wrangler.jsonc
+      - name: Inspect reviewed SQL, environment bindings, and production D1 (read only)
+        id: plan
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PROD_D1_API_TOKEN }}
+          OPERATION: ${{ inputs.operation }}
+          CANDIDATE_SHA: ${{ needs.test-candidate.outputs.candidate_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          git fetch --no-tags origin main
+          python3 - <<'PY'
+          import json, os, re, subprocess
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+          from urllib.error import URLError, HTTPError
+
+          def stop(message):
+              raise SystemExit(message)
+
+          config = json.loads(Path("wrangler.jsonc").read_text())
+          prod = config.get("d1_databases", [])
+          preview = config.get("previews", {}).get("d1_databases", [])
+          if len(prod) != 1 or prod[0].get("database_id") != os.environ["PROD_DB_ID"] or prod[0].get("binding") != "DB":
+              stop("Production D1 binding differs from the approved database.")
+          if not any(x.get("database_id") == os.environ["PREVIEW_DB_ID"] and x.get("binding") == "DB" for x in preview):
+              stop("Preview D1 binding is incorrect; abort release.")
+          if any(x.get("database_id") == os.environ["PROD_DB_ID"] for x in preview):
+              stop("Preview resources point at production D1; abort release.")
+          if config.get("vars", {}).get("IMPORT_ENABLED") == "true":
+              stop("Import must never be enabled in production.")
+          if prod[0].get("migrations_dir") != "migrations/v1":
+              stop("Production migration directory differs from the reviewed path.")
+
+          source = Path("migrations/v1")
+          files = sorted(source.glob("*.sql"))
+          if not files or any(not f.is_file() or f.is_symlink() or not re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", f.name) for f in files):
+              stop("Missing, symlinked or invalid SQL migration.")
+          if len({f.name[:4] for f in files}) != len(files):
+              stop("Duplicate SQL migration version.")
+          # An already published migration is immutable, even if production has not yet run it.
+          main_list = subprocess.run(["git", "ls-tree", "-r", "--name-only", "origin/main", "migrations/v1"], capture_output=True, text=True, check=True).stdout.splitlines()
+          for name in main_list:
+              candidate = Path(name)
+              if not candidate.is_file():
+                  stop("Candidate removed a migration present on main: " + name)
+              old = subprocess.run(["git", "show", "origin/main:" + name], capture_output=True, check=True).stdout
+              if old != candidate.read_bytes():
+                  stop("Candidate modified an existing main migration: " + name)
+
+          token = os.environ.get("CLOUDFLARE_API_TOKEN", "")
+          if not token:
+              stop("Missing CLOUDFLARE_PROD_D1_API_TOKEN; no production writes attempted.")
+          root = "https://api.cloudflare.com/client/v4/accounts/" + os.environ["ACCOUNT_ID"] + "/d1/database/" + os.environ["PROD_DB_ID"]
+          headers = {"Authorization": "Bearer " + token, "Content-Type": "application/json"}
+          def api(suffix="", sql=None):
+              payload = json.dumps({"sql": sql}).encode() if sql else None
+              try:
+                  with urlopen(Request(root + suffix, data=payload, headers=headers), timeout=30) as reply:
+                      response = json.load(reply)
+              except (HTTPError, URLError, TimeoutError, ValueError):
+                  stop("Cloudflare D1 inspection request failed.")
+              if not response.get("success"):
+                  stop("Cloudflare D1 rejected inspection request.")
+              return response["result"]
+          info = api()
+          if info.get("uuid") != os.environ["PROD_DB_ID"] or info.get("name") != os.environ["PROD_DB_NAME"]:
+              stop("Production D1 identity mismatch.")
+          def query(sql):
+              rows = api("/query", sql)
+              if len(rows) != 1 or not rows[0].get("success"):
+                  stop("D1 query did not succeed.")
+              return rows[0]["results"]
+          tables = {r["name"] for r in query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT GLOB 'sqlite_*' AND name NOT GLOB '_cf_*'")}
+          applied = [r["name"] for r in query("SELECT name FROM d1_migrations ORDER BY id")] if "d1_migrations" in tables else []
+          names = [f.name for f in files]
+          if applied != names[:len(applied)]:
+              stop("Production migration sequence differs from the candidate; refuse release.")
+          if not applied and tables - {"d1_migrations"}:
+              stop("Production has unmanaged tables; refuse release.")
+          if applied and not {"users", "topics", "comments", "settings", "auth_states"} <= tables:
+              stop("Required production tables are missing; refuse release.")
+          pending = names[len(applied):]
+          work = Path(os.environ["RUNNER_TEMP"]) / "release-d1"
+          work.mkdir(parents=True, exist_ok=True)
+          (work / "wrangler.json").write_text(json.dumps({"name": "spine-community-release", "d1_databases": [{
+              "binding": "PRODUCTION_DB", "database_name": os.environ["PROD_DB_NAME"],
+              "database_id": os.environ["PROD_DB_ID"], "migrations_dir": str(source.resolve())
+          }]}))
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              print("apply_needed=" + ("true" if pending else "false"), file=output)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as report:
+              print("### Release plan (read-only)\n", file=report)
+              print("- Operation: " + os.environ["OPERATION"], file=report)
+              print("- Candidate SHA: " + os.environ["CANDIDATE_SHA"], file=report)
+              print("- Production migrations applied: " + (", ".join(applied) or "(none)"), file=report)
+              print("- Pending structure and foundation-data SQL: " + (", ".join(pending) or "(none)"), file=report)
+              print("- Business posts, replies, follows, and accounts: never copied.\n", file=report)
+          print("Read-only D1 plan passed; pending migrations:", pending)
+          PY
+      - name: Stop here for inspect (no production writes)
+        if: inputs.operation == 'inspect'
+        run: echo "Inspection complete. No migrations, merges or deployments performed."
+      - name: Confirm no content sync or standalone D1 operation is running
+        if: inputs.operation == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          runs="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?status=in_progress&per_page=100")"
+          RUNS="$runs" python3 - <<'PY'
+          import json, os
+          entries = json.loads(os.environ["RUNS"])["workflow_runs"]
+          excluded = ("approved-preview-to-production-20261107.yml", "production-d1.yml", "sync-posts.yml")
+          conflicting = [x for x in entries if x["id"] != int(os.environ["GITHUB_RUN_ID"]) and any(item in (x.get("path") or "") for item in excluded)]
+          if conflicting:
+              raise SystemExit("A production content sync or D1 migration is still active; release blocked: " + str([x["html_url"] for x in conflicting]))
+          PY
+      - name: Create or reuse production code PR, checking its exact candidate SHA
+        if: inputs.operation == 'release'
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ inputs.candidate_branch }}
+          CANDIDATE_SHA: ${{ needs.test-candidate.outputs.candidate_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --base main --head "$BRANCH" --state open --json number --jq '.[0].number // empty')"
+          if [[ -z "$pr" ]]; then
+            gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$BRANCH"               --title "Release reviewed spine-community version"               --body "Created by the approved Release Version workflow. Exact candidate: $CANDIDATE_SHA. D1 migration precedes merge; production data is not copied."
+            pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --base main --head "$BRANCH" --state open --json number --jq '.[0].number // empty')"
+          fi
+          test -n "$pr"
+          actual="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr" --jq '.head.sha')"
+          test "$actual" = "$CANDIDATE_SHA" || { echo "::error::PR source changed after verification."; exit 1; }
+          echo "pr_number=$pr" >> "$GITHUB_OUTPUT"
+          echo "Release PR: #$pr" >> "$GITHUB_STEP_SUMMARY"
+      - name: Set up Node for the isolated production migration tool
+        if: inputs.operation == 'release' && steps.plan.outputs.apply_needed == 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Install pinned Wrangler independently of candidate code
+        if: inputs.operation == 'release' && steps.plan.outputs.apply_needed == 'true'
+        run: npm install --prefix "$RUNNER_TEMP/release-d1" --no-audit --no-fund wrangler@4.135.0
+      - name: Record production restore bookmark and apply approved migrations
+        if: inputs.operation == 'release' && steps.plan.outputs.apply_needed == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PROD_D1_API_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/release-d1"
+          wrangler=./node_modules/.bin/wrangler
+          bookmark="$("$wrangler" d1 time-travel info "$PROD_DB_NAME" --config wrangler.json --json)"
+          value="$(jq -er '.bookmark | select(type=="string" and length>0)' <<< "$bookmark")"
+          printf '\nProduction restore bookmark: `%s`\n' "$value" >> "$GITHUB_STEP_SUMMARY"
+          "$wrangler" d1 migrations apply "$PROD_DB_NAME" --remote --config wrangler.json
+          echo "Production migration command completed. Check the final summary before announcing success." >> "$GITHUB_STEP_SUMMARY"
+      - name: Merge the reviewed PR only if source SHA remains locked
+        if: inputs.operation == 'release'
+        id: merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+          CANDIDATE_SHA: ${{ needs.test-candidate.outputs.candidate_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.head.sha')"
+          if [[ "$actual" != "$CANDIDATE_SHA" ]]; then
+            echo "::error::PR changed; DB migration (if any) is retained. Do not merge an unreviewed SHA."
+            exit 1
+          fi
+          result="$(gh api --method PUT "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/merge"             -f sha="$CANDIDATE_SHA" -f merge_method=merge)"
+          sha="$(jq -er '.sha' <<< "$result")"
+          test "$(jq -r '.merged' <<< "$result")" = true
+          echo "released=true" >> "$GITHUB_OUTPUT"
+          echo "merge_sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Merged production code commit: $sha" >> "$GITHUB_STEP_SUMMARY"
+
+  verify-production:
+    needs: plan-and-release
+    if: needs.plan-and-release.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Wait for Cloudflare's successful deployment check on the exact merge SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_SHA: ${{ needs.plan-and-release.outputs.merge_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          confirmed=false
+          for attempt in {1..60}; do
+            checks="$(gh api "repos/$GITHUB_REPOSITORY/commits/$MERGE_SHA/check-runs?per_page=100")"
+            state="$(CHECKS="$checks" python3 - <<'PY'
+          import json, os
+          checks = json.loads(os.environ["CHECKS"]).get("check_runs", [])
+          cloudflare = [x for x in checks if "cloudflare" in ((x.get("name") or "") + " " + ((x.get("app") or {}).get("slug") or "")).lower()]
+          if not cloudflare:
+              print("missing")
+          elif any(x.get("conclusion") in ("failure", "cancelled", "timed_out", "action_required") for x in cloudflare):
+              print("failed")
+          elif any(x.get("conclusion") == "success" for x in cloudflare):
+              print("success")
+          else:
+              print("pending")
+          PY
+          )"
+            if [[ "$state" == success ]]; then confirmed=true; break; fi
+            if [[ "$state" == failed ]]; then echo "::error::Cloudflare check failed."; exit 1; fi
+            sleep 15
+          done
+          if [[ "$confirmed" != true ]]; then
+            echo "::error::Cannot verify Cloudflare deployed this exact commit. Do not treat a 200 response from old code as release success."
+            exit 1
+          fi
+          echo "Cloudflare deployment check succeeded for commit $MERGE_SHA" >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify production website health
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 30 https://spine.nbn369.com/api/health > "$RUNNER_TEMP/prod-health.json"
+          python3 - <<'PY'
+          import json, os
+          data = json.load(open(os.path.join(os.environ["RUNNER_TEMP"], "prod-health.json")))
+          if data.get("databaseReady") is not True or data.get("status") != "ok":
+              raise SystemExit("Production health or DB readiness failed.")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("Production /api/health: status=ok, databaseReady=true.\n")
+          print("Production health verification passed.")
+          PY
