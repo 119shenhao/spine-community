@@ -119,5 +119,5 @@
 - 开发分支 `feature/v1-community-build-20261106`：`src/content.ts` 的新增／编辑回复 API 保持原路由与鉴权，额外返回可直接渲染的完整评论、审核状态和由 D1 触发器维护的最新主帖回复数；不增加数据库迁移。
 - 前端新增 `public/reply-ui.js`，`public/app.js` 在创建普通评论、楼中楼、楼主进展或编辑回复成功后更新内存数组与对应评论 DOM，局部修正回复计数和进展摘要；不调用整页 `render()`，不修改路由哈希。发表成功后关闭弹窗／清空输入框，滚动聚焦新增回复并在 `public/styles.css` 中短暂高亮。待审核、拦截状态继续按服务端状态显示，不误增加公开回复数量。
 - 新增三组回归测试，覆盖发表普通／楼中楼／进展、编辑的完整 API 数据、局部状态合并及不再整页刷新的前端行为。
-- 最终开发代码提交 `f0977d7613d4cb8348b7ce6c813a2f4a5870e99a`；GitHub Actions [verify](https://github.com/119shenhao/spine-community/actions/runs/42367153766) `completed/success`。Cloudflare Workers Preview 构建已完成并显示 **success**（Build ID `513b7027-7465-4a30-ada3-3f6a24c40272`）；手机端发布、滚动及审核提示的实际交互仍待用户现场验收。
+- 原交互功能提交 `f0977d7613d4cb8348b7ce6c813a2f4a5870e99a`，随后补修 `加载更多` 时按照评论 ID 去重，最终开发代码提交 `b511c721d19093131fb787fac1a371cadfd2560f`。原提交的 GitHub Actions [verify](https://github.com/119shenhao/spine-community/actions/runs/42367153766) 已通过；最终补修提交另有 [verify](https://github.com/119shenhao/spine-community/actions/runs/42367264552) 验证。Cloudflare Workers Preview 构建已完成并显示 **success**（Build ID `513b7027-7465-4a30-ada3-3f6a24c40272`）；手机端发布、滚动及审核提示的实际交互仍待用户现场验收。
 - 无生产 D1 写入、无 schema 变化，未将这次程序代码合并入生产 `main`。
