@@ -33,4 +33,32 @@ jobs:
             echo "Keyless preview collector endpoint was not ready after polling" >&2
             exit 1
           fi
-          echo "Preview read-only smoke passed. No content was written."
+          # Exercise a real six-hour lease against a dedicated synthetic site.
+          # Only metadata is briefly claimed then released; no forum post is created.
+          test_id="ci-$GITHUB_RUN_ID"
+          curl -fsS --connect-timeout 5 --max-time 30 -o claim.json \
+            -H 'Content-Type: application/json' \
+            --data "{\"site\":\"smoke\",\"collector_id\":\"github_ci\",\"source_ids\":[\"$test_id\"]}" \
+            "$base/api/collect/claim"
+          python3 - <<'PY'
+import json,time
+r=json.load(open('claim.json'))
+assert r['site']=='smoke' and r['lease_seconds']==21600, r
+item=r['results'][0]
+assert item['result']=='granted',item
+assert 21580<=item['lease_expires_at']-int(time.time())<=21600,item
+print('Verified real remote claim expires in six hours.')
+PY
+          python3 - <<'PY'
+import json
+r=json.load(open('claim.json'))
+i=r['results'][0]
+json.dump({'site':'smoke','source_id':i['source_id'],'lease_token':i['lease_token']},open('release.json','w'))
+PY
+          curl -fsS --connect-timeout 5 --max-time 30 -o release-response.json \
+            -H 'Content-Type: application/json' \
+            --data-binary @release.json \
+            "$base/api/collect/release"
+          python3 -c 'import json; d=json.load(open("release-response.json")); assert d["status"]=="released"; print("Verified claim released without creating a forum post.")'
+          echo "Preview keyless collection and six-hour remote lease passed."
+
