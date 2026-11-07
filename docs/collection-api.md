@@ -2,11 +2,11 @@
 
 **必须先阅读：[AI 采集工作流程](ai-collector-sop.md)。** 本接口不是爬虫：它帮助多个具备搜索/网页访问能力的 AI 协作排除已采集帖子、抢占采集权、在开发库原子去重入库。没有任何新生产 HTTP 导入端点。
 
-## 地址、鉴权与状态
+## 地址、免密访问与环境限制
 
 - 预览根地址：`https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev`
 - 仅当 Worker 运行在**预览/本地环境**，`IMPORT_DB` 指向隔离开发库，`IMPORT_ENABLED=true`、`COLLECT_ENABLED=true` 时启用。部署了新接口代码的生产环境会在访问数据库之前返回 `403 collect_disabled`；若生产仍使用未包含该路由的旧代码，可能返回 `404 not_found`。
-- 所有 `/api/collect/*` 请求必须有 `Authorization: Bearer <COLLECT_API_TOKEN>`。这是独立的、至少 32 字符的 **Worker Secret**；不放 GitHub、前端代码或 URL。开发者需要先在 Cloudflare 对应的预览部署中**私密配置**它；配置缺失返回 `503 collect_secret_not_configured`，不会降级为匿名访问。
+- **不需要密钥、Bearer、Cookie 或登录**：开发预览环境的四个采集接口可以直接 HTTP 访问。请注意，这是公开可调用的开发入口，任何知道地址的人都可以读取采集 ID、认领帖子或向开发数据库提交内容；保留了请求限流、认领令牌、字段校验、内容指纹和数据库唯一约束，但这些机制**不能替代身份认证、防止所有恶意写入**。不要把预览数据自动发布到生产环境。
 - 请求使用 `Content-Type: application/json`；跨域浏览器请求被拒绝；命令行客户端无需 Origin。响应禁用缓存，始终 JSON。
 - 每个站点有稳定编码：`tieba`、`reddit` 等。`source_id` 是外站原帖唯一 ID，**不传原站整条 URL**；贴吧目前限定 1–20 位数字，Reddit 目前限定 1–15 位小写字母/数字，其他站点仅允许字母、数字、下划线和连字符。
 - 采集 ID/状态存于开发 D1 的 `collect_sources`，仅内部使用，不会自动公开原站链接或假冒原站作者。`topic.content_hash` 是规范化标题＋正文的 SHA-256，与生产一次性同步指纹算法相同。
@@ -23,7 +23,7 @@
   "as_of": 1794038400,
   "items": [
     {"source_id":"123456789","status":"completed","lease_expires_at":null},
-    {"source_id":"123456790","status":"claimed","lease_expires_at":1794040200}
+    {"source_id":"123456790","status":"claimed","lease_expires_at":1794060000}
   ],
   "next_cursor": null
 }
@@ -48,11 +48,11 @@
 ```json
 {
   "site": "tieba",
-  "lease_seconds": 1800,
+  "lease_seconds": 21600,
   "results": [
     {"source_id":"123456789","result":"completed","lease_expires_at":null},
-    {"source_id":"123456790","result":"in_progress","lease_expires_at":1794040200},
-    {"source_id":"123456791","result":"granted","lease_token":"(实际返回的随机临时令牌)","lease_expires_at":1794040200}
+    {"source_id":"123456790","result":"in_progress","lease_expires_at":1794060000},
+    {"source_id":"123456791","result":"granted","lease_token":"(实际返回的随机临时令牌)","lease_expires_at":1794060000}
   ]
 }
 ```
@@ -60,7 +60,7 @@
 - **granted**：才可以完整采集；保管该 ID 对应的 token。
 - **completed**：已处理，不重复采集；不再补采新评论。
 - **in_progress**：别人在采，立即跳过。
-- 同 ID 的并发竞争由 `INSERT ... ON CONFLICT ... WHERE` 的单条 D1 原子语句处理，只有一个赢家；认领超过 1800 秒则允许其他 AI 重新认领，旧 token 无效。没有续租功能。
+- 同 ID 的并发竞争由 `INSERT ... ON CONFLICT ... WHERE` 的单条 D1 原子语句处理，只有一个赢家；认领超过 21600 秒（6 小时）则允许其他 AI 重新认领，旧 token 无效。没有续租功能。
 
 ### ③ 采集完成，原子去重并写入开发库
 
@@ -135,15 +135,13 @@
 }
 ```
 
-成功返回 `{"site":"tieba","source_id":"123456791","status":"released"}`。其他 AI 立刻可重新认领。不是当前 token、锁已过期或帖子已完成时返回 `409 claim_not_owned_or_expired`，不能解锁其他 AI 的任务。崩溃后无须人工释放，30 分钟自动过期。
+成功返回 `{"site":"tieba","source_id":"123456791","status":"released"}`。其他 AI 立刻可重新认领。不是当前 token、锁已过期或帖子已完成时返回 `409 claim_not_owned_or_expired`，不能解锁其他 AI 的任务。崩溃后无须人工释放，6 小时自动过期。
 
 ## 返回错误和恢复
 
 | HTTP | error | 处理建议 |
 | --- | --- | --- |
 | 403 | `collect_disabled` | 非预览地址、开关关闭或无独立 DB；停止，不对生产重试 |
-| 503 | `collect_secret_not_configured` | 运维须为对应预览 Worker 配置专用 Secret |
-| 401 | `collector_unauthorized` | Bearer token 缺失/错误；不得回退为匿名 |
 | 400 | `invalid_site` / `invalid_source_id` | 先从候选 URL 解析正确的站点及原帖 ID |
 | 400 | `duplicate_source_id` / `invalid_claim_batch_size` | 去除同一批次重复 ID；每批至多 30 个 |
 | 400 | `too_many_items` / `reply_depth_exceeded` | 评论总数/楼中楼层级超限 |
@@ -156,22 +154,29 @@
 ## 安全、边界和部署
 
 1. 现有 `/api/import/topics|batch` 未被废弃，但直接调用没有外站 ID，不会自动补全排除列表；多 AI 正式采集统一改用 collect claim → complete。
-2. Worker 不通过公开前端暴露采集状态、原站标识或密钥。预览数据库表 `collect_sources` 不存全文副本；正文只存现有 `topics`、`comments`。
+2. 免密开放意味着预览采集 ID 列表可被任何知道预览地址的人读取，且采集与发帖入口可能被恶意调用；预览数据库表 `collect_sources` 不存全文副本，正文只存现有 `topics`、`comments`。生产环境仍严格拒绝采集路由，生产同步必须人工审查和授权。
 3. 现有 Cloudflare **生产 D1 不得自动应用新迁移**。迁移文件是 `migrations/v1/0005_collect_coordination.sql`，仅开发预览构建流水线在确认环境后执行。生产代码中 `COLLECT_ENABLED` 未开启，API 禁止访问。
-4. 新代码是开发分支 `feature/v1-community-build-20261106`；文档固定在 `main/docs`。运行期间不得把真实密钥直接写到 GitHub Actions 日志或公开聊天中。
+4. 新代码在开发分支 `feature/v1-community-build-20261106`；文档固定在 `main/docs`。客户端不需访问密钥，但 `claim` 返回的 `lease_token` 是该帖子的临时认领凭据，应避免出现在日志或公开聊天中。
 5. 若 AI 只具有文本聊天能力，应由你提供具备网络/API 动作能力的外部采集器；拿到本文不意味着 AI 真的可以替你发 HTTP 请求。
 
 ## 测试内容
 
-自动集成测试覆盖：默认拒绝生产、缺失/错误密钥、分页、租约、并发认领、释放重领、锁过期、旧 token 失效、完成后即时排除、主帖和楼中楼原语种保留、跨来源相同正文去重、直接导入旧帖关联、同一完成请求重放、事务故障回滚、数量限制与输入校验。
+自动集成测试覆盖：默认拒绝生产、预览免密请求、6 小时租约、分页、并发认领、释放重领、锁过期、旧 token 失效、完成后即时排除、主帖和楼中楼原语种保留、跨来源相同正文去重、直接导入旧帖关联、同一完成请求重放、事务故障回滚、数量限制与输入校验。
 
-Cloudflare 远程环境还需要配置 Secret 并独立验证部署；本地/CI 测试通过不等于已经进行了生产同步。不会把测试帖写入正式数据库。
+Cloudflare 预览不再需要配置采集 Secret；本地/CI 测试通过不等于已经进行了生产同步。不会把测试帖写入正式数据库。
 
 [AI 操作规程](ai-collector-sop.md) · [原导入接口](import-api.md) · [一次性主帖跨库同步](topic-dedup-and-sync.md)
 
-## 2026-11-07 验证记录（实际执行）
+## 2026-11-07 旧版验证记录（采用密钥的历史版本，已被新版取代）
 
 - [GitHub Actions TypeScript + SQLite 集成测试](https://github.com/119shenhao/spine-community/actions/runs/42330870727)：**success**。包括生产隔离、专用鉴权、排除清单分页、并发认领、锁过期与释放、英文内容及楼中楼原样保存、跨来源指纹去重、崩溃/写入失败回滚、旧内容关联、重复完成的幂等验证。
 - [Cloudflare Workers 预览构建](https://github.com/119shenhao/spine-community/runs/128276961775)：**success**，开发分支提交 `b46baa719a5a970d39347f9e7eb29f2e37ff53bd`；预览构建原有流程会针对独立 preview D1 应用迁移。
 - [预览站远程只读 HTTP 验证](https://github.com/119shenhao/spine-community/actions/runs/42330870725)：**success**。`/api/health` 确认数据库可用；无 Bearer 访问 `/api/collect/exclusions` 返回 `503 collect_secret_not_configured`，证明新路由已部署且不会匿名读取采集清单。
 - **未进行远程带密钥的 claim/complete 写入验收**：当前 Cloudflare 预览环境未设置 `COLLECT_API_TOKEN`，需要通过 Cloudflare 安全配置填入至少 32 字符的专用密钥，再以虚构、明确的测试记录进行远程闭环验收，测试后清理这些记录。生产 D1 完全不参与本轮验证。
+
+## 2026-11-07 最新规则（免密版本）
+
+- **免密访问：** 不再要求 `COLLECT_API_TOKEN`，仅通过预览域名和开关限制采集 API；命令行调用不需要 Authorization。使用真实的 `lease_token` 仍是完成、释放指定帖子的必要条件，它不是全局密钥。
+- **采集认领期：** `lease_seconds=21600`（6 小时）。认领过期后新采集者可以接替，已有旧认领在过期前仍按其原截止时间生效。
+- **保留保护：** 原子认领、输入限制、请求限流、主帖唯一指纹及事务回滚；不保证能防止恶意的外部匿名访问者占用采集位或向预览库提交垃圾内容。生产 DB 不开放这些采集接口。
+- 以前的密钥版验证记录仅用于历史追溯，不再代表当前接口。最新测试结果以开发分支工作流记录为准。
