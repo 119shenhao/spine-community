@@ -81,5 +81,5 @@
 - GitHub Actions [42372655830](https://github.com/119shenhao/spine-community/actions/runs/42372655830) 在同步导入步骤结束为 `failure`；本次前置 48 项测试、只读 D1 检查和生产 Time Travel 恢复点记录均成功。
 - 第一批正式同步已在日志中确认成功：`{"mode":"apply","examined":100,"new":100,"existing":0,"comments":657,"marked":100}`。即已同步并核验 **100 篇主帖、657 条评论（含楼中楼），开发库记录 100 条回执**；这批不应再复制。
 - 第二批在为来源帖 `a27c9935-bf4e-42a8-b543-c56e154d276d` 生成 SQL 时失败，报错 `Unsupported comment kind or author`（`scripts/sync-preview-to-production.mjs:97`）。限制条件是来源评论必须同时满足 `kind='regular'` 和 `author_id='system-unknown-import'`。日志无法区分究竟是类型不符、作者不符，还是两者皆有；**不得猜测或将真实用户评论强行改成未知用户**。
-- 第二批的此异常发生在 `buildInserts` 阶段，早于该帖的 `writeFile(PRODUCTION,...)` 调用。因此没有证据显示第二批已写入该出错帖；首批生产写入和回执已由日志确认。**整轮任务未完成，不得宣称剩余待同步主帖为零。**
+- 第二批的此异常发生在 `buildInserts` 阶段，早于该帖的 `writeFile(PRODUCTION,...)` 调用。因此没有证据显示第二批已写入该出错帖，**但第二批在碰到这条评论之前可能已逐帖成功写入生产并记录若干回执**，由于整批汇总未输出，第二批具体写入数量尚不明确；首批生产写入和回执已由日志确认。**整轮任务未完成，不得宣称剩余待同步主帖为零。**
 - 下一步：先**只读检查**该主题的源评论 `kind`、`author_id`、`status`、`parent_comment_id` 和各层父子关系；按既定规则仅保留“未知用户”的普通已发布评论，以及其同样符合条件的祖先回复；其他用户回复和不适用类型跳过，不冒充作者、不破坏楼中楼结构。补充对应边界测试、再跑只读计划与安全检查，审核后才续跑。保留此前 100 条同步回执，继续采用幂等查验避免重复写生产。
