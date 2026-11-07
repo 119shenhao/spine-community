@@ -30,6 +30,14 @@ export function textField(value: unknown, min: number, max: number, field='body'
 export const lang = (v: unknown) => typeof v==='string'&&/^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$/.test(v)?v:'und';
 export const cookie = (r: Request,n: string) => r.headers.get('cookie')?.split(';').map(x=>x.trim()).find(x=>x.startsWith(n+'='))?.slice(n.length+1)||'';
 export async function hash(v: string) {return [...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(v)))].map(x=>x.toString(16).padStart(2,'0')).join('');}
+// A stable fingerprint for topic deduplication across import batches and D1 databases.
+// Normalize only the fingerprint input; store the original text and language untouched.
+export function normalizeTopicText(v:string):string {
+  return v.normalize('NFKC').replace(/\s+/gu,' ').trim().toLowerCase();
+}
+export async function topicFingerprint(title:string,body:string):Promise<string> {
+  return hash('spine-topic-v1\n'+normalizeTopicText(title)+'\n'+normalizeTopicText(body));
+}
 export const b64 = (s: Uint8Array) => btoa(String.fromCharCode(...s)).replace(/=/g,'').replace(/\+/g,'-').replace(/\//g,'_');
 export const randomToken = () => b64(crypto.getRandomValues(new Uint8Array(32)));
 export function sameOrigin(req: Request) {
