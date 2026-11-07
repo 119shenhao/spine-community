@@ -8,9 +8,9 @@ permissions: {}
 jobs:
   inspect:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 8
     steps:
-      - name: Inspect authorized source pages after claim
+      - name: Inspect public source pages after claiming
         shell: bash
         run: |
           set -euo pipefail
@@ -95,10 +95,6 @@ jobs:
               print('Page headings',site,source_id,[h.get_text(' ',strip=True)[:90] for h in soup.select('h1,h2')[:4]],flush=True)
               print('Page metadata',site,source_id,[(m.get('name'),m.get('content','')[:90]) for m in soup.select('meta[name=description],meta[property="og:title"]')[:3]],flush=True)
               print('Relevant structure',site,source_id,[(el.name,' '.join(el.get('class',[]))[:100],len(el.get_text(' ',strip=True))) for el in soup.select('article,.entry-content,[class*=post],[class*=comment],[class*=reply],[class*=answer],[class*=question],[id*=comment],[id*=answer]')[:30]],flush=True)
-    scripts=' '.join(s.get_text() for s in soup.select('script:not([src])'))
-    html=str(soup)
-    print('Reply markers',site,source_id,{term:(html.lower().count(term)) for term in ('reply','comment','answer','question','回复','追问','response','thread')},'inline scripts',len(soup.select('script:not([src])')),'schema answer',('acceptedanswer' in html.lower() or 'suggestedanswer' in html.lower()),flush=True)
-    print('Script URLs',site,source_id,[(urlsplit(s['src']).hostname,urlsplit(s['src']).path) for s in soup.select('script[src]')[:20]],flush=True)
               print('Site markers',site,source_id,'scripts',[(s.get('src') or '')[-100:] for s in soup.select('script[src]')[:8]],flush=True)
              finally:
               d=api('/api/collect/release',{'site':site,'source_id':source_id,'lease_token':record['lease_token']})
