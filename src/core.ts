@@ -4,7 +4,7 @@ export interface Env {
   TRANSLATION_ENABLED?: string; TRANSLATION_DAILY_LIMIT?: string; TRANSLATION_MONTHLY_LIMIT?: string;
   ANALYTICS_SALT?: string; APP_ENV?: string; DEV_AUTH?: string;
   IMPORT_DB?: D1Database; IMPORT_ENABLED?: string;
-  COLLECT_ENABLED?: string; COLLECT_API_TOKEN?: string;
+  COLLECT_ENABLED?: string;
 }
 export type Row = Record<string, any>;
 export const locales = ['en','zh-CN','es','pt-BR','de','fr','ja'];
