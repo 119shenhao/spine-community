@@ -14,14 +14,28 @@ jobs:
         run: |
           python3 - <<'PY'
           import json
+          import subprocess
           from urllib.parse import urlencode
-          from urllib.request import urlopen
+          from pathlib import Path
           base = 'https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev/api/collect/exclusions'
           params = {'site': '120ask', 'limit': 200}
           seen = set()
+          def get(url, path):
+              return subprocess.check_output(['curl', '-sS', '--connect-timeout', '5', '--max-time', '15', '-o', path, '-w', '%{http_code}', url], text=True)
+          health = get(base.split('/api/')[0] + '/api/health', 'health.json')
+          try:
+              info = json.loads(Path('health.json').read_text())
+              print('Preview health HTTP', health, {k: info.get(k) for k in ('databaseReady', 'importEnabled')})
+          except ValueError:
+              print('Preview health HTTP', health, 'non-JSON')
           while True:
-              with urlopen(base + '?' + urlencode(params), timeout=15) as response:
-                  page = json.load(response)
+              status = get(base + '?' + urlencode(params), 'exclusions.json')
+              try:
+                  page = json.loads(Path('exclusions.json').read_text())
+              except ValueError:
+                  raise SystemExit('Exclusions HTTP ' + status + ', non-JSON')
+              if status != '200':
+                  raise SystemExit('Exclusions HTTP ' + status + ', error=' + str(page.get('error')))
               if page['site'] != '120ask':
                   raise ValueError('Wrong site in exclusion response')
               print(json.dumps([(item['source_id'], item['status']) for item in page['items']]), flush=True)
