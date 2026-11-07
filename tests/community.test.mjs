@@ -403,3 +403,40 @@ test('collection input validation, origin checks, ID validation and comment dept
  assert.equal(bad.status,400);assert.equal(bad.data.error,'reply_depth_exceeded');
  assert.equal(DB.db.prepare('SELECT count(*) n FROM topics').get().n,0);
 });
+
+
+test('numeric-leading source site 120ask supports exclusions, claim, complete and release without changing existing site rules',async()=>{
+ const {collect,claim,exclude,DB}=await collectFixture();
+ const before=await exclude('120ask');assert.equal(before.status,200);
+ assert.deepEqual(before.data.items,[]);
+ const claimed=await claim('120ask',['481624202','481624203'],'grok');
+ assert.equal(claimed.status,200,JSON.stringify(claimed));
+ assert(claimed.data.results.every(x=>x.result==='granted'));
+ assert.equal(claimed.data.lease_seconds,21600);
+ const active=await exclude('120ask');
+ assert.deepEqual(active.data.items.map(x=>x.source_id),['481624202','481624203']);
+ assert(active.data.items.every(x=>x.status==='claimed'));
+ const first=claimed.data.results[0];
+ const topic={title:'Synthetic 120ask example',body:'This is synthetic text for a validation test, not a real patient story.',source_lang:'en',comments:[{body:'Synthetic reply',source_lang:'en'}]};
+ const completed=await collect('/api/collect/complete',{site:'120ask',source_id:first.source_id,lease_token:first.lease_token,topic});
+ assert.equal(completed.status,201,JSON.stringify(completed));
+ assert.equal(completed.data.imported.topics,1);
+ assert.equal(completed.data.imported.comments,1);
+ const blocked=await claim('120ask',[first.source_id],'otherai');
+ assert.equal(blocked.data.results[0].result,'completed');
+ const second=claimed.data.results[1];
+ const released=await collect('/api/collect/release',{site:'120ask',source_id:second.source_id,lease_token:second.lease_token});
+ assert.equal(released.status,200);
+ const final=await exclude('120ask');
+ assert.deepEqual(final.data.items.map(x=>x.source_id),[first.source_id]);
+ assert.equal(final.data.items[0].status,'completed');
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM collect_sources WHERE site=? AND state=?').get('120ask','completed').n,1);
+ // Preserve existing input restrictions: site must contain 2-32 lowercase ASCII alphanumeric/_/- characters.
+ for(const badSite of ['-120ask','_120ask','120.ask','120/ask','120 ask','A120ask','1','a'.repeat(33)]){
+  const bad=await exclude(badSite);
+  assert.equal(bad.status,400,badSite+': '+JSON.stringify(bad.data));
+  assert.equal(bad.data.error,'invalid_site');
+ }
+ assert.equal((await exclude('tieba')).status,200);
+ assert.equal((await exclude('reddit')).status,200);
+});
