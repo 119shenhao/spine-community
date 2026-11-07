@@ -2,6 +2,15 @@
 
 日期：2026-11-06。分支：`feature/v1-community-build-20261106`。此记录区分代码、自测和远程环境，不将代码存在等同于可公开上线。
 
+## 开发预览：默认发帖语言跟随界面语言（2026-11-07）
+
+- 用户确认将个人中心的“原文语言”设置项改为“默认发帖语言”；具体帖子/回复的原文语言选择仍保留，因为那是本条内容的真实语言标识。
+- 账户语言偏好支持 **自动（跟随当前界面）/ 手动固定（指定语言）** 两种状态。新账号及历史未手动指定的账号，打开个人中心时显示“跟随界面语言（当前语言）”，新发帖和新回复的默认原文语言自动使用当前界面语言（包括 `zh-CN`、`zh-TW`）。手动指定后在切换界面语言和重新登录时保留指定语言；可再次选择“跟随界面语言”恢复自动。
+- 新增 `migrations/v1/0007_default_posting_language.sql`：为 `users` 增加 `preferred_locale_mode`，默认 `auto`；旧数据中 `preferred_locale!='en'` 的账号标记为 `manual`，尽量保留已设的非英语偏好。**历史手动选定英语与原本的英语默认值无法区分**，该部分账号将切换为自动模式；可以重新手动选择英语锁定。
+- `PATCH /api/me` 向下兼容原有的具体语言值请求，将 `preferred_locale='auto'` 解读为自动跟随，并提供 `preferred_locale_mode` 在 `GET /api/me` 中。未涉及生产端用户数据，未改动帖子原文。
+- 开发分支：`feature/v1-community-build-20261106`；最终提交 `de379aaef1f0f0f448e488daa24f72df14f5f6d4`；[GitHub verify #42388612142](https://github.com/119shenhao/spine-community/actions/runs/42388612142) 测试为 success，Cloudflare Preview 构建结果以对应 SHA 检查为准。
+- **仅更新开发分支及开发预览数据库，未合并/发布任何程序代码至生产环境，也未执行生产 D1 迁移。** 未来正式发布必须按现有 Production D1 inspect/apply 流程审查 `0007` 迁移，并评估英语默认历史账号的语义变化。
+
 ## 第三次正式发布：繁体中文与首页帖子优先（2026-11-07）
 
 - 用户直接发出固定任务指令“发布新版本从开发环境到生产环境”；按 `docs/release-version-workflow.md` 的**现有** Production D1 / PR / Cloudflare 流程执行，没有新建发布工作流，也没有要求用户手动点击 Run workflow。
