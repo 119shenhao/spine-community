@@ -1,0 +1,37 @@
+name: One-time collector E2E cleanup verification
+on:
+  push:
+    branches: [feature/v1-community-build-20261106]
+    paths: [.github/workflows/verify-collector-e2e-cleanup-once.yml]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Verify test topic and source references gone from preview
+        shell: bash
+        run: |
+          set -euo pipefail
+          base='https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev'
+          topic='99e0bb7d-8936-44d6-8d92-e5b5ce59dbd2'
+          ok=0
+          for i in $(seq 1 36); do
+            topic_status=$(curl -sS --max-time 20 -o topic.json -w '%{http_code}' "$base/api/topics/$topic" || true)
+            curl -sS --max-time 20 -o reddit.json "$base/api/collect/exclusions?site=reddit" || true
+            curl -sS --max-time 20 -o synthetic.json "$base/api/collect/exclusions?site=e2e" || true
+            if [[ "$topic_status" == 404 ]]; then
+              if python3 -c 'import json; a=json.load(open("reddit.json")); b=json.load(open("synthetic.json")); assert not any(x["source_id"]=="1vfpqgs" for x in a["items"]); assert not any(x["source_id"]=="ci-42331899579-1" for x in b["items"]); print("Verified: synthetic topic removed; both collection IDs removed.");' >/dev/null 2>&1; then
+                ok=1
+                break
+              fi
+            fi
+            echo "Waiting for precise preview cleanup; attempt $i, topic HTTP=$topic_status"
+            sleep 5
+          done
+          if [[ "$ok" != 1 ]]; then
+            echo "Remote test content cleanup could not be confirmed" >&2
+            exit 1
+          fi
+          echo "E2E_CLEANUP_VERIFIED source=reddit/1vfpqgs topic=$topic synthetic=e2e/ci-42331899579-1"
