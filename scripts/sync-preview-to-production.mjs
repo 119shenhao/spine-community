@@ -81,9 +81,9 @@ function assertReady(){
  if(author.length!==1)throw Error('Production Unknown User account not initialized; no writes attempted');
 }
 function verifyTopic(topic,hash){
- const prod=query(PRODUCTION,'SELECT id,title,body,content_hash FROM topics WHERE content_hash='+sqlValue(hash)+' OR (title='+sqlValue(topic.title)+' AND body='+sqlValue(topic.body)+') OR id='+sqlValue(topic.id)+' LIMIT 3');
+ const prod=query(PRODUCTION,'SELECT id,author_id,title,body,content_hash FROM topics WHERE content_hash='+sqlValue(hash)+' OR (title='+sqlValue(topic.title)+' AND body='+sqlValue(topic.body)+') OR id='+sqlValue(topic.id)+' LIMIT 3');
  if(prod.length>1)throw Error('Conflicting production matches for '+topic.id+'; manual review required');
- if(prod.length&&prod[0].id===topic.id&&(prod[0].title!==topic.title||prod[0].body!==topic.body))throw Error('Production topic ID collision for '+topic.id);
+ if(prod.length&&prod[0].id===topic.id&&(prod[0].title!==topic.title||prod[0].body!==topic.body||prod[0].author_id!=='system-unknown-import'))throw Error('Production topic ID/author collision for '+topic.id);
  return prod[0]||null;
 }
 export function buildInserts(topic,comments,terms,hash){
@@ -94,19 +94,23 @@ export function buildInserts(topic,comments,terms,hash){
  ];
  for(const term of terms)lines.push('INSERT OR IGNORE INTO topic_terms(topic_id,term_id) VALUES('+[topic.id,term.term_id].map(sqlValue).join(',')+');');
  for(const c of comments){
-  if(c.kind!=='regular'||c.author_id!=='system-unknown-import')throw Error('Unsupported comment kind or author on '+topic.id);
-  lines.push('INSERT OR IGNORE INTO comments(id,topic_id,author_id,parent_comment_id,kind,body,source_lang,status,created_at) VALUES('+
-   [c.id,topic.id,'system-unknown-import',c.parent_comment_id,'regular',c.body,c.source_lang,c.status,c.created_at].map(sqlValue).join(',')+');');
+  // A source author's identity is deliberately not copied: every visible reply
+  // (including recovery progress and nested replies) belongs to Unknown User.
+  if(!['regular','progress'].includes(c.kind))throw Error('Unsupported source comment kind on '+topic.id+': '+c.id);
+  if(c.kind==='progress'&&(!Number.isInteger(c.progress_seq)||c.progress_seq<1||c.parent_comment_id!==null))throw Error('Invalid source progress on '+topic.id+': '+c.id);
+  if(c.kind==='regular'&&c.progress_seq!=null)throw Error('Invalid source regular comment on '+topic.id+': '+c.id);
+  lines.push('INSERT OR IGNORE INTO comments(id,topic_id,author_id,parent_comment_id,kind,progress_seq,body,source_lang,status,created_at) VALUES('+
+   [c.id,topic.id,'system-unknown-import',c.parent_comment_id,c.kind,c.progress_seq??null,c.body,c.source_lang,c.status,c.created_at].map(sqlValue).join(',')+');');
  }
  return lines.join('\n')+'\n';
 }
 function verifyComments(id,comments){
  const expected=new Set(comments.map(c=>c.id));
- const rows=query(PRODUCTION,'SELECT id,parent_comment_id,body,status,source_lang FROM comments WHERE topic_id='+sqlValue(id));
+ const rows=query(PRODUCTION,'SELECT id,parent_comment_id,body,status,source_lang,author_id,kind,progress_seq FROM comments WHERE topic_id='+sqlValue(id));
  for(const row of rows){
   if(!expected.has(row.id))continue; // an unrelated production reply does not alter the source snapshot
   const src=comments.find(c=>c.id===row.id);
-  if(row.parent_comment_id!==src.parent_comment_id||row.body!==src.body||row.status!==src.status||row.source_lang!==src.source_lang)throw Error('Production comment mismatch: '+row.id);
+  if(row.parent_comment_id!==src.parent_comment_id||row.body!==src.body||row.status!==src.status||row.source_lang!==src.source_lang||row.author_id!=='system-unknown-import'||row.kind!==src.kind||row.progress_seq!==(src.progress_seq??null))throw Error('Production comment mismatch: '+row.id);
   expected.delete(row.id);
  }
  if(expected.size)throw Error('Missing '+expected.size+' production replies for '+id+'; preview receipt NOT written');
@@ -126,7 +130,7 @@ function run(){
  console.log(apply?'APPLY MODE: explicitly enabled; verify production backup and prior approval.':'DRY RUN: no database writes will be issued.');
  assertReady();
  const topics=query(PREVIEW,"SELECT t.id,t.title,t.body,t.source_lang,t.status,t.symptom_duration_days,t.created_at,t.content_hash "+
- "FROM topics t WHERE t.author_id='system-unknown-import' AND t.status='published' "+
+ "FROM topics t WHERE t.status='published' "+
  "AND NOT EXISTS (SELECT 1 FROM topic_sync_receipts r WHERE r.source_topic_id=t.id) ORDER BY t.created_at,t.id LIMIT "+limit);
  const counts={examined:0,new:0,existing:0,comments:0,marked:0};
  for(const topic of topics){
@@ -139,16 +143,18 @@ function run(){
    console.log('SKIP already exists: '+topic.id+' -> '+existing.id);
    counts.existing++;markPreview(topic,existing.id,hash,0);if(apply)counts.marked++;continue;
   }
-  const raw=query(PREVIEW,'SELECT id,author_id,parent_comment_id,kind,body,source_lang,status,created_at FROM comments WHERE topic_id='+sqlValue(topic.id)+' ORDER BY rowid');
+  const raw=query(PREVIEW,'SELECT id,author_id,parent_comment_id,kind,progress_seq,body,source_lang,status,created_at FROM comments WHERE topic_id='+sqlValue(topic.id)+' ORDER BY rowid');
   const comments=sortComments(raw),terms=query(PREVIEW,'SELECT term_id FROM topic_terms WHERE topic_id='+sqlValue(topic.id));
   if(terms.length){
    const allowed=query(PRODUCTION,'SELECT id FROM taxonomy_terms WHERE id IN ('+terms.map(t=>sqlValue(t.term_id)).join(',')+')');
    if(allowed.length!==terms.length)throw Error('Production taxonomy missing for '+topic.id);
   }
   console.log((existing?'RESUME':'NEW')+' '+topic.id+' '+JSON.stringify(topic.title)+' replies='+comments.length);
+  // Validate *every* selected source reply in dry-run too, before a production write.
+  const sql=buildInserts(topic,comments,terms,hash);
   counts.new++;counts.comments+=comments.length;
   if(!apply)continue;
-  writeFile(PRODUCTION,buildInserts(topic,comments,terms,hash));
+  writeFile(PRODUCTION,sql);
   const inserted=verifyTopic(topic,hash);
   if(!inserted||inserted.id!==topic.id)throw Error('Production topic was not created: '+topic.id);
   verifyComments(topic.id,comments);
