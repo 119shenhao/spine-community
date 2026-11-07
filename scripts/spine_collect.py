@@ -273,7 +273,7 @@ def probe_sources(site, excluded, candidates):
                 if identifier not in excluded and identifier not in candidates:
                     candidates[identifier] = url
                     added += 1
-                    if added == 2:
+                    if added == 1:
                         break
             time.sleep(1)
     for identifier, url in candidates.items():
@@ -295,6 +295,45 @@ def probe_sources(site, excluded, candidates):
             continue
         try:
             doc = BeautifulSoup(fetch(url), "html.parser")
+
+            def shape(node, depth=3):
+                if not node:
+                    return None
+                return [node.name, node.get("class", []), node.get("data-testid"),
+                        len(node.get_text(strip=True)),
+                        [shape(x, depth-1) for x in node.find_all(recursive=False)[:12]] if depth else []]
+            if site == "ask39":
+                hid = doc.select_one(".ask_hid")
+                answer = doc.select_one('div[id^="reply_"]')
+                emit("layout39", source_id=identifier, question=shape(hid), reply=shape(answer, 4),
+                     parent=shape(answer.parent, 1) if answer else None,
+                     supplement=shape(doc.select_one(".txt_answer"), 2))
+            if site == "healthunlocked":
+                raw = doc.select_one("#__NEXT_DATA__")
+                embedded = json.loads(raw.string) if raw and raw.string else {}
+                def schema(val, depth):
+                    if not depth:
+                        return type(val).__name__
+                    if isinstance(val, dict):
+                        return {k:schema(v, depth-1) for k,v in list(val.items())[:18]}
+                    if isinstance(val, list):
+                        return [len(val), schema(val[0], depth-1) if val else None]
+                    return type(val).__name__
+                reply = doc.select_one('[class*="interactiveReplyItem__Response-"]')
+                count = doc.select_one('[class*="responses__ReplyCount-"]')
+                urls = []
+                for a in doc.select('a[href*="/posts/"]'):
+                    u = urljoin(url, a["href"])
+                    try:
+                        id2 = source_id(site, u)
+                    except ValueError:
+                        continue
+                    if id2 != identifier and id2 not in excluded:
+                        urls.append(u)
+                emit("layout_hu", count=re.findall(r"\d+", count.get_text(" ",strip=True)) if count else [],
+                     reply=shape(reply, 3), body=shape(doc.select_one("#js-post-body"), 2),
+                     json_keys=schema(embedded.get("props",{}).get("pageProps",{}), 4),
+                     candidates=list(dict.fromkeys(urls))[:12])
             tags = Counter()
             for node in doc.select("[id], [class]"):
                 for key in node.get("class", []) + ([node["id"]] if node.get("id") else []):
@@ -349,7 +388,7 @@ def main():
             eligible = {key: url for key, url in candidates.items() if key not in excluded}
             emit("plan", site=site, existing_exclusions=len(excluded), candidates=len(candidates),
                  excluded=len(candidates) - len(eligible), eligible=len(eligible))
-            if request["request_id"] == "probe-expanded-sources-20261107":
+            if request["request_id"] == "probe-expanded-layouts-20261107":
                 probe_sources(site, excluded, eligible)
                 continue
             if site in SKIP and not args.export_dir:

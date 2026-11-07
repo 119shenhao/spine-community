@@ -1,19 +1,16 @@
 {
-  "request_id": "probe-expanded-sources-20261107",
+  "request_id": "probe-expanded-layouts-20261107",
   "mode": "inspect",
   "sites": [
     "ask39",
-    "healthunlocked",
-    "mayoclinic"
+    "healthunlocked"
   ],
   "candidates": {
+    "ask39": [
+      "https://ask.39.net/question/38519664.html"
+    ],
     "healthunlocked": [
       "https://healthunlocked.com/painconcern/posts/153215969/piriformis-pain"
-    ],
-    "mayoclinic": [
-      "https://connect.mayoclinic.org/discussion/what-should-i-expect-after-my-back-operation/",
-      "https://connect.mayoclinic.org/discussion/how-was-your-recovery-stages-for-lumbar-l45/",
-      "https://connect.mayoclinic.org/discussion/any-success-stories-of-lumbar-stenosis-surgery/"
     ]
   },
   "limit": 7
