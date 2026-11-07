@@ -127,7 +127,8 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-          git fetch --no-tags origin main
+          # fetch-depth: 0 already includes origin/main; private remote has no persisted checkout credentials.
+          git rev-parse --verify refs/remotes/origin/main >/dev/null
           python3 - <<'PY'
           import json, os, re, subprocess
           from pathlib import Path
@@ -202,9 +203,15 @@ jobs:
           pending = names[len(applied):]
           work = Path(os.environ["RUNNER_TEMP"]) / "release-d1"
           work.mkdir(parents=True, exist_ok=True)
+          # Isolate migration files from the checked-out candidate (as in Production D1).
+          import shutil
+          migrations = work / "migrations"
+          migrations.mkdir(exist_ok=True)
+          for file in files:
+              shutil.copyfile(file, migrations / file.name)
           (work / "wrangler.json").write_text(json.dumps({"name": "spine-community-release", "d1_databases": [{
               "binding": "PRODUCTION_DB", "database_name": os.environ["PROD_DB_NAME"],
-              "database_id": os.environ["PROD_DB_ID"], "migrations_dir": str(source.resolve())
+              "database_id": os.environ["PROD_DB_ID"], "migrations_dir": "migrations"
           }]}))
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
               print("apply_needed=" + ("true" if pending else "false"), file=output)
