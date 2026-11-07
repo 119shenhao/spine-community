@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
-      - name: Check authorized XYWY and HealthUnlocked pages
+      - name: Check public XYWY and HealthUnlocked threads after claim
         shell: bash
         run: |
           set -euo pipefail
@@ -20,10 +20,10 @@ jobs:
           "$RUNNER_TEMP/source-venv/bin/python" - <<'PY'
           import json
           import subprocess
-          from urllib.parse import urlencode, urlsplit
+          import time
+          from urllib.parse import urlencode,urlsplit
           from bs4 import BeautifulSoup
           from playwright.sync_api import sync_playwright
-          
           BASE='https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev'
           def request(url,payload=None):
            cmd=['curl','-sS','-L','--connect-timeout','8','--max-time','30','--compressed','-w','\n%{http_code}']
@@ -31,60 +31,85 @@ jobs:
            out=subprocess.run(cmd+[url],input=json.dumps(payload).encode() if payload is not None else None,stdout=subprocess.PIPE,check=True).stdout
            body,status=out.rsplit(b'\n',1);return int(status),body
           def api(path,payload=None):
-           code,body=request(BASE+path,payload)
-           try:data=json.loads(body)
-           except ValueError:raise RuntimeError('preview HTTP '+str(code)+' non-JSON') from None
+           code,body=request(BASE+path,payload);data=json.loads(body)
            if code not in (200,201):raise RuntimeError('preview HTTP '+str(code)+' '+str(data.get('error')))
            return data
           def exclusions(site):
-           params={'site':site,'limit':200}; seen=set(); result={}
+           params={'site':site,'limit':200};seen=set();out={}
            while True:
-            page=api('/api/collect/exclusions?'+urlencode(params))
-            result.update((x['source_id'],x['status']) for x in page['items'])
-            cursor=page['next_cursor']
-            if cursor is None:return result
-            if cursor in seen:raise ValueError('repeated cursor')
-            seen.add(cursor);params['cursor']=cursor
-          
+            d=api('/api/collect/exclusions?'+urlencode(params));out.update((i['source_id'],i['status']) for i in d['items'])
+            if d['next_cursor'] is None:return out
+            if d['next_cursor'] in seen:raise ValueError('cursor repeated')
+            seen.add(d['next_cursor']);params['cursor']=d['next_cursor']
           site='xywy'
           items=[('198793816','https://club.xywy.com/wenda/198793816.htm'),('198728918','https://club.xywy.com/wenda/198728918.htm'),('198223887','https://club.xywy.com/wenda/198223887.htm'),('198649183','https://club.xywy.com/wenda/198649183.htm'),('198739706','https://club.xywy.com/wenda/198739706.htm'),('198713340','https://club.xywy.com/wenda/198713340.htm')]
-          before=exclusions(site);fresh=[(sid,url) for sid,url in items if sid not in before]
-          records=[]
+          before=exclusions(site);fresh=[x for x in items if x[0] not in before];records=[]
           try:
-           if fresh:records=api('/api/collect/claim',{'site':site,'collector_id':'chatgpt-hourly-xywy','source_ids':[sid for sid,url in fresh[:6]]})['results']
-           print('XYWY claim results',[(r['source_id'],r['result']) for r in records],flush=True)
+           if fresh:records=api('/api/collect/claim',{'site':site,'collector_id':'chatgpt-hourly-xywy','source_ids':[x[0] for x in fresh]})['results']
+           print('XYWY claim states',[(x['source_id'],x['result']) for x in records],flush=True)
            with sync_playwright() as p:
             browser=p.chromium.launch()
             for rec in records:
              if rec['result']!='granted':continue
-             sid=rec['source_id'];url=dict(items)[sid]
+             sid=rec['source_id']
              try:
-              page=browser.new_page()
-              response=page.goto(url,wait_until='domcontentloaded',timeout=30000)
-              page.wait_for_timeout(6000)
+              page=browser.new_page();events=[]
+              page.on('response',lambda resp:events.append((urlsplit(resp.url).hostname,urlsplit(resp.url).path,resp.status,resp.request.resource_type)) if resp.request.resource_type in ('xhr','fetch') else None)
+              response=page.goto(dict(items)[sid],wait_until='domcontentloaded',timeout=30000);page.wait_for_timeout(6000)
               soup=BeautifulSoup(page.content(),'html.parser')
-              ask=soup.select_one('.ask_doct_reply_div')
-              questions=[(e.name,' '.join(e.get('class',[])),len(e.get_text(' ',strip=True))) for e in soup.select('[class*=answer],[class*=reply],[class*=ask],[class*=question],[id*=answer],[id*=reply]')[:45]]
-              print('XYWY rendered',sid,response.status if response else None,'title',bool(soup.select_one('h1')),'answer_area',bool(ask),'answer_chars',len(ask.get_text(' ',strip=True)) if ask else 0,'structures',questions,flush=True)
+              selectors=['h1','.static-ask-box','.ask-th-box','.ask-details-box','.ask_doct_reply_div','.ask_doct_reply_class','.ask-title','.ask-con','.ask-doc-box']
+              shapes=[]
+              for selector in selectors:
+               nodes=soup.select(selector)
+               shapes.append((selector,len(nodes),[(len(n.get_text(' ',strip=True)),n.parent.get('class',[])) for n in nodes[:10]]))
+              print('XYWY DOM',sid,response.status if response else None,shapes,'XHR',events[:30],flush=True)
               page.close()
-             except Exception as error:
-              print('XYWY render error',sid,type(error).__name__,flush=True)
+             except Exception as err:print('XYWY inspection error',sid,type(err).__name__,flush=True)
             browser.close()
           finally:
            for rec in records:
-            if rec['result']!='granted':continue
-            try:api('/api/collect/release',{'site':site,'source_id':rec['source_id'],'lease_token':rec['lease_token']})
-            except Exception:pass
-          print('XYWY probe done',flush=True)
+            if rec['result']=='granted':
+             try:api('/api/collect/release',{'site':site,'source_id':rec['source_id'],'lease_token':rec['lease_token']})
+             except Exception:print('XYWY release unconfirmed',rec['source_id'],flush=True)
           
-          for url in ['https://healthunlocked.com/','https://healthunlocked.com/search?query=lumbar','https://healthunlocked.com/sitemap.xml','https://healthunlocked.com/robots.txt']:
+          site='healthunlocked'
+          old=exclusions(site)
+          print('HealthUnlocked exclusions',len(old),flush=True)
+          queries=['lumbar','cervical spine surgery','spinal fusion','cervical myelopathy']
+          found={}
+          for query in queries:
+           url='https://healthunlocked.com/search/posts?'+urlencode({'query':query})
+           code,body=request(url)
+           soup=BeautifulSoup(body,'html.parser')
+           for a in soup.select('a[href]'):
+            href=a['href'].split('?')[0]
+            host=urlsplit(href).hostname
+            path=urlsplit(href).path.strip('/')
+            pieces=path.split('/')
+            if host in ('healthunlocked.com','www.healthunlocked.com') and any(piece.isdigit() for piece in pieces):
+             sid=next((piece for piece in reversed(pieces) if piece.isdigit()),None)
+             if sid:found[sid]=href
+           print('HealthUnlocked search',query,code,len(found),flush=True)
+           time.sleep(1)
+          eligible=[(sid,url) for sid,url in found.items() if sid not in old]
+          print('HealthUnlocked candidates',len(found),'excluded',len(found)-len(eligible),[(sid,url) for sid,url in eligible[:12]],flush=True)
+          if eligible:
+           records=[]
            try:
-            code,body=request(url);text=body.decode('utf-8','ignore')
-            if '<html' in text.lower():
-             soup=BeautifulSoup(text,'html.parser')
-             forms=[(f.get('action'),f.get('method'),[(e.get('name'),e.get('type')) for e in f.select('input')]) for f in soup.select('form')]
-             links=[a.get('href') for a in soup.select('a[href]') if any(word in (a.get('href','')+' '+a.get_text(' ',strip=True)).lower() for word in ('spine','search','community','group'))][:30]
-             print('HealthUnlocked page',url,code,'title',soup.title.get_text(strip=True) if soup.title else '', 'forms',forms,'links',links,flush=True)
-            else:print('HealthUnlocked resource',url,code,'bytes',len(body),flush=True)
-           except Exception as error:print('HealthUnlocked request failed',url,type(error).__name__,flush=True)
+            records=api('/api/collect/claim',{'site':site,'collector_id':'chatgpt-hourly-healthunlocked','source_ids':[sid for sid,url in eligible[:20]]})['results']
+            print('HealthUnlocked claims',[(r['source_id'],r['result']) for r in records],flush=True)
+            with sync_playwright() as p:
+             browser=p.chromium.launch()
+             for rec in records:
+              if rec['result']!='granted':continue
+              page=browser.new_page();response=page.goto(dict(eligible)[rec['source_id']],wait_until='domcontentloaded',timeout=30000);page.wait_for_timeout(5000);soup=BeautifulSoup(page.content(),'html.parser')
+              print('HealthUnlocked post',rec['source_id'],response.status if response else None,[(e.name,e.get('class',[]),len(e.get_text(' ',strip=True))) for e in soup.select('h1,article,[class*=post],[class*=comment],[class*=reply]')[:30]],flush=True)
+              page.close()
+             browser.close()
+           finally:
+            for rec in records:
+             if rec['result']=='granted':
+              try:api('/api/collect/release',{'site':site,'source_id':rec['source_id'],'lease_token':rec['lease_token']})
+              except Exception:print('HealthUnlocked release unconfirmed',rec['source_id'],flush=True)
+          else:print('HealthUnlocked no stable public candidates surfaced',flush=True)
           PY
