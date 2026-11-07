@@ -827,10 +827,18 @@ test('Migrated accounts preserve non-English choices, and allow returning to aut
  const before=await call('/api/me');
  assert.equal(before.data.user.preferred_locale,'en');
  assert.equal(before.data.user.preferred_locale_mode,'auto');
- const oldFrench=DB.db.prepare("INSERT INTO users(id,nickname,preferred_locale) VALUES('old-french','French member','fr')"); 
- // In the migration test DB, verify the migration itself rather than rewriting applied schema.
+ // Apply the new migration against an isolated copy of the previous schema.
+ const legacyDB=new DatabaseSync(':memory:');
+ legacyDB.exec('PRAGMA foreign_keys=ON');
+ for(const f of readdirSync('migrations/v1').filter(f=>f.endsWith('.sql')&&!f.startsWith('0007_')).sort())legacyDB.exec(readFileSync('migrations/v1/'+f,'utf8'));
+ legacyDB.prepare("INSERT INTO users(id,nickname,preferred_locale) VALUES('old-french','French member','fr')").run();
+ legacyDB.prepare("INSERT INTO users(id,nickname,preferred_locale) VALUES('old-english','English member','en')").run();
  const migration=readFileSync('migrations/v1/0007_default_posting_language.sql','utf8');
- assert(migration.includes("WHERE preferred_locale<>'en'"));
+ legacyDB.exec(migration);
+ assert.equal(legacyDB.prepare("SELECT preferred_locale_mode FROM users WHERE id='old-french'").get().preferred_locale_mode,'manual');
+ assert.equal(legacyDB.prepare("SELECT preferred_locale_mode FROM users WHERE id='old-english'").get().preferred_locale_mode,'auto');
+ assert.equal(legacyDB.prepare('PRAGMA foreign_key_check').all().length,0);
+ legacyDB.close();
  const fixed=await call('/api/me','PATCH',{nickname:'Alice',preferred_locale:'zh-TW',public_region:'台灣'});
  assert.equal(fixed.status,200);
  let user=(await call('/api/me')).data.user;
