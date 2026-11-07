@@ -7,44 +7,123 @@ permissions: {}
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 5
     steps:
-      - name: Read all 120ask exclusions from the preview API
+      - name: Check source page structure
         shell: bash
         run: |
-          python3 - <<'PY'
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/120ask-venv"
+          "$RUNNER_TEMP/120ask-venv/bin/pip" install -q beautifulsoup4
+          "$RUNNER_TEMP/120ask-venv/bin/python" - <<'PY'
+          import collections
           import json
+          import re
           import subprocess
-          from urllib.parse import urlencode
-          from pathlib import Path
-          base = 'https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev/api/collect/exclusions'
-          params = {'site': '120ask', 'limit': 200}
-          seen = set()
-          def get(url, path):
-              return subprocess.check_output(['curl', '-sS', '--connect-timeout', '5', '--max-time', '15', '-o', path, '-w', '%{http_code}', url], text=True)
-          health = get(base.split('/api/')[0] + '/api/health', 'health.json')
-          try:
-              info = json.loads(Path('health.json').read_text())
-              print('Preview health HTTP', health, {k: info.get(k) for k in ('databaseReady', 'importEnabled')})
-          except ValueError:
-              print('Preview health HTTP', health, 'non-JSON')
-          while True:
-              status = get(base + '?' + urlencode(params), 'exclusions.json')
+          import time
+          from urllib.parse import urlencode, urljoin, urlsplit
+          from bs4 import BeautifulSoup, Tag
+          
+          base = 'https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev'
+          site = '120ask'
+          collector = 'chatgpt-hourly-120ask'
+          
+          def request(url, payload=None):
+              cmd = ['curl', '-sS', '--connect-timeout', '8', '--max-time', '20', '--compressed', '-w', '\n%{http_code}']
+              if payload is not None:
+                  cmd += ['-H', 'Content-Type: application/json', '--data-binary', '@-']
+              result = subprocess.run(cmd + [url], input=json.dumps(payload, ensure_ascii=False).encode() if payload is not None else None, stdout=subprocess.PIPE, check=True)
+              body, status = result.stdout.rsplit(b'\n', 1)
+              return int(status), body
+          
+          def api(path, payload=None):
+              status, body = request(base + path, payload)
               try:
-                  page = json.loads(Path('exclusions.json').read_text())
+                  data = json.loads(body)
               except ValueError:
-                  raise SystemExit('Exclusions HTTP ' + status + ', non-JSON')
-              if status != '200':
-                  raise SystemExit('Exclusions HTTP ' + status + ', error=' + str(page.get('error')))
-              if page['site'] != '120ask':
-                  raise ValueError('Wrong site in exclusion response')
-              print(json.dumps([(item['source_id'], item['status']) for item in page['items']]), flush=True)
-              cursor = page['next_cursor']
-              if cursor is None:
-                  print('Exclusion pagination complete', flush=True)
-                  break
-              if cursor in seen:
-                  raise ValueError('Repeated exclusion cursor')
-              seen.add(cursor)
-              params['cursor'] = cursor
+                  raise RuntimeError('Preview endpoint returned HTTP ' + str(status) + ' without JSON') from None
+              if status not in (200, 201):
+                  raise RuntimeError('Preview endpoint returned HTTP ' + str(status) + ' ' + str(data.get('error')))
+              return data
+          
+          def exclusions():
+              params = {'site': site, 'limit': 200}
+              seen = set()
+              result = {}
+              while True:
+                  data = api('/api/collect/exclusions?' + urlencode(params))
+                  if data.get('site') != site:
+                      raise ValueError('Wrong site in exclusions response')
+                  result.update((item['source_id'], item['status']) for item in data['items'])
+                  cursor = data['next_cursor']
+                  if cursor is None:
+                      return result
+                  if cursor in seen:
+                      raise ValueError('Repeated exclusion cursor')
+                  seen.add(cursor)
+                  params['cursor'] = cursor
+          
+          def candidate_links():
+              found = {}
+              dirs = [
+                  'https://www.120ask.com/list/jsjzwk/',
+                  'https://m.120ask.com/list/jsjzwk/',
+                  'https://m.120ask.com/list/yaozhuibing/',
+                  'https://m.120ask.com/list/jingzhuibing/',
+              ]
+              for url in dirs:
+                  code, body = request(url)
+                  print('Listing', url, code, len(body), flush=True)
+                  time.sleep(1)
+                  if code != 200:
+                      continue
+                  soup = BeautifulSoup(body, 'html.parser')
+                  for link in soup.find_all('a', href=True):
+                      href = urljoin(url, link['href'])
+                      parts = urlsplit(href)
+                      title = link.get_text(' ', strip=True)
+                      if not re.search(r'颈椎|腰椎|腰突|腰痛|腰疼|腰部|椎间盘|椎管|手指.{0,8}麻', title):
+                          continue
+                      if parts.hostname not in ('m.120ask.com', 'www.120ask.com', 'tag.120ask.com'):
+                          continue
+                      match = re.fullmatch(r'/(?:question|askg/bd_detail)/([0-9a-z]{8,25})(?:\.html?)?/?', parts.path)
+                      if not match:
+                          print('Relevant link path format', parts.hostname, parts.path, flush=True)
+                          continue
+                      stable_id = match[1]
+                      score = 2 * bool(re.search(r'手术|术后|消融|康复|恢复|治疗', title)) + bool(re.search(r'腿|手|麻|疼', title))
+                      if stable_id not in found or parts.hostname == 'www.120ask.com':
+                          found[stable_id] = (href, score)
+              return found
+          
+          before = exclusions()
+          print('Exclusions before search', dict(collections.Counter(before.values())), flush=True)
+          found = candidate_links()
+          eligible = sorted((k for k in found if k not in before), key=lambda k: found[k][1], reverse=True)
+          print('Candidates', len(found), 'excluded', len(found)-len(eligible), 'eligible', [(k, found[k][0]) for k in eligible], flush=True)
+          if not eligible:
+              raise SystemExit('No eligible source links discovered')
+          for record in api('/api/collect/claim', {'site': site, 'collector_id': collector, 'source_ids': eligible[:2]})['results']:
+              key = record['source_id']
+              if record['result'] != 'granted':
+                  print('Claim status', key, record['result'], flush=True)
+                  continue
+              lease = {'site': site, 'source_id': key, 'lease_token': record['lease_token']}
+              try:
+                  source = found[key][0]
+                  code, body = request(source)
+                  print('Source HTTP', key, source, code, len(body), flush=True)
+                  if code != 200:
+                      continue
+                  soup = BeautifulSoup(body, 'html.parser')
+                  print('HTML markers', key, bool(soup.h1), [(m.get('name') or m.get('property')) for m in soup.find_all('meta') if m.get('name') or m.get('property')], flush=True)
+                  for tag in soup.find_all(True):
+                      klass = '.'.join(tag.get('class', []))
+                      ident = tag.get('id', '')
+                      if tag.name in ('h1', 'h2', 'h3') or re.search(r'answer|reply|ask|content|detail|desc|question|follow|problem|doctor|zhui|user|time|qust', klass + ident, re.I):
+                          shape = ' > '.join(p.name + '.' + '.'.join(p.get('class', [])) for p in list(tag.parents)[:2] if isinstance(p, Tag))
+                          print('Structure', key, tag.name, klass, ident, shape, len(tag.get_text(strip=True)), flush=True)
+              finally:
+                  released = api('/api/collect/release', lease)
+                  print('Probe claim', key, released['status'], flush=True)
           PY
