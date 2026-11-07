@@ -239,6 +239,39 @@ test('one-time production SQL snapshot writes topic and nested replies, and repe
 });
 
 
+test('production sync maps arbitrary published topic/reply authors to Unknown User and keeps progress/nesting without duplicates',async()=>{
+ const {DB}=await fixture();
+ const {buildInserts,fingerprint,sortComments}=await import('../scripts/sync-preview-to-production.mjs');
+ const topic={id:'preview-user-topic',author_id:'bob',title:'Personal recovery notes',body:'Six weeks later',source_lang:'en',symptom_duration_days:42,created_at:1234567};
+ const all=[
+  {id:'grandchild',author_id:'alice',parent_comment_id:'child',kind:'regular',progress_seq:null,body:'Third level',source_lang:'en',status:'published',created_at:1234571},
+  {id:'child',author_id:'carol',parent_comment_id:'progress1',kind:'regular',progress_seq:null,body:'Reply to progress',source_lang:'en',status:'published',created_at:1234570},
+  {id:'progress1',author_id:'bob',parent_comment_id:null,kind:'progress',progress_seq:1,body:'Week six improvement',source_lang:'en',status:'published',created_at:1234569},
+  {id:'hidden',author_id:'bob',parent_comment_id:null,kind:'regular',progress_seq:null,body:'Hidden',source_lang:'en',status:'hidden',created_at:1234572},
+  {id:'hidden-child',author_id:'alice',parent_comment_id:'hidden',kind:'regular',progress_seq:null,body:'Should remain hidden',source_lang:'en',status:'published',created_at:1234573},
+  {id:'deleted',author_id:'alice',parent_comment_id:null,kind:'regular',progress_seq:null,body:null,source_lang:'en',status:'deleted',created_at:1234574},
+  {id:'after-deleted',author_id:'carol',parent_comment_id:'deleted',kind:'regular',progress_seq:null,body:'Preserve thread hierarchy',source_lang:'en',status:'published',created_at:1234575},
+ ];
+ const selected=sortComments(all);
+ assert.deepEqual(selected.map(x=>x.id),['progress1','child','grandchild','deleted','after-deleted']);
+ const sql=buildInserts(topic,selected,[],fingerprint(topic.title,topic.body));
+ DB.db.exec(sql);DB.db.exec(sql);
+ assert.equal(DB.db.prepare('SELECT author_id FROM topics WHERE id=?').get(topic.id).author_id,'system-unknown-import');
+ const rows=DB.db.prepare('SELECT id,author_id,parent_comment_id,kind,progress_seq,body FROM comments WHERE topic_id=? ORDER BY created_at').all(topic.id);
+ assert.equal(rows.length,5);
+ assert.ok(rows.every(x=>x.author_id==='system-unknown-import'));
+ assert.equal(rows.find(x=>x.id==='progress1').kind,'progress');
+ assert.equal(rows.find(x=>x.id==='progress1').progress_seq,1);
+ assert.equal(rows.find(x=>x.id==='grandchild').parent_comment_id,'child');
+ assert.equal(rows.find(x=>x.id==='deleted').body,null);
+ assert.equal(rows.find(x=>x.id==='after-deleted').parent_comment_id,'deleted');
+ assert.equal(DB.db.prepare('SELECT reply_count FROM topics WHERE id=?').get(topic.id).reply_count,4);
+ assert.equal(DB.db.prepare('PRAGMA foreign_key_check').all().length,0);
+ const wrong={...all[2],kind:'unsupported'};
+ assert.throws(()=>buildInserts(topic,[wrong],[],fingerprint(topic.title,topic.body)),/Unsupported source comment kind/);
+});
+
+
 // Collection coordination test fixtures never access the network or production database.
 async function collectFixture(){
  const f=await importFixture();
