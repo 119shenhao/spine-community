@@ -100,3 +100,5 @@ jobs:
               f.write('Final batch examined 0 remaining source threads. Existing content and synced threads were skipped.\n')
           print('Completed: no eligible unsynced source threads remain.',json.dumps(total,ensure_ascii=False))
           PY
+
+# Retry after verified Wrangler parser fix, authorized by forum owner.
