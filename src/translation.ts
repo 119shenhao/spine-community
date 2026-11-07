@@ -1,5 +1,7 @@
 import {Env,Row,all,one,stmt,now,fail,json,body,lang,locales} from './core';
 import {getContent} from './content';
+// Azure Translator uses a script tag for Traditional Chinese, while the UI uses the shared zh-TW locale.
+export const translatorTargetLocale=(locale:string)=>locale==='zh-TW'?'zh-Hant':locale;
 export async function translationRoute(req:Request,env:Env,u:Row|null,path:string):Promise<Response|null>{
   if(path!=='/api/translate'||req.method!=='POST')return null;
   const b=await body(req),type=b.type==='comment'?'comment':'topic',locale=lang(b.locale),scope=type==='topic'&&b.scope==='summary'?'summary':'full';
@@ -24,7 +26,7 @@ export async function translationRoute(req:Request,env:Env,u:Row|null,path:strin
     if(!reservation)return json({translated:false,reason:'translation_quota_reached'});
     await stmt(env.DB,`INSERT INTO translation_usage_daily(provider,day_utc,characters,requests) VALUES('azure',?,?,1) ON CONFLICT(provider,day_utc) DO UPDATE SET characters=characters+excluded.characters,requests=requests+1`,day,chars).run();
     const headers:Record<string,string>={'content-type':'application/json','Ocp-Apim-Subscription-Key':env.TRANSLATOR_KEY};if(env.TRANSLATOR_REGION)headers['Ocp-Apim-Subscription-Region']=env.TRANSLATOR_REGION;
-    const res=await fetch('https://api.cognitive.microsofttranslator.com/translate?api-version=3.0&to='+encodeURIComponent(locale),{method:'POST',headers,body:JSON.stringify((title?[title,text]:[text]).map(Text=>({Text}))),signal:AbortSignal.timeout(8000)});
+    const res=await fetch('https://api.cognitive.microsofttranslator.com/translate?api-version=3.0&to='+encodeURIComponent(translatorTargetLocale(locale)),{method:'POST',headers,body:JSON.stringify((title?[title,text]:[text]).map(Text=>({Text}))),signal:AbortSignal.timeout(8000)});
     if(!res.ok)return json({translated:false,reason:'translation_unavailable'});
     const data=await res.json() as {translations:{text:string}[]}[];
     if(!Array.isArray(data)||data.length!==(title?2:1)||data.some(d=>typeof d.translations?.[0]?.text!=='string'))return json({translated:false,reason:'translation_unavailable'});

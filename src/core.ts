@@ -7,7 +7,7 @@ export interface Env {
   COLLECT_ENABLED?: string;
 }
 export type Row = Record<string, any>;
-export const locales = ['en','zh-CN','es','pt-BR','de','fr','ja'];
+export const locales = ['en','zh-CN','zh-TW','es','pt-BR','de','fr','ja'];
 export const now = () => Math.floor(Date.now()/1000);
 export const id = () => crypto.randomUUID();
 export class HttpError extends Error { constructor(public status: number, message: string) { super(message); } }

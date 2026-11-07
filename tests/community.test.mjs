@@ -700,3 +700,91 @@ test('visitor language survives a Google login callback and account default Engl
  assert(!client.includes("state.user.preferred_locale))locale="));
  assert(client.includes("localStorage.setItem('sc_locale',locale)"));
 });
+
+test('discussion-first home keeps search form on search page and places post button beside My space',async()=>{
+ const {feedParams,sortRoute}=await import('../public/feed-ui.js');
+ const {dictionaries,languages}=await import('../public/i18n.js');
+ const app=readFileSync('public/app.js','utf8');
+ const css=readFileSync('public/styles.css','utf8');
+ for(const locale of languages)assert(dictionaries[locale].newPost,'missing post button translation: '+locale);
+ assert.equal(dictionaries['zh-CN'].newPost,'发帖');
+ const nav=app.match(/\$\('#sidebar'\)\.innerHTML=`<nav>(.*?)<\/nav>/)?.[1];
+ assert(nav,'sidebar navigation missing');
+ assert(nav.indexOf("nav('mySpace'")>=0,'My space navigation missing');
+ assert(nav.indexOf('data-action="compose"')>nav.indexOf("nav('mySpace'"),'Post button must follow My space');
+ assert(nav.includes('class="nav-link nav-compose"'));
+ assert(app.includes("if(action==='compose')return composer()")||app.includes("if(action==='compose')return composer();"),'Post nav must use existing compose action');
+ assert(app.includes("isSearch?searchForm(query):''"),'Only the search page should render the search card');
+ assert(!app.includes('<section class="hero">'),'Home hero must not push the feed down');
+ assert(css.includes('.sidebar .nav-compose'),'Post button needs navigation styles');
+ assert.equal(feedParams(new URLSearchParams(),false).get('sort'),'latest');
+ assert.equal(feedParams(new URLSearchParams(),true).has('sort'),false);
+ assert.equal(feedParams(new URLSearchParams('sort=discussion'),false).get('sort'),'discussion');
+ assert.equal(sortRoute('/',new URLSearchParams(),'discussion'),'/?sort=discussion');
+ assert.equal(sortRoute('/search',new URLSearchParams('q=back'),'latest'),'/search?q=back&sort=latest');
+ const page2=feedParams(new URLSearchParams(),false);
+ page2.set('offset','20');
+ assert.equal(page2.toString(),'sort=latest&offset=20');
+});
+
+test('Traditional Chinese covers Taiwan, Hong Kong and Macau with fully localized UI',async()=>{
+ const {initialLocale}=await import('../public/locale.js');
+ const {languages,dictionaries}=await import('../public/i18n.js');
+ const {traditionalChinese}=await import('../public/i18n-zh-tw.js');
+ const html=readFileSync('public/index.html','utf8');
+ const keys=[...readFileSync('public/i18n.js','utf8').matchAll(/^([A-Za-z][A-Za-z0-9_]*):\[/gm)].map(m=>m[1]);
+ assert(languages.includes('zh-TW'));
+ assert(html.includes('<option value="zh-TW">繁體中文</option>'));
+ assert.deepEqual(Object.keys(traditionalChinese).sort(),keys.sort());
+ assert.equal(dictionaries['zh-TW'].login,'登入');
+ assert.equal(dictionaries['zh-TW'].newPost,'發帖');
+ assert.equal(dictionaries['zh-TW'].neck,'頸部與頸椎');
+ assert.equal(dictionaries['zh-TW'].reply,'回覆');
+ assert.equal(dictionaries['zh-TW'].settings,'帳號與隱私');
+ assert.equal(dictionaries['zh-CN'].home,'全部讨论');
+ assert(languages.every(l=>dictionaries[l].home&&dictionaries[l].newPost));
+ for(const raw of ['zh-TW','zh-HK','zh-MO','zh-Hant','zh-Hant-TW','zh-Hant-HK','zh-hk']){
+  const store=new Map();
+  const storage={getItem:k=>store.get(k)??null,setItem:(k,v)=>store.set(k,v)};
+  assert.equal(initialLocale(storage,raw,languages),'zh-TW',raw);
+  assert.equal(store.get('sc_locale'),'zh-TW');
+  // Google sign-in reload does not reset the persisted choice.
+  assert.equal(initialLocale(storage,'en-US',languages),'zh-TW',raw+' after reload');
+ }
+ for(const raw of ['zh-CN','zh-SG','zh-Hans','zh']){
+  const store=new Map();
+  const storage={getItem:k=>store.get(k)??null,setItem:(k,v)=>store.set(k,v)};
+  assert.equal(initialLocale(storage,raw,languages),'zh-CN',raw);
+ }
+ {
+  const store=new Map([['sc_locale','zh-CN']]);
+  const storage={getItem:k=>store.get(k)??null,setItem:(k,v)=>store.set(k,v)};
+  assert.equal(initialLocale(storage,'zh-HK',languages),'zh-CN','explicit selection must win');
+  store.set('sc_locale','zh-HK');
+  assert.equal(initialLocale(storage,'en',languages),'zh-TW','legacy saved Hong Kong locale');
+  assert.equal(store.get('sc_locale'),'zh-TW');
+ }
+});
+test('Traditional Chinese profile, content language, taxonomy and translation API are accepted',async()=>{
+ const {call}=await fixture();
+ const labels=await call('/api/taxonomy?locale=zh-TW');
+ assert.equal(labels.status,200);
+ assert.equal(labels.data.terms.find(t=>t.id==='neck').label,'頸部與頸椎');
+ assert.equal(labels.data.terms.find(t=>t.id==='physical-therapy').label,'物理治療與復健訓練');
+ const me=await call('/api/me','PATCH',{nickname:'測試使用者',preferred_locale:'zh-TW',public_region:'香港'});
+ assert.equal(me.status,200,JSON.stringify(me));
+ const profile=await call('/api/me');
+ assert.equal(profile.data.user.preferred_locale,'zh-TW');
+ const post=await call('/api/topics','POST',{title:'頸椎與腰椎復健經驗',body:'這是繁體中文的測試貼文。',source_lang:'zh-TW'});
+ assert.equal(post.status,201,JSON.stringify(post));
+ const topic=await call('/api/topics/'+post.data.id,'GET',undefined,null);
+ assert.equal(topic.data.topic.source_lang,'zh-TW');
+ const reply=await call('/api/topics/'+post.data.id+'/comments','POST',{body:'謝謝分享',source_lang:'zh-TW'});
+ assert.equal(reply.status,201);
+ const {translatorTargetLocale}=await import('../.test-build/translation.js');
+ assert.equal(translatorTargetLocale('zh-TW'),'zh-Hant');
+ assert.equal(translatorTargetLocale('zh-CN'),'zh-CN');
+ const translation=await call('/api/translate','POST',{type:'topic',id:post.data.id,locale:'zh-TW'},null);
+ assert.equal(translation.status,200);
+ assert.equal(translation.data.reason,'same_language');
+});
