@@ -19,5 +19,18 @@ if(process.env.WORKERS_CI==='1'&&process.env.WORKERS_CI_BRANCH===expectedBranch)
  if(names.length&&!names.includes('settings'))throw Error('An older or unknown preview schema exists. Review it before any migration; no data was overwritten.');
  run([...cli,'migrations','apply',...common]);
  run([...cli,'execute',...common,'--command',"SELECT value FROM settings WHERE key='schema_version'; SELECT id,nickname,is_system FROM users WHERE id='system-unknown-import'; PRAGMA foreign_key_check;",'--json']);
+ const purgeMarker='preview_discussions_cleared_20261107';
+ const markerRaw=run([...cli,'execute',...common,'--command',`SELECT value FROM settings WHERE key='${purgeMarker}'`,'--json'],true);
+ const markerRows=JSON.parse(markerRaw).flatMap(x=>x.results||[]);
+ if(!markerRows.some(x=>x.value==='done')){
+   const countsSql="SELECT (SELECT count(*) FROM topics) AS topics, (SELECT count(*) FROM comments) AS comments, (SELECT count(*) FROM import_batches) AS batches, (SELECT count(*) FROM users WHERE id='system-unknown-import' AND is_system=1) AS system_accounts";
+   const countRows=()=>JSON.parse(run([...cli,'execute',...common,'--command',countsSql,'--json'],true)).flatMap(x=>x.results||[]);
+   console.log('PREVIEW content-only purge BEFORE:',JSON.stringify(countRows()));
+   run([...cli,'execute',...common,'--file','scripts/clear-preview-discussions-20261107.sql']);
+   const after=countRows();
+   console.log('PREVIEW content-only purge AFTER:',JSON.stringify(after));
+   if(after.length!==1||after[0].topics!==0||after[0].comments!==0||after[0].batches!==0||after[0].system_accounts!==1)throw Error('Preview-only purge verification failed');
+   console.log('PREVIEW content-only purge succeeded.');
+ }else console.log('PREVIEW content-only purge already completed. Skip.');
  console.log('Preview-only migration verified for '+PREVIEW);
 }else console.log('Remote migration skipped outside the named Cloudflare preview build.');
