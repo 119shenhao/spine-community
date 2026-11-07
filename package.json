@@ -11,7 +11,8 @@
     "test": "node --test tests/community.test.mjs",
     "db:local": "wrangler d1 migrations apply DB --local --config wrangler.local.jsonc",
     "db:preview": "wrangler d1 migrations apply PREVIEW_DB --remote --config wrangler.preview-migrations.jsonc",
-    "verify": "npm run check && npm test"
+    "verify": "npm run check && npm test",
+    "sync:production": "node scripts/sync-preview-to-production.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261104.1",
