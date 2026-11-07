@@ -464,3 +464,15 @@ test('the desktop and mobile account menu exposes a discoverable sign out action
  assert.match(css,/\.account-trigger:focus-visible/);
  assert.match(css,/@media\(max-width:700px\)/);
 });
+
+
+test('Google OAuth client IDs remain separated across production and preview config',()=>{
+ const cfg=JSON.parse(readFileSync('wrangler.jsonc','utf8'));
+ assert.equal(cfg.vars?.GOOGLE_CLIENT_ID,'294338107553-k5bts5abj3tg85lt82moelv40sph3tuh.apps.googleusercontent.com');
+ assert.equal(cfg.previews?.vars?.GOOGLE_CLIENT_ID,'294338107553-bht5pr4qa112e9knbst517b0mvb9pus9.apps.googleusercontent.com');
+ assert.notEqual(cfg.vars.GOOGLE_CLIENT_ID,cfg.previews.vars.GOOGLE_CLIENT_ID);
+ assert.equal('GOOGLE_CLIENT_SECRET' in (cfg.vars||{}),false);
+ assert.equal('GOOGLE_CLIENT_SECRET' in (cfg.previews.vars||{}),false);
+ assert.equal(cfg.d1_databases[0].database_name,'spine-community-db');
+ assert.equal(cfg.previews.d1_databases[0].database_name,'spine-community-db-preview');
+});
