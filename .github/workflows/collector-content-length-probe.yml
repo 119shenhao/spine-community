@@ -1,0 +1,81 @@
+name: Collector 39 content-length and Mayo pagination metadata
+on:
+  push:
+    branches: [feature/v1-community-build-20261106]
+    paths: [.github/workflows/collector-content-length-probe.yml]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 9
+    steps:
+      - run: python -m pip -q install beautifulsoup4==4.13.4
+      - name: Inspect sanctioned public content metadata without logging patient texts
+        shell: bash
+        run: |
+          python - <<'PY'
+          import re, json, time
+          from urllib.request import Request, build_opener, HTTPRedirectHandler
+          from urllib.parse import urljoin, urlsplit, parse_qs
+          from urllib.error import HTTPError
+          from bs4 import BeautifulSoup
+          class NoRedirect(HTTPRedirectHandler):
+              def redirect_request(self,*args,**kwargs):return None
+          op=build_opener(NoRedirect())
+          def fetch(url):
+              with op.open(Request(url,headers={'User-Agent':'SpineCommunityCollector/1.0'}),timeout=15) as r:
+                  return BeautifulSoup(r.read(1800000),'html.parser')
+          listings=['https://ask.39.net/browse/11760-1-1.html','https://ask.39.net/browse/625-1-1.html']
+          seen=set()
+          for listing in listings:
+              try:page=fetch(listing)
+              except Exception as e:print(json.dumps({'site':'39','listing':'unavailable'}));continue
+              count=0
+              for a in page.select('.question-ask-title a[href]'):
+                  url=urljoin(listing,a['href'])
+                  if url in seen:continue
+                  seen.add(url)
+                  if count>=7:break
+                  count+=1
+                  holder=a.find_parent(class_='question-ask')
+                  parents=[]
+                  if holder:
+                      for elem in holder.select('p,div'):
+                          size=len(elem.get_text(' ',strip=True))
+                          if size>30 and size<1000:
+                              parents.append({'classes':elem.get('class',[]),'len':size})
+                  try:
+                      source=fetch(url)
+                      title=source.select_one('h1.ask_tit')
+                      body=source.select_one('.ask_hid .txt_ms')
+                      extra=source.select_one('.ask_hid .txt_bc span')
+                      info={'site':'39','title_len':len(title.get_text(' ',strip=True)) if title else 0,
+                          'body_len':len(body.get_text(' ',strip=True)) if body else 0,
+                          'extra_len':len(extra.get_text(' ',strip=True)) if extra else 0,
+                          'comments':len(source.select('div.doctor_all[id^="reply_"]')),
+                          'preview_components':parents[:5]}
+                  except HTTPError as e:info={'site':'39','http':e.code}
+                  except Exception:info={'site':'39','error':'network'}
+                  print(json.dumps(info,ensure_ascii=False),flush=True)
+                  time.sleep(1)
+          pages=['https://connect.mayoclinic.org/discussion/post-scoliosis-surgery-management/',
+                'https://connect.mayoclinic.org/discussion/shower-chair-after-long-fusion/',
+                'https://connect.mayoclinic.org/discussion/lumbar-radiculopathy-lumbar-spondylitis/',
+                'https://connect.mayoclinic.org/discussion/spinal-fusion-2/',
+                'https://connect.mayoclinic.org/discussion/adult-scoliosis/']
+          for url in pages:
+              try:
+                  page=fetch(url)
+                  count=1
+                  for a in page.select('.chv4-comment-pagination a[href]'):
+                      vals=parse_qs(urlsplit(a['href']).query).get('pg',[])
+                      if vals and vals[0].isdigit():count=max(count,int(vals[0]))
+                  rows=page.select('.comment-individual-row')
+                  print(json.dumps({'site':'mayo','path':urlsplit(url).path,'pages':count,
+                       'page1_replies':len(rows),
+                       'quoted_replies':len(page.select('.in-reply-to-container'))}),flush=True)
+              except HTTPError as e:print(json.dumps({'site':'mayo','path':urlsplit(url).path,'http':e.code}),flush=True)
+              except Exception:print(json.dumps({'site':'mayo','path':urlsplit(url).path,'error':'network'}),flush=True)
+              time.sleep(1)
+          PY
