@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from spine_discover import candidate_links, discover_candidates
-from spine_sources import source_id, read_topic
+from spine_sources import source_id, read_topic, parse_mayoclinic, parse_healthunlocked
 
 
 class DiscoveryTests(unittest.TestCase):
@@ -86,6 +86,45 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(topic["title"], "Lumbar surgery recovery")
         self.assertEqual(len(topic["comments"]), 2)
         self.assertEqual(seen, ["https://community.patient.info/t/lumbar-surgery-recovery/621432.json"])
+
+
+
+    def test_mayo_public_flat_thread_and_incomplete_threads(self):
+        html = """<link rel="canonical" href="https://connect.mayoclinic.org/discussion/spinal-surgery-recovery/">
+          <h1 class="chv4-discussion-title">Spinal surgery recovery</h1>
+          <div class="discussion-content"><div class="single-discussion-body"><p>My back is healing after surgery</p></div></div>
+          <div class="comment-container">
+            <div class="comment-individual-row"><div class="single-comment-body"><p>I experienced recovery too.</p></div></div>
+            <div class="comment-individual-row"><div class="single-comment-body"><p>Thanks for your updates.</p></div></div>
+          </div>"""
+        topic = parse_mayoclinic(html, "spinal-surgery-recovery")
+        self.assertEqual(len(topic["comments"]), 2)
+        self.assertEqual(topic["source_lang"], "en")
+        with self.assertRaisesRegex(ValueError, "mayoclinic_multipage_replies"):
+            parse_mayoclinic(html + '<div class="chv4-comment-pagination"><ul class="pagination"><li>1</li></ul></div>', "spinal-surgery-recovery")
+        with self.assertRaisesRegex(ValueError, "mayoclinic_nested_reply_parent_unverified"):
+            parse_mayoclinic(html.replace('<div class="comment-container">','<div class="comment-container"><div class="in-reply-to-container"></div>'), "spinal-surgery-recovery")
+        with self.assertRaisesRegex(ValueError, "unexpected_source_redirect"):
+            parse_mayoclinic(html, "another-spinal-surgery")
+
+    def test_healthunlocked_public_nested_reply_structure(self):
+        html = """<link rel="canonical" href="https://healthunlocked.com/painconcern/posts/153318229/spinal-decompression-surgery-on-saturday">
+          <h1 id="js-post-heading">Spinal decompression surgery</h1>
+          <div class="js-post-body"><p>I had surgery last weekend.</p></div>
+          <div class="responses__ReplyCount-sc-123">2 replies</div>
+          <div class="interactiveReplyItem__Response-sc-123">
+            <div class="replyItemHeader__Header-sc-123">Author</div>
+            <p>I had a similar experience.</p>
+            <div class="interactiveReplyItem__Response-sc-123">
+              <div class="replyItemHeader__Header-sc-123">Reply author</div>
+              <p>Thank you for replying.</p>
+            </div>
+          </div>"""
+        topic = parse_healthunlocked(html, "153318229")
+        self.assertEqual(len(topic["comments"]), 1)
+        self.assertEqual(len(topic["comments"][0]["replies"]), 1)
+        with self.assertRaisesRegex(ValueError, "public_reply_count_mismatch"):
+            parse_healthunlocked(html.replace("2 replies","3 replies"), "153318229")
 
 
 if __name__ == "__main__":
