@@ -163,6 +163,10 @@ class DiscoveryTests(unittest.TestCase):
             parse_mayoclinic_pages([p1,p2.replace('pg=2','pg=3')], "lumbar-recovery")
         with self.assertRaisesRegex(ValueError,"mayoclinic_page_limit"):
             parse_mayoclinic_pages([p1]*6, "lumbar-recovery")
+        forward = p1.replace('id="comment-111"', 'id="comment-112"')
+        backward = p2.replace('id="comment-112"', 'id="comment-111"').replace('comment/111/', 'comment/112/')
+        with self.assertRaisesRegex(ValueError, "mayoclinic_reply_parent_order_unverified"):
+            parse_mayoclinic_pages([forward,backward], "lumbar-recovery")
 
     def test_healthunlocked_public_nested_reply_structure(self):
         html = """<link rel="canonical" href="https://healthunlocked.com/painconcern/posts/153318229/spinal-decompression-surgery-on-saturday">
