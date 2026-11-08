@@ -1,9 +1,8 @@
 {
-  "request_id": "verify-mayo-health-public-discovery-20261108-final",
+  "request_id": "verify-120ask-fixed-discovery-20261108",
   "mode": "discover",
   "sites": [
-    "mayoclinic",
-    "healthunlocked"
+    "120ask"
   ],
   "candidates": {},
   "limit": 2
