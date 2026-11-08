@@ -205,6 +205,43 @@ def ask39_directory_candidates(excluded, maximum=36):
     return {identifier: url for identifier, (_, url) in selected}
 
 
+def discover_120ask(excluded, maximum=36):
+    """Find candidate IDs from public search results; never open topic bodies here."""
+    queries = (
+        "site:www.120ask.com/question/ 腰椎 手术 康复",
+        "site:www.120ask.com/question/ 颈椎 治疗 复查",
+        "site:www.120ask.com/question/ 腰椎间盘突出 术后",
+        "site:www.120ask.com/question/ 颈椎病 症状 恢复",
+    )
+    ranked = {}
+    for query in queries:
+        search_url = "https://www.bing.com/search?" + urlencode({"q": query, "count": 30})
+        try:
+            page = BeautifulSoup(fetch(search_url), "html.parser")
+        except FetchProblem as error:
+            emit("discovery_unavailable", site="120ask", reason=str(error))
+            if error.status in (401, 403, 429):
+                break
+            continue
+        for link in page.select("a[href]"):
+            url = link["href"]
+            try:
+                identifier = source_id("120ask", url)
+            except ValueError:
+                continue
+            if identifier in excluded:
+                continue
+            title = link.get_text(" ", strip=True)
+            priority = (10 * bool(re.search(r"术后|康复|复查|治疗|恢复", title))
+                        + min(len(title), 60))
+            if identifier not in ranked or priority > ranked[identifier][0]:
+                ranked[identifier] = (priority, url)
+        time.sleep(1)
+    selected = sorted(ranked.items(), key=lambda item: item[1][0], reverse=True)[:maximum]
+    emit("discovery_summary", site="120ask", candidates=len(selected))
+    return {identifier: url for identifier, (_, url) in selected}
+
+
 def complete(payload):
     for attempt in range(2):
         try:
@@ -291,7 +328,7 @@ def collect(site, candidates, limit, export_dir):
     mark_failures = sorted(key for key in expected_marks if marks.get(key) != "completed")
     emit("collection_summary", site=site, granted=granted, new_topics=new_topics, new_replies=new_replies,
          duplicates=duplicates, unverified=unverified, mark_failures=mark_failures, stopped_reason=stopped_reason)
-    return not (unverified or mark_failures or stopped_reason)
+    return not (unverified or mark_failures or stopped_reason), new_topics
 
 
 def main():
@@ -302,6 +339,7 @@ def main():
     request = read_request(args.request)
     emit("request", request_id=request["request_id"], mode=request["mode"])
     ok = True
+    total_new_topics = 0
     for site in request["sites"]:
         try:
             excluded = exclusions(site)
@@ -315,6 +353,8 @@ def main():
                         raise ValueError("missing_official_discussion_id")
                     stable[identifier] = url
                 candidates = stable
+            if site == "120ask" and request["mode"] == "collect" and not candidates and not args.export_dir:
+                candidates = discover_120ask(excluded)
             if site == "ask39" and request["mode"] == "collect" and not candidates and not args.export_dir:
                 candidates = ask39_directory_candidates(excluded)
             eligible = {key: url for key, url in candidates.items() if key not in excluded}
@@ -325,11 +365,17 @@ def main():
             elif site == "ask39" and request["mode"] == "inspect":
                 inspect_ask39()
             elif request["mode"] == "collect":
-                ok = collect(site, eligible, request["limit"], args.export_dir) and ok
+                site_ok, site_new = collect(site, eligible, request["limit"], args.export_dir)
+                total_new_topics += site_new
+                ok = site_ok and ok
         except (FetchProblem, ValueError, TypeError, KeyError, OSError) as error:
             reason = str(error) if isinstance(error, FetchProblem) else "invalid_request_export_or_preview_response"
             emit("site_error", site=site, reason=reason)
             ok = False
+    if request["mode"] == "collect" and total_new_topics == 0:
+        emit("target_not_met", reason="zero_new_topics", new_topics=0)
+        return 1
+    emit("run_summary", new_topics=total_new_topics, target_met=total_new_topics > 0)
     return 0 if ok else 1
 
 
