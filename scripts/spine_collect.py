@@ -285,6 +285,8 @@ def collect(site, candidates, limit, export_dir):
         })
         lease, = response["results"]
         if lease["result"] != "granted":
+            if lease["result"] == "completed" and not export_dir:
+                queue_mark(site, identifier, "completed")
             emit("claim_skipped", site=site, source_id=identifier, reason=lease["result"])
             continue
         granted += 1
@@ -368,8 +370,10 @@ def main():
     emit("request", request_id=request["request_id"], mode=request["mode"])
     ok = True
     total_new_topics = 0
-    target = request["limit"] * len(request["sites"])
+    target = request["limit"]
     for site in request["sites"]:
+        if request["mode"] == "collect" and total_new_topics >= target:
+            break
         try:
             excluded = exclusions(site)
             candidates = request["candidates"].get(site, {})
@@ -382,6 +386,10 @@ def main():
                         raise ValueError("missing_official_discussion_id")
                     stable[identifier] = url
                 candidates = stable
+            if request["mode"] == "collect" and not args.export_dir and not candidates:
+                queued_first = api("/api/collect/queue?" + urlencode({"site": site}))["items"]
+                if len(queued_first) >= 30:
+                    candidates = {row["source_id"]: row["url"] for row in queued_first}
             if site == "120ask" and request["mode"] == "collect" and not candidates and not args.export_dir:
                 candidates = discover_120ask(excluded)
             if site == "ask39" and request["mode"] == "collect" and not candidates and not args.export_dir:
@@ -395,6 +403,10 @@ def main():
                         ]})
                 queued = api("/api/collect/queue?"+urlencode({"site":site}))["items"]
                 candidates = {row["source_id"]: row["url"] for row in queued}
+            if request["mode"] == "collect" and not args.export_dir:
+                already_done = [key for key in candidates if excluded.get(key) == "completed"]
+                for key in already_done:
+                    queue_mark(site, key, "completed")
             eligible = {key: url for key, url in candidates.items() if key not in excluded}
             emit("plan", site=site, existing_exclusions=len(excluded), candidates=len(candidates),
                  excluded=len(candidates) - len(eligible), eligible=len(eligible))
@@ -403,7 +415,7 @@ def main():
             elif site == "ask39" and request["mode"] == "inspect":
                 inspect_ask39()
             elif request["mode"] == "collect":
-                site_ok, site_new = collect(site, eligible, request["limit"], args.export_dir)
+                site_ok, site_new = collect(site, eligible, target - total_new_topics, args.export_dir)
                 total_new_topics += site_new
                 ok = site_ok and ok
         except (FetchProblem, ValueError, TypeError, KeyError, OSError) as error:
