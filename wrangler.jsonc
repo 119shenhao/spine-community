@@ -46,9 +46,21 @@
       "TRANSLATION_ENABLED": "false",
       "IMPORT_ENABLED": "true",
       "COLLECT_ENABLED": "true"
-    }
+    },
+    "r2_buckets": [
+      {
+        "binding": "PUBLIC_CONTENT_R2",
+        "bucket_name": "spine-community-public-dev"
+      }
+    ]
   },
   "build": {
     "command": "node scripts/prepare-build.mjs"
-  }
+  },
+  "r2_buckets": [
+    {
+      "binding": "PUBLIC_CONTENT_R2",
+      "bucket_name": "spine-community-public-prod"
+    }
+  ]
 }
