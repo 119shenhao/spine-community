@@ -272,10 +272,17 @@ def discover_120ask(excluded, maximum=36):
         "site:www.120ask.com/question/ 椎管狭窄 术后",
     )
     ranked = {}
-    # The official home page contains a limited set of current direct questions.
-    sources = [("official", "https://www.120ask.com/")]
-    sources += [("search_index", "https://www.bing.com/search?" +
-                 urlencode({"q": query, "count": 30})) for query in queries]
+    # Official disease Q&A lists provide real stable question links and pagination.
+    # Avoid relying on search engines which currently return no direct candidates.
+    sources = []
+    for disease in ("jingzhuibing", "yaozhuibing"):
+        for page_no in (1, 2, 3, 5, 8, 12):
+            base = f"https://www.120ask.com/list/{disease}/"
+            sources.append(("official_disease", base if page_no == 1 else
+                            f"https://www.120ask.com/list/{disease}/{page_no}/"))
+    # Search is fallback only when official pages returned too few candidate IDs.
+    search_urls = [("search_index", "https://www.bing.com/search?" +
+                   urlencode({"q": query, "count": 30})) for query in queries]
     denied = set()
     for kind, url in sources:
         host = urlsplit(url).netloc
@@ -292,9 +299,20 @@ def discover_120ask(excluded, maximum=36):
             if error.status in (401, 403, 405, 429):
                 denied.add(host)
         time.sleep(1)
+    if len(ranked) < 10:
+        for kind, url in search_urls:
+            try:
+                for identifier, item in read_120ask_links(fetch(url), url, excluded).items():
+                    if identifier not in ranked or item[0] > ranked[identifier][0]:
+                        ranked[identifier] = item
+            except FetchProblem as error:
+                emit("discovery_unavailable", site="120ask", kind=kind, reason=str(error))
+                if error.status in (401, 403, 405, 429):
+                    break
+            time.sleep(1)
     selected = sorted(ranked.items(), key=lambda item: (-item[1][0], item[0]))[:maximum]
     emit("discovery_summary", site="120ask", unique_candidates=len(ranked),
-         selected=len(selected))
+         selected=len(selected), strategy="official_spine_disease_questions")
     return {identifier: url for identifier, (_, url) in selected}
 
 
