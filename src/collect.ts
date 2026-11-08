@@ -93,8 +93,48 @@ function finished(row:Row,fp:string,leaseHash:string){
 export async function collectRoute(req:Request,env:Env,path:string):Promise<Response>{
  // Preview-only environment gating happens BEFORE touching either database.
  allowPreviewRequest(req,env);
- if(!['/api/collect/exclusions','/api/collect/claim','/api/collect/complete','/api/collect/release'].includes(path))fail(404,'not_found');
+ if(!['/api/collect/exclusions','/api/collect/claim','/api/collect/complete','/api/collect/release','/api/collect/queue'].includes(path))fail(404,'not_found');
  const db=env.IMPORT_DB!;
+ if(path==='/api/collect/queue'){
+  if(req.method==='GET'){
+   const url=new URL(req.url),site=validSite(url.searchParams.get('site'));
+   const rows=await all(db,`SELECT source_id,url,status,reason,attempts,retry_at FROM collector_candidates
+     WHERE site=? AND (status='pending' OR (status='retry' AND retry_at<=unixepoch()) OR (status='processing' AND lease_until<=unixepoch()))
+     ORDER BY updated_at,source_id LIMIT 120`,site);
+   return json({site,items:rows});
+  }
+  if(req.method!=='POST')fail(405,'method_not_allowed');
+  const b=plainObject(await body(req),['site','action','items']);
+  const site=validSite(b.site),action=textField(b.action,1,20,'action');
+  const items=list(b.items);
+  if(!items.length||items.length>30)fail(400,'invalid_queue_batch');
+  if(action==='enqueue'){
+   const statements=items.map(raw=>{
+    const row=plainObject(raw,['source_id','url']),sourceId=validSource(row.source_id,site);
+    const url=textField(row.url,10,300,'url');
+    const parsed=new URL(url);
+    if(parsed.protocol!=='https:'||!['www.120ask.com','ask.39.net','club.xywy.com','patient.info','healthunlocked.com','connect.mayoclinic.org'].includes(parsed.hostname))fail(400,'invalid_source_url');
+    return stmt(db,`INSERT INTO collector_candidates(site,source_id,url,status) VALUES(?,?,?,'pending')
+      ON CONFLICT(site,source_id) DO NOTHING`,site,sourceId,url);
+   });
+   await db.batch(statements);
+   return json({status:'queued',count:items.length});
+  }
+  if(action==='mark'){
+   const statements=items.map(raw=>{
+    const row=plainObject(raw,['source_id','status','reason']),sourceId=validSource(row.source_id,site);
+    const status=textField(row.status,1,20,'status');
+    if(!['completed','rejected','retry'].includes(status))fail(400,'invalid_queue_status');
+    const reason=row.reason===undefined?null:textField(row.reason,1,80,'reason');
+    return stmt(db,`UPDATE collector_candidates SET status=?,reason=?,attempts=attempts+1,
+      retry_at=CASE WHEN ?='retry' THEN unixepoch()+MIN(86400,300*(attempts+1)*(attempts+1)) ELSE 0 END,
+      updated_at=unixepoch() WHERE site=? AND source_id=?`,status,reason,status,site,sourceId);
+   });
+   await db.batch(statements);
+   return json({status:'marked',count:items.length});
+  }
+  fail(400,'invalid_queue_action');
+ }
  if(path==='/api/collect/exclusions'){
   if(req.method!=='GET')fail(405,'method_not_allowed');
   const url=new URL(req.url),site=validSite(url.searchParams.get('site'));
