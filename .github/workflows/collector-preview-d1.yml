@@ -1,5 +1,6 @@
 name: Preview collector D1 queue migration
 on:
+  workflow_dispatch:
   push:
     branches: [feature/v1-community-build-20261106]
     paths: [migrations/preview-only/**, wrangler.collector-preview.json, .github/workflows/collector-preview-d1.yml]
