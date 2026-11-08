@@ -7,6 +7,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: spine-preview-collector-run
+  cancel-in-progress: false
+
 jobs:
   collector:
     runs-on: ubuntu-latest
