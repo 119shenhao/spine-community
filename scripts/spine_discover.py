@@ -113,7 +113,7 @@ def discover_candidates(site, excluded, fetch, emit, maximum=48):
             reason = str(error)
             failures.append(reason)
             emit("discovery_unavailable", site=site, kind=kind, reason=reason)
-            if getattr(error, "status", 0) in (401, 403, 429):
+            if getattr(error, "status", 0) in (401, 403, 405, 429):
                 # Don't request another page from a host that explicitly refused access.
                 blocked_hosts.add(hostname)
         time.sleep(1)
