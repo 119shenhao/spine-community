@@ -100,7 +100,7 @@ export async function collectRoute(req:Request,env:Env,path:string):Promise<Resp
    const url=new URL(req.url),site=validSite(url.searchParams.get('site'));
    await rate(db,'collect:queue:read',240);
    const rows=await all(db,`SELECT source_id,url,status,reason,attempts,retry_at FROM collector_candidates
-     WHERE site=? AND (status='pending' OR (status IN ('retry','rejected') AND retry_at<=unixepoch()) OR (status='processing' AND lease_until<=unixepoch()))
+     WHERE site=? AND (status='pending' OR (status='retry' AND retry_at<=unixepoch()) OR (status='processing' AND lease_until<=unixepoch()))
      ORDER BY updated_at,source_id LIMIT 120`,site);
    return json({site,items:rows});
   }
@@ -143,8 +143,8 @@ export async function collectRoute(req:Request,env:Env,path:string):Promise<Resp
     if(!['completed','rejected','retry'].includes(status))fail(400,'invalid_queue_status');
     const reason=row.reason===undefined?null:textField(row.reason,1,80,'reason');
     return stmt(db,`UPDATE collector_candidates SET status=?,reason=?,attempts=attempts+1,
-      retry_at=CASE WHEN ?='retry' THEN unixepoch()+MIN(86400,300*(attempts+1)*(attempts+1)) WHEN ?='rejected' THEN unixepoch()+2592000 ELSE 0 END,
-      updated_at=unixepoch() WHERE site=? AND source_id=? AND status<>'completed' AND (?<>'completed' OR EXISTS(SELECT 1 FROM collect_sources WHERE collect_sources.site=collector_candidates.site AND collect_sources.source_id=collector_candidates.source_id AND state='completed'))`,status,reason,status,status,site,sourceId,status);
+      retry_at=CASE WHEN ?='retry' THEN unixepoch()+MIN(86400,300*(attempts+1)*(attempts+1)) ELSE 0 END,
+      updated_at=unixepoch() WHERE site=? AND source_id=? AND status<>'completed' AND (?<>'completed' OR EXISTS(SELECT 1 FROM collect_sources WHERE collect_sources.site=collector_candidates.site AND collect_sources.source_id=collector_candidates.source_id AND state='completed'))`,status,reason,status,site,sourceId,status);
    });
    await db.batch(statements);
    return json({status:'marked',count:items.length});
