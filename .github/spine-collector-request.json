@@ -1,8 +1,8 @@
 {
-  "request_id": "verify-ask39-queue-fix-20261108-87f56307502b",
+  "request_id": "collect-all-20261108-2202-vsdg8aguwl",
   "mode": "collect",
   "sites": [
-    "ask39"
+    "all"
   ],
   "candidates": {},
   "limit": 2
