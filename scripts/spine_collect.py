@@ -176,9 +176,13 @@ def inspect_ask39():
 
 
 
-def ask39_directory_candidates(excluded, maximum=36):
+def ask39_directory_candidates(excluded, maximum=120):
     ranked = {}
-    for listing in ASK39_LISTS:
+    listings = list(ASK39_LISTS)
+    for category in (11760, 625):
+        for page_number in (3, 4, 6, 8, 15, 20, 30, 70, 150, 200):
+            listings.append(f"https://ask.39.net/browse/{category}-1-{page_number}.html")
+    for listing in listings:
         try:
             page = BeautifulSoup(fetch(listing), "html.parser")
         except FetchProblem as error:
@@ -202,6 +206,7 @@ def ask39_directory_candidates(excluded, maximum=36):
                 ranked[identifier] = (priority, url)
         time.sleep(1)
     selected = sorted(ranked.items(), key=lambda item: item[1][0], reverse=True)[:maximum]
+    emit("discovery_summary", site="ask39", unique_candidates=len(ranked), selected=len(selected))
     return {identifier: url for identifier, (_, url) in selected}
 
 
@@ -212,6 +217,8 @@ def discover_120ask(excluded, maximum=36):
         "site:www.120ask.com/question/ 颈椎 治疗 复查",
         "site:www.120ask.com/question/ 腰椎间盘突出 术后",
         "site:www.120ask.com/question/ 颈椎病 症状 恢复",
+        "120ask.com/question 腰椎间盘突出",
+        "120ask.com/question 颈椎病",
     )
     ranked = {}
     for query in queries:
@@ -225,6 +232,9 @@ def discover_120ask(excluded, maximum=36):
             continue
         for link in page.select("a[href]"):
             url = link["href"]
+            match = re.search(r"https?://www\\.120ask\\.com/question/[0-9]{1,20}\\.htm", url)
+            if match:
+                url = match.group(0)
             try:
                 identifier = source_id("120ask", url)
             except ValueError:
