@@ -138,6 +138,24 @@ export async function collectRoute(req:Request,env:Env,path:string):Promise<Resp
    await db.batch(statements);
    return json({status:'queued',count:items.length});
   }
+  // One-time upgrade path for Mayo candidates rejected by the OLD 5-page/49-reply
+  // parser. Never reopen completed topics or non-Mayo sources automatically.
+  if(action==='reconsider'){
+   if(site!=='mayoclinic')fail(400,'mayo_only');
+   const eligibleReasons=['mayoclinic_multipage_replies','mayoclinic_page_limit',
+     'mayoclinic_reply_limit_or_missing','mayoclinic_reply_count_mismatch',
+     'mayoclinic_nested_reply_parent_unverified','mayoclinic_reply_limit'];
+   const statements=items.map(raw=>{
+    const row=plainObject(raw,['source_id']),sourceId=validSource(row.source_id,site);
+    return stmt(db,`UPDATE collector_candidates SET status='pending',reason='parser_upgraded',
+      retry_at=0,updated_at=unixepoch() WHERE site='mayoclinic' AND source_id=?
+      AND status='rejected' AND attempts<=1 AND reason IN (${eligibleReasons.map(()=>'?').join(',')})
+      AND NOT EXISTS(SELECT 1 FROM collect_sources c
+         WHERE c.site='mayoclinic' AND c.source_id=collector_candidates.source_id AND c.state='completed')`,sourceId,...eligibleReasons);
+   });
+   await db.batch(statements);
+   return json({status:'reconsidered',count:items.length});
+  }
   if(action==='mark'){
    const statements=items.map(raw=>{
     const row=plainObject(raw,['source_id','status','reason']),sourceId=validSource(row.source_id,site);
