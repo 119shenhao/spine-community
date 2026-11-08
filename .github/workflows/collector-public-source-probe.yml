@@ -10,74 +10,42 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Check direct public GET access without credentials or bypass
+      - run: python3 -m pip -q install 'beautifulsoup4==4.13.4'
+      - name: Verify public pages and sanitized markup features
         shell: bash
         run: |
           python3 - <<'PY'
-          from urllib.request import Request, build_opener, HTTPRedirectHandler
-          from urllib.error import HTTPError, URLError
-          import re, json
-          class NoRedirect(HTTPRedirectHandler):
-              def redirect_request(self, *args, **kwargs): return None
-          op=build_opener(NoRedirect())
-          urls={
-           'healthunlocked_home':'https://healthunlocked.com/',
-           'healthunlocked_sciatica':'https://healthunlocked.com/tag/sciatica',
-           'mayoclinic_spine_list':'https://connect.mayoclinic.org/group/spine-health/?index=discussions',
-           'mayoclinic_public_thread':'https://connect.mayoclinic.org/discussion/will-i-ever-recover-from-my-operation-for-spinal-stenoses/',
-          }
-          for name,url in urls.items():
-              try:
-                  with op.open(Request(url,headers={'User-Agent':'SpineCommunityCollector/1.0','Accept':'text/html'}),timeout=15) as r:
-                      data=r.read(1_500_000)
-                      # Report only response metadata and element counts; do not publish patient text.
-                      text=data.decode('utf-8','ignore')
-                      result={'site':name,'http':r.status,'bytes_read':len(data),
-                          'content_type':r.headers.get('Content-Type'),
-                          'discussion_url_count':len(set(re.findall(r'/discussion/[a-z0-9-]+/?',text,re.I))),
-                          'post_url_count':len(set(re.findall(r'/posts/[0-9]+',text,re.I)))}
-              except HTTPError as e:
-                  result={'site':name,'http':e.code,'reason':'source_rejected_or_redirected'}
-              except (URLError,OSError) as e:
-                  result={'site':name,'http':None,'reason':'network_error'}
-              print(json.dumps(result),flush=True)
-          PY
-
-      - name: Inspect public DOM structure without recording patient text
-        shell: bash
-        run: |
-          python3 -m pip -q install 'beautifulsoup4==4.13.4'
-          python3 - <<'PY'
-          from urllib.request import Request, urlopen
+          from urllib.request import Request,build_opener,HTTPRedirectHandler
+          from urllib.error import HTTPError,URLError
+          from urllib.parse import urlparse
           from collections import Counter
           from bs4 import BeautifulSoup
-          from urllib.parse import urlparse
-          import re,json
-          for label,url in [
-            ('healthunlocked_home','https://healthunlocked.com/'),
-            ('mayo_list','https://connect.mayoclinic.org/group/spine-health/?index=discussions'),
-            ('mayo_thread','https://connect.mayoclinic.org/discussion/will-i-ever-recover-from-my-operation-for-spinal-stenoses/')
-          ]:
+          import time,re,json
+          class NoRedirect(HTTPRedirectHandler):
+              def redirect_request(self,*args,**kwargs): return None
+          op=build_opener(NoRedirect())
+          pages={
+           'healthunlocked_home':'https://healthunlocked.com/',
+           'healthunlocked_painconcern':'https://healthunlocked.com/painconcern',
+           'mayo_spine_list':'https://connect.mayoclinic.org/group/spine-health/?index=discussions',
+           'mayo_public_thread':'https://connect.mayoclinic.org/discussion/will-i-ever-recover-from-my-operation-for-spinal-stenoses/',
+          }
+          for label,url in pages.items():
               try:
-                  with urlopen(Request(url,headers={'User-Agent':'SpineCommunityCollector/1.0'}),timeout=15) as r: html=r.read(1500000)
-              except Exception as e:
-                  print(json.dumps({'label':label,'access':'unavailable'}));continue
+                  with op.open(Request(url,headers={'User-Agent':'SpineCommunityCollector/1.0','Accept':'text/html'}),timeout=15) as r:
+                      html=r.read(1500000)
+                      code=r.status
+              except HTTPError as e:
+                  print(json.dumps({'page':label,'status':e.code,'reason':'access_rejected_or_redirect'}),flush=True);time.sleep(3);continue
+              except (URLError,OSError):
+                  print(json.dumps({'page':label,'status':None,'reason':'network_failure'}),flush=True);time.sleep(3);continue
               soup=BeautifulSoup(html,'html.parser')
-              counts=Counter((tag.name,c) for tag in soup.select('[class]') for c in tag.get('class',[]) if re.search(r'comment|response|discussion|content|post|reply|body|pagination|forum|thread|message|feed|topic|group',c,re.I))
-              print(json.dumps({'label':label,'classes':counts.most_common(45)}))
               links=[]
-              for link in soup.select('a[href]'):
-                  target=urlparse(link['href'])
-                  if label=='healthunlocked_home' and ('healthunlocked' in target.netloc or not target.netloc) and re.search(r'pain|spine|arthritis|sciatica|fibromyal|bone',target.path,re.I):
-                      links.append(target.path)
-                  elif label=='mayo_list' and '/discussion/' in target.path:
-                      links.append(target.path)
-              print(json.dumps({'label':label,'link_paths':list(dict.fromkeys(links))[:22]}))
-              h=soup.select_one('h1')
-              if h and label=='mayo_thread':
-                  p=h
-                  for i in range(4):
-                      print(json.dumps({'label':label,'h1_ancestor_level':i,'tag':p.name,'class':p.get('class',[]),'id':p.get('id')}))
-                      p=p.parent
-              print(json.dumps({'label':label,'comments_like':len(soup.select('[class*="comment"],[class*="Comment"]')),'articles':len(soup.select('article')),'h2':len(soup.select('h2')),'list_items':len(soup.select('li'))}))
+              for node in soup.select('a[href]'):
+                  path=urlparse(node['href']).path
+                  if (label.startswith('mayo') and '/discussion/' in path) or (label.startswith('healthunlocked') and ('/posts/' in path or 'pain' in path or 'spine' in path)):
+                      links.append(path)
+              classes=Counter((node.name,c) for node in soup.select('[class]') for c in node.get('class',[]) if re.search('comment|response|discussion|content|post|reply|body|pagination|forum|thread|message|topic|activity',c,re.I))
+              print(json.dumps({'page':label,'status':code,'bytes':len(html),'candidate_paths':list(dict.fromkeys(links))[:16],'classes':classes.most_common(65),'article_count':len(soup.select('article')),'h1_count':len(soup.select('h1')),'reply_button_count':len(soup.select('a[href*="reply"]'))}),flush=True)
+              time.sleep(3)
           PY
