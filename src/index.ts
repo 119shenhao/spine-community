@@ -3,7 +3,7 @@ import {authRoute} from './auth';
 import {contentRoute} from './content';
 import {searchRoute} from './search';
 import {communityRoute} from './community';
-import {translationRoute} from './translation';
+import {translationRoute,translationConfigured} from './translation';
 import {adminRoute} from './admin';
 import {importRoute,importEnabled} from './import';
 import {collectRoute} from './collect';
@@ -51,13 +51,16 @@ export default {
    }
    if(path==='/api/uploads'||path.startsWith('/api/uploads/'))fail(403,'image_feature_disabled');
    if(path==='/api/health'){
-    let ready=false,projectionReady=false;
+    let ready=false,projectionReady=false,translationReady=false,translationEnabled=false,translationCacheAvailable=false;
     const config=projectionConfig(env);
     try{
      const row=env.DB&&await one(env.DB,`SELECT value,EXISTS(SELECT 1 FROM sqlite_master WHERE type='table'
        AND name='public_projection_scan_count') projection,EXISTS(SELECT 1 FROM sqlite_master WHERE type='table'
-       AND name='public_projection_demand') demand FROM settings WHERE key='schema_version' AND value='1'`);
-     ready=Boolean(row);projectionReady=Boolean(row?.projection&&(!config?.onDemand||row?.demand));
+       AND name='public_projection_demand') demand,
+       EXISTS(SELECT 1 FROM pragma_table_info('topic_translations') WHERE name='projection_key') translation,
+       (SELECT value FROM settings WHERE key='translation_enabled') translationEnabled,
+       EXISTS(SELECT 1 FROM topic_translations) OR EXISTS(SELECT 1 FROM comment_translations) cachedTranslations FROM settings WHERE key='schema_version' AND value='1'`);
+     ready=Boolean(row);translationReady=Boolean(row?.translation);translationEnabled=row?.translationEnabled==='true';translationCacheAvailable=Boolean(row?.cachedTranslations);projectionReady=Boolean(row?.projection&&(!config?.onDemand||row?.demand));
     }catch{}
     const projectionEnabled=Boolean(projectionReady&&config?.enabled&&config.purgeReady);
     const publicContent={
@@ -67,7 +70,7 @@ export default {
      ready:projectionReady,enabled:Boolean(config?.enabled),purgeConfigured:Boolean(config?.purgeReady),
      zoneConfigured:Boolean(config?.zoneConfigured),tokenConfigured:Boolean(config?.tokenConfigured)
     };
-    return json({environment:env.APP_ENV==='preview'?'preview':'production',status:ready?'ok':'setup_required',stage:'v1-development',version:'0.2.0-cdn.4',publicContent,databaseConfigured:Boolean(env.DB),databaseReady:ready,imageUploadsEnabled:false,importEnabled:importEnabled(req,env),googleConfigured:Boolean(env.GOOGLE_CLIENT_ID&&env.GOOGLE_CLIENT_SECRET),translationConfigured:env.TRANSLATION_ENABLED==='true'&&Boolean(env.TRANSLATOR_KEY),analyticsConfigured:Boolean(env.ANALYTICS_SALT)},ready?200:503);
+    return json({environment:env.APP_ENV==='preview'?'preview':'production',status:ready?'ok':'setup_required',stage:'v1-development',version:'0.2.0-translation.1',publicContent,databaseConfigured:Boolean(env.DB),databaseReady:ready,imageUploadsEnabled:false,importEnabled:importEnabled(req,env),googleConfigured:Boolean(env.GOOGLE_CLIENT_ID&&env.GOOGLE_CLIENT_SECRET),translationReady,translationCacheAvailable,translationConfigured:translationReady&&translationEnabled&&translationConfigured(env),analyticsConfigured:Boolean(env.ANALYTICS_SALT)},ready?200:503);
    }
    if(!env.DB)fail(503,'database_not_configured');
    if(!['GET','HEAD'].includes(req.method))sameOrigin(req);
@@ -75,7 +78,7 @@ export default {
    await rate(env.DB,'api:'+await hash(ip+new Date().toISOString().slice(0,10)),180);
    const user=await currentUser(req,env);
    for(const route of [authRoute,communityRoute,contentRoute,searchRoute,translationRoute,projectionAdminRoute,adminRoute]){
-    const response=await route(req,env,user,path);
+    const response=await route(req,env,user,path,ctx);
     if(!response)continue;
     if(response.ok){
      if(changesProjection(path,req.method))wakeProjection(env,ctx);

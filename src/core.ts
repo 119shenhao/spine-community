@@ -1,6 +1,7 @@
 export interface Env {
   ASSETS: Fetcher; DB: D1Database; GOOGLE_CLIENT_ID?: string; GOOGLE_CLIENT_SECRET?: string;
   ADMIN_GOOGLE_SUB?: string; TRANSLATOR_KEY?: string; TRANSLATOR_REGION?: string;
+  TRANSLATOR_ENDPOINT?: string; TRANSLATOR_F0_VERIFIED_AT?: string;
   TRANSLATION_ENABLED?: string; TRANSLATION_DAILY_LIMIT?: string; TRANSLATION_MONTHLY_LIMIT?: string;
   ANALYTICS_SALT?: string; APP_ENV?: string; DEV_AUTH?: string;
   IMPORT_DB?: D1Database; IMPORT_ENABLED?: string;

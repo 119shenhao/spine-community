@@ -21,12 +21,13 @@ export function publicContentReader(health,user,api,fetcher=fetch) {
    if(envelope.invalidated===true)throw Object.assign(contentError(503),{missing:true});
    if(envelope.data===null)throw Object.assign(contentError(404),{withdrawn:firstPage});
    if(!accept(envelope))throw contentError(503);
-   return {...envelope.data,projectionVersion:envelope.contentVersion};
+   return {...envelope.data,projectionVersion:envelope.contentVersion,projectionKey:key};
   }catch(error){
    if(error.withdrawn)throw error;
    if(health.publicContent.fallback){
     const options=health.publicContent.onDemand&&error.missing?{headers:{'x-spine-projection-miss':key}}:undefined;
-    return fallback(options);
+    const data=await fallback(options);
+    return options?{...data,projectionKey:data.resetFeed?'feeds/latest/page-1.json':key}:data;
    }
    throw contentError(error.status===404?404:503);
   }

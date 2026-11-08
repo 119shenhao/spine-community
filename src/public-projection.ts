@@ -1,5 +1,7 @@
 import {Env,Row,stmt,one,hash,now,id} from './core';
 
+import {projectTranslations} from './projection-translations';
+
 export const FEED_LIMIT=501;
 const PREVIEW_ORIGIN='https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev';
 const PRODUCTION_ORIGIN='https://spine.nbn369.com';
@@ -44,7 +46,7 @@ const termsFor=(db:D1Database,ids:string[])=>stmt(db,`
 const versionOf=(db:D1Database,scope:string,target:string)=>stmt(db,
   'SELECT version FROM public_projection WHERE scope=? AND target=?',scope,target);
 const feedRows=(db:D1Database,index:number)=>stmt(db,`
- SELECT t.id,t.title,substr(t.body,1,260) summary,t.source_lang,t.content_version,t.status,
+ SELECT t.id,t.title,substr(t.body,1,260) summary,t.source_lang,t.source_lang_mode,t.content_version,t.status,
         t.created_at,t.reply_count,t.like_count,u.nickname,u.public_region
  FROM topics t JOIN users u ON u.id=t.author_id WHERE t.status='published'
  ORDER BY t.created_at DESC,t.id DESC LIMIT 21 OFFSET ?`,(index-1)*20);
@@ -52,7 +54,7 @@ const topicRow=(db:D1Database,target:string)=>stmt(db,`
  SELECT t.id,t.status,t.created_at,t.reply_count,t.content_version,
         CASE WHEN t.status='published' THEN t.title END title,
         CASE WHEN t.status='published' THEN t.body END body,
-        CASE WHEN t.status='published' THEN t.source_lang ELSE 'und' END source_lang,
+        CASE WHEN t.status='published' THEN t.source_lang ELSE 'und' END source_lang,t.source_lang_mode,
         CASE WHEN t.status='published' THEN u.nickname ELSE '' END nickname,
         CASE WHEN t.status='published' THEN u.public_region END public_region,
         CASE WHEN t.status='published' THEN t.like_count ELSE 0 END like_count
@@ -62,7 +64,7 @@ const commentsFor=(db:D1Database,target:string,index:number)=>stmt(db,`
         CASE WHEN p.status IN ('published','deleted') THEN c.parent_comment_id END parent_comment_id,
         c.kind,c.progress_seq,c.status,c.content_version,c.created_at,
         CASE WHEN c.status='published' THEN c.body END body,
-        CASE WHEN c.status='published' THEN c.source_lang ELSE 'und' END source_lang,
+        CASE WHEN c.status='published' THEN c.source_lang ELSE 'und' END source_lang,c.source_lang_mode,
         CASE WHEN c.status='published' THEN u.nickname ELSE '' END nickname,
         CASE WHEN c.status='published' THEN c.like_count ELSE 0 END like_count
  FROM comments c JOIN users u ON u.id=c.author_id
@@ -86,12 +88,13 @@ export async function buildProjection(db:D1Database,scope:string,target:string,i
     const [v,raw,tags]=result.map(r=>r.results);
     const more=raw.length===21&&index<FEED_LIMIT;
     const topics=raw.slice(0,20).map(t=>({...t,terms:tags.filter(tag=>tag.topic_id===t.id)}));
+    await projectTranslations(db,topics,[],[],'summary');
     return {version:v[0]?.version||0,data:index===1||topics.length?{topics,next:more?index*20:null,similar:false,highlights:[]}:null,more};
   }
 
   const statements=[version,topicRow(db,target),commentsFor(db,target,index)];
   if(index===1)statements.push(termsFor(db,[target]),stmt(db,`
-    SELECT id,body,source_lang,content_version,progress_seq,created_at FROM comments
+    SELECT id,body,source_lang,source_lang_mode,content_version,progress_seq,created_at FROM comments
     WHERE topic_id=? AND status='published' AND kind='progress' ORDER BY progress_seq DESC,id DESC LIMIT 2`,target));
   const [v,topics,raw,tags,progress]= (await db.batch<Row>(statements)).map(r=>r.results);
   const topic=topics[0];
@@ -99,6 +102,8 @@ export async function buildProjection(db:D1Database,scope:string,target:string,i
   const page=raw.slice(0,50);
   const comments=page.map(({cursor,...comment})=>comment);
   const replyData={comments,next:more?page.at(-1)!.cursor:null};
+  if(topic)await projectTranslations(db,topic.status==='published'&&index===1?[topic]:[],
+    comments.filter(c=>c.status==='published'),progress||[],'full');
   const data=topic&&(index===1||comments.length)
     ?index===1?{topic:{...topic,terms:topic.status==='published'?tags:[]},progress,...replyData}:replyData
     :null;

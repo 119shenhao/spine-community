@@ -62,6 +62,25 @@ export async function requestProjection(env:Env,req:Request,path:string) {
   await drainDemand(env,config,2);
 }
 
+// A freshly cached translation can enrich a page that has already been read.
+// Keep the original projection version and its existing reservation and purge lifecycle.
+export async function refreshProjectionTranslations(env:Env,items:{type:string;id:string;scope:string;page:string|null}[]) {
+  const config=projectionConfig(env);
+  if(!config?.onDemand||!config.enabled||!config.purgeReady||env.PUBLIC_CONTENT_READS!=='true')return;
+  let queued=0;
+  for(const item of items){
+    const page=item.page&&parseObjectKey(item.page);
+    if(!page||(page.scope==='feed'&&(item.type!=='topic'||item.scope!=='summary'))||
+      (page.scope==='topic'&&item.type==='topic'&&(item.scope!=='full'||page.target!==item.id||page.index!==1)))continue;
+    const changed=await one(env.DB,`UPDATE public_projection_demand SET pending=1,refresh_translations=1,due_at=unixepoch()
+      WHERE scope=? AND target=? AND object_index=? AND (reserved=1 OR pending=1) AND last_error IS NULL
+      AND refresh_translations=0 RETURNING reserved`,
+      page.scope,page.target,page.index);
+    if(changed)queued++;
+  }
+  if(queued)await drainDemand(env,config,Math.min(queued+1,4));
+}
+
 type Config=NonNullable<ReturnType<typeof projectionConfig>>;
 // Existing projections reserve a contiguous range. New reads reserve the exact
 // key before writing it so a later mutation can fence even an interrupted PUT.
@@ -78,7 +97,7 @@ export async function drainPublicContent(env:Env,limit=2) {
 
 async function drainDemand(env:Env,config:Config,limit:number) {
   const db=env.DB;
-  let processed=0,failed=0;
+  let processed=0,failed=0,followUp=false;
   for(let i=0;i<limit;i++){
     const token=id();
     const task=await one(db,`UPDATE public_projection SET lease=?,lease_until=?
@@ -118,6 +137,8 @@ async function drainDemand(env:Env,config:Config,limit:number) {
           WHERE scope=? AND target=? AND pending=1 AND due_at<=? ORDER BY due_at,object_index LIMIT 1`,scope,target,now());
         if(!page)continue;
         const index=page.object_index;
+        if(page.refresh_translations)await stmt(db,`UPDATE public_projection_demand SET refresh_translations=0
+          WHERE scope=? AND target=? AND object_index=?`,scope,target,index).run();
         const current=await buildProjection(db,scope,target,index);
         if(current.version!==version)continue;
         const publicTopic=scope==='feed'||Boolean(await one(db,"SELECT 1 FROM topics WHERE id=? AND status='published'",target));
@@ -135,16 +156,17 @@ async function drainDemand(env:Env,config:Config,limit:number) {
           await purgeProjection(env,config,key);
         }
         // If a write won the race, leave the request queued for the new version.
-        await db.batch([
+        const checkpoint=await db.batch<Row>([
           stmt(db,`UPDATE public_projection SET state='done',published_version=version,next_object=1,attempts=0,last_error=NULL
             WHERE scope=? AND target=? AND lease=? AND version=?`,scope,target,token,version),
           stmt(db,`DELETE FROM public_projection_demand WHERE scope=? AND target=? AND object_index=? AND reserved=0
             AND NOT ? AND EXISTS(SELECT 1 FROM public_projection p WHERE p.scope=? AND p.target=? AND p.lease=? AND p.version=?)`,
             scope,target,index,Number(hasPage),scope,target,token,version),
-          stmt(db,`UPDATE public_projection_demand SET pending=0,attempts=0,last_error=NULL
+          stmt(db,`UPDATE public_projection_demand SET pending=refresh_translations,attempts=0,last_error=NULL
             WHERE scope=? AND target=? AND object_index=? AND EXISTS(SELECT 1 FROM public_projection p
-              WHERE p.scope=? AND p.target=? AND p.lease=? AND p.version=?)`,scope,target,index,scope,target,token,version)
+              WHERE p.scope=? AND p.target=? AND p.lease=? AND p.version=?) RETURNING pending`,scope,target,index,scope,target,token,version)
         ]);
+        if(i===limit-1&&!followUp&&checkpoint[2].results[0]?.pending){followUp=true;limit++;}
         processed++;
       }
     }catch(error){

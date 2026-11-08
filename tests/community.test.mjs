@@ -36,7 +36,7 @@ test('seven-language concepts, untagged text, Chinese short terms and strict/sim
 test('moderation low/medium/high, report count never hides, role revocation is immediate',async()=>{const {call,topic,DB}=await fixture();const id=await topic();for(const uid of ['alice','bob','carol','mod'])await call('/api/reports','POST',{type:'topic',id,reason:'Concern'},uid);assert.equal((await call('/api/topics/'+id,'GET',undefined,null)).data.topic.status,'published');assert.equal((await call('/api/admin/overview','GET',undefined,'bob')).status,403);assert.equal((await call('/api/admin/content','POST',{type:'topic',id,action:'delete',reason:'test'},'mod')).status,403);assert.equal((await call('/api/admin/content','POST',{type:'topic',id,action:'hide',reason:'test'},'mod')).status,200);assert.equal((await call('/api/topics/'+id,'GET',undefined,null)).status,404);await call('/api/admin/content','POST',{type:'topic',id,action:'publish',reason:'restore'},'admin');await call('/api/admin/roles','POST',{user_id:'mod',enabled:false,reason:'revoke'},'admin');assert.equal((await call('/api/admin/overview','GET',undefined,'mod')).status,403);const mid=await topic('Links','https://a.test https://b.test https://c.test','bob');assert.equal((await call('/api/topics/'+mid,'GET',undefined,null)).status,404);assert.equal((await call('/api/topics/'+mid,'GET',undefined,'bob')).data.topic.status,'pending_review');const blocked=await topic('guaranteed cure','buy now https://scam.test','carol');assert.equal((await call('/api/topics/'+blocked,'GET',undefined,'carol')).data.topic.status,'blocked');assert.equal((await call('/api/appeals','POST',{type:'topic',id:blocked,reason:'Please review'},'carol')).status,201);});
 test('sanctions protect all writes, permissions hide identity credentials',async()=>{const {call,topic}=await fixture();const id=await topic();assert.equal((await call('/api/admin/sanctions','POST',{user_id:'bob',action:'mute',days:2,reason:'bad duration'},'mod')).status,400);await call('/api/admin/sanctions','POST',{user_id:'bob',action:'mute',days:1,reason:'test'},'mod');assert.equal((await call('/api/topics/'+id+'/comments','POST',{body:'should be denied'},'bob')).status,403);assert.equal((await call('/api/admin/sanctions','POST',{user_id:'carol',action:'ban',reason:'test'},'mod')).status,403);const admin=await call('/api/admin/overview','GET',undefined,'mod');assert.equal(admin.data.users.length,0);const serialized=JSON.stringify(admin.data);assert(!serialized.includes('token_hash'));assert(!serialized.includes('provider_subject'));});
 test('translation disabled fallback and editing invalidates old versions',async()=>{const {call,topic,DB}=await fixture();const id=await topic();assert.equal((await call('/api/translate','POST',{type:'topic',id,locale:'zh-CN'})).data.reason,'translation_not_configured');DB.db.prepare("INSERT INTO topic_translations(topic_id,locale,source_version,title_text,body_text,provider) VALUES(?,'zh-CN',1,'旧标题','旧正文','test')").run(id);await call('/api/topics/'+id,'PATCH',{title:'Edited',body:'Edited text',source_lang:'en',symptom_duration_days:55});assert.equal(DB.db.prepare('SELECT count(*) n FROM topic_translations').get().n,0);assert.equal((await call('/api/topics/'+id)).data.topic.symptom_duration_days,55);});
-test('translation reservation hard limit and race with deletion',async()=>{const {call,topic,env,DB}=await fixture();const id=await topic('A title','A longer body for translating');Object.assign(env,{TRANSLATION_ENABLED:'true',TRANSLATOR_KEY:'test',TRANSLATION_DAILY_LIMIT:'60',TRANSLATION_MONTHLY_LIMIT:'60'});DB.db.exec("UPDATE settings SET value='true' WHERE key='translation_enabled'");const original=globalThis.fetch;let requests=0;globalThis.fetch=async()=>{requests++;await call('/api/topics/'+id,'DELETE',{},'alice');return Response.json([{translations:[{text:'标题'}]},{translations:[{text:'正文'}]}]);};try{const r=await call('/api/translate','POST',{type:'topic',id,locale:'zh-CN'});assert.equal(r.data.translated,false);assert.equal(DB.db.prepare('SELECT count(*) n FROM topic_translations').get().n,0);const id2=await topic('Another title','Enough text to hit monthly limit');const result=await call('/api/translate','POST',{type:'topic',id:id2,locale:'zh-CN'});assert.equal(result.data.reason,'translation_quota_reached');assert.equal(requests,1);}finally{globalThis.fetch=original;}});
+test('translation reservation hard limit and race with deletion',async()=>{const {call,topic,env,DB}=await fixture();const id=await topic('A title','A longer body for translating');Object.assign(env,{TRANSLATION_ENABLED:'true',TRANSLATOR_KEY:'test',TRANSLATOR_F0_VERIFIED_AT:new Date(Date.now()-60000).toISOString(),TRANSLATION_DAILY_LIMIT:'60',TRANSLATION_MONTHLY_LIMIT:'60'});DB.db.exec("UPDATE settings SET value='true' WHERE key='translation_enabled'");const original=globalThis.fetch;let requests=0;globalThis.fetch=async()=>{requests++;await call('/api/topics/'+id,'DELETE',{},'alice');return Response.json([{translations:[{text:'标题'}]},{translations:[{text:'正文'}]}]);};try{const r=await call('/api/translate','POST',{type:'topic',id,locale:'zh-CN'});assert.equal(r.data.translated,false);assert.equal(DB.db.prepare('SELECT count(*) n FROM topic_translations').get().n,0);const id2=await topic('Another title','Enough text to hit monthly limit');const result=await call('/api/translate','POST',{type:'topic',id:id2,locale:'zh-CN'});assert.equal(result.data.reason,'translation_quota_reached');assert.equal(requests,1);}finally{globalThis.fetch=original;}});
 test('pageview metrics exclude ordinary API requests; privacy export and requests',async()=>{const {call,topic,DB}=await fixture();await topic();await call('/api/topics');assert.equal(DB.db.prepare('SELECT count(*) n FROM daily_traffic_metrics').get().n,0);await call('/api/pageview','POST',{path:'/'});assert.equal(DB.db.prepare('SELECT pv FROM daily_traffic_metrics').get().pv,1);assert.equal(DB.db.prepare('SELECT uv_estimate FROM daily_traffic_metrics').get().uv_estimate,1);assert.equal((await call('/api/me/export')).data.profile.id,'alice');assert.equal((await call('/api/privacy-requests','POST',{type:'account_delete'})).status,201);assert.equal((await call('/api/privacy-requests')).data.items.length,1);});
 test('notification focus can reach comments after page one and progress-only pagination works',async()=>{const {call,topic,DB}=await fixture();const id=await topic();for(let i=0;i<55;i++)DB.db.prepare("INSERT INTO comments(id,topic_id,author_id,body,status) VALUES(?,?,'bob',?,'published')").run('c'+i,id,'Reply '+i);const r=await call('/api/topics/'+id+'?focus=c54');assert.equal(r.status,200);assert(r.data.comments.some(c=>c.id==='c54'));});
 test('Google JWT signature, audience, nonce and expiration verification',async()=>{const pair=await crypto.subtle.generateKey({name:'RSASSA-PKCS1-v1_5',modulusLength:2048,publicExponent:new Uint8Array([1,0,1]),hash:'SHA-256'},true,['sign','verify']);const jwk=await crypto.subtle.exportKey('jwk',pair.publicKey);const encode=o=>Buffer.from(JSON.stringify(o)).toString('base64url');const make=async extra=>{const h=encode({alg:'RS256',kid:'test'}),p=encode({iss:'https://accounts.google.com',aud:'client',sub:'google-user',nonce:'nonce',iat:now(),exp:now()+300,...extra});const sig=await crypto.subtle.sign('RSASSA-PKCS1-v1_5',pair.privateKey,new TextEncoder().encode(h+'.'+p));return h+'.'+p+'.'+Buffer.from(sig).toString('base64url');};const original=globalThis.fetch;globalThis.fetch=async()=>Response.json({keys:[{...jwk,kid:'test'}]});try{assert.equal((await verifyGoogle(await make({}),'client','nonce')).sub,'google-user');await assert.rejects(()=>verifyGoogle(makeToken,'client','bad'));const bad=await make({aud:'evil'});await assert.rejects(()=>verifyGoogle(bad,'client','nonce'));const expired=await make({exp:now()-1});await assert.rejects(()=>verifyGoogle(expired,'client','nonce'));const nonce=await make({nonce:'wrong'});await assert.rejects(()=>verifyGoogle(nonce,'client','nonce'));}finally{globalThis.fetch=original;}var makeToken='invalid';});
@@ -806,7 +806,7 @@ test('Traditional Chinese profile, content language, taxonomy and translation AP
  assert.equal(reply.status,201);
  const {translatorTargetLocale}=await import('../.test-build/translation.js');
  assert.equal(translatorTargetLocale('zh-TW'),'zh-Hant');
- assert.equal(translatorTargetLocale('zh-CN'),'zh-CN');
+ assert.equal(translatorTargetLocale('zh-CN'),'zh-Hans');
  const translation=await call('/api/translate','POST',{type:'topic',id:post.data.id,locale:'zh-TW'},null);
  assert.equal(translation.status,200);
  assert.equal(translation.data.reason,'same_language');
@@ -840,9 +840,9 @@ test('Default posting language follows interface unless the user selects a fixed
  const code=readFileSync('public/app.js','utf8');
  assert(code.includes("t('postingLanguage')"));
  assert(code.includes("profilePostingLanguageOptions(u,locale,languages,t,languageOptions)"));
- assert(code.includes("languageOptions(c?.source_lang||postingLanguage(state.user,locale,languages))"));
- assert(code.includes("languageOptions(editing?c.source_lang:postingLanguage(state.user,locale,languages))"));
- assert(code.includes("v.source_lang||postingLanguage(state.user,locale,languages)"));
+ assert(code.includes('const preferred=postingLanguage(state.user,locale,languages)'));
+ assert(code.includes('sourceFields(editing?c:null)'));
+ assert(code.includes("{source_lang_mode:'auto'}"));
 });
 
 test('Migrated accounts preserve non-English choices, and allow returning to automatic posting language',async()=>{
@@ -888,8 +888,8 @@ test('post/reply language menus use 简体中文 and 繁體中文 rather than re
  assert(menuLine.includes("l==='zh-TW'?'繁體中文'"));
  assert(menuLine.includes('includeOther=true'));
  assert(menuLine.includes("...(includeOther?['und']:[])"));
- assert(source.includes('languageOptions(c?.source_lang||postingLanguage(state.user,locale,languages))'));
- assert(source.includes('languageOptions(editing?c.source_lang:postingLanguage(state.user,locale,languages))'));
+ assert(source.includes('sourceFields(c)'));
+ assert(source.includes('sourceFields(editing?c:null)'));
  assert(source.includes('profilePostingLanguageOptions(u,locale,languages,t,languageOptions)'));
 });
 
@@ -1471,4 +1471,275 @@ test('a late on-demand R2 write cannot restore a withdrawn page',async()=>{
   await Promise.all(background);
   assert.equal((await bucket.get(key).then(r=>r.json())).data,null);
  }finally{continuePut();globalThis.fetch=originalFetch;}
+});
+
+function mockTranslator(env,DB,extra={}){
+ Object.assign(env,{TRANSLATION_ENABLED:'true',TRANSLATOR_KEY:'test-only',
+  TRANSLATOR_F0_VERIFIED_AT:new Date(Date.now()-60000).toISOString(),...extra});
+ DB.db.exec("UPDATE settings SET value='true' WHERE key='translation_enabled'");
+}
+const translatedByMock=(url,options)=>{
+ const to=new URL(url).searchParams.get('to'), input=JSON.parse(options.body);
+ return Response.json(input.map(({Text})=>({translations:[{to,text:'mock '+Text}]})),{
+  headers:{'x-metered-usage':String(input.reduce((n,{Text})=>n+Text.length,0))}
+ });
+};
+const translationBatch=(call,items,{locale='en',generate=true,ctx}={})=>
+ call('/api/translate','POST',{locale,items,generate},null,{},ctx);
+const translationItem=(id,options={})=>({id,type:'topic',scope:'full',version:1,...options});
+
+test('automatic source detection overrides the suggested locale, and authors can correct it',async t=>{
+ const {call,DB,env}=await fixture();
+ mockTranslator(env,DB);
+ const {detectSourceLanguage}=await import('../.test-build/source-language.js');
+ assert.equal(detectSourceLanguage('My back hurts when I sit for a long time'),'en');
+ assert.equal(detectSourceLanguage('我最近腰椎间盘突出，坐久以后右腿会麻，正在做康复训练。'),'zh-CN');
+ assert.equal(detectSourceLanguage('這幾天頸椎很不舒服，復健之後症狀有緩解。'),'zh-TW');
+ assert.equal(detectSourceLanguage('最近は長く座ると腰が痛くて、リハビリを続けています。'),'ja');
+ assert.equal(detectSourceLanguage('I have persistent back pain after standing. Me duele mucho la espalda desde hace dos meses.'),'und');
+ assert.equal(detectSourceLanguage('OK'),'und');
+ const title='Douleur au bas du dos',body='J’ai très mal au bas du dos depuis plusieurs mois. La kinésithérapie m’aide à bouger.';
+ const created=await call('/api/topics','POST',{title,body,source_lang_mode:'auto',source_lang:'en'});
+ assert.equal(created.status,201);
+ const id=created.data.id;
+ assert.equal((await call('/api/topics/'+id)).data.topic.source_lang,'fr');
+ const reply=await call('/api/topics/'+id+'/comments','POST',{body:'OK',source_lang_mode:'auto',source_lang:'ja'},'bob');
+ assert.equal(reply.data.comment.source_lang,'und');
+ assert.equal(reply.data.comment.source_lang_mode,'auto');
+ let external=0;
+ t.mock.method(globalThis,'fetch',async(url,opts)=>{external++;return translatedByMock(url,opts);});
+ const same=await translationBatch(call,[translationItem(id)],{locale:'fr'});
+ assert.equal(same.data.items[0].reason,'same_language');
+ const uncertain=await translationBatch(call,[translationItem(reply.data.id,{type:'comment'})]);
+ assert.equal(uncertain.data.items[0].reason,'source_language_uncertain');
+ assert.equal(external,0);
+ const edit=await call('/api/topics/'+id,'PATCH',{title,body,source_lang_mode:'manual',source_lang:'es'});
+ assert.equal(edit.status,200);
+ const updated=(await call('/api/topics/'+id)).data.topic;
+ assert.equal(updated.source_lang,'es');
+ assert.equal(updated.source_lang_mode,'manual');
+ assert.equal(updated.content_version,2);
+ assert.equal((await translationBatch(call,[translationItem(id,{version:2})],{locale:'es'})).data.items[0].reason,'same_language');
+});
+
+test('cache-only reads, summary and detail share the title, and each cache row records actual provenance',async t=>{
+ const {call,DB,env,topic}=await fixture();
+ mockTranslator(env,DB);
+ const title='A practice log',body='I have been practicing the exercises from physical therapy. '.repeat(7);
+ const id=await topic(title,body);
+ const summary=translationItem(id,{scope:'summary'}),full=translationItem(id);
+ const requests=[];
+ t.mock.method(globalThis,'fetch',async(url,options)=>{
+  const parsed=new URL(url);
+  assert.equal(parsed.origin,'https://api.cognitive.microsofttranslator.com');
+  assert.equal(parsed.searchParams.get('category'),'general');
+  assert.equal(parsed.searchParams.get('to'),'zh-Hans');
+  assert.equal(parsed.searchParams.get('from'),'en');
+  assert.equal(options.redirect,'manual');
+  requests.push(JSON.parse(options.body).map(entry=>entry.Text));
+  return translatedByMock(url,options);
+ });
+ const hit=async(entry,generate=true)=>(await translationBatch(call,[entry],{locale:'zh-CN',generate})).data.items[0];
+ assert.equal((await hit(summary,false)).reason,'translation_cache_miss');
+ assert.equal(requests.length,0);
+ assert.equal((await hit(summary)).body,'mock '+body.slice(0,260));
+ assert.equal((await hit(full)).body,'mock '+body.trim());
+ assert.deepEqual(requests,[[title,body.slice(0,260)],[body.trim()]]);
+ delete env.TRANSLATOR_KEY;
+ assert.equal((await hit(full,false)).title,'mock '+title);
+ assert.equal((await call('/api/health')).data.translationConfigured,false);
+ assert.equal((await call('/api/health')).data.translationCacheAvailable,true);
+ const rows=DB.db.prepare('SELECT * FROM topic_translations ORDER BY scope').all();
+ assert.equal(rows.length,2);
+ for(const row of rows)assert.deepEqual(
+  [row.topic_id,row.source_version,row.source_language,row.locale,row.provider,row.product_id,row.engine_type,row.model_id,row.model_version],
+  [id,1,'en','zh-CN','azure','azure_ai_translator_text','nmt',null,null]);
+ assert(rows.every(row=>row.created_at>0));
+ const ledger=DB.db.prepare('SELECT * FROM translation_usage_daily').get();
+ assert.equal(ledger.requests,2);
+ assert.equal(ledger.characters,title.length+260+body.trim().length);
+ assert.equal(ledger.metered_characters,ledger.characters);
+});
+
+test('concurrent readers dedupe across isolates and reserve the global budget atomically',async t=>{
+ const {call,env,DB,topic}=await fixture();
+ mockTranslator(env,DB,{TRANSLATION_DAILY_LIMIT:'62',TRANSLATION_MONTHLY_LIMIT:'62'});
+ const one=await topic('First test','One complete English source text for the test.');
+ const other=await topic('Other test','A different source text for the second request.');
+ let enter,release,requests=0;
+ const entered=new Promise(resolve=>{enter=resolve;}),gate=new Promise(resolve=>{release=resolve;});
+ t.mock.method(globalThis,'fetch',async(url,options)=>{requests++;enter();await gate;return translatedByMock(url,options);});
+ const run=id=>translationBatch(call,[translationItem(id)],{locale:'fr'});
+ const first=run(one);
+ try{
+  await entered;
+  assert.equal((await run(one)).data.items[0].reason,'translation_in_progress');
+  assert.equal((await run(other)).data.items[0].reason,'translation_quota_reached');
+ }finally{release();}
+ assert.equal((await first).data.items[0].translated,true);
+ assert.equal((await run(one)).data.items[0].translated,true);
+ assert.equal(requests,1);
+});
+
+test('free-only attestation, rolling budget and provider failures fail closed with usable cached translations',async t=>{
+ const {call,env,DB,topic}=await fixture();
+ mockTranslator(env,DB);
+ const ids=await Promise.all([topic('First','The first fictional source.'),topic('Second','The second fictional source.'),topic('Third','The third fictional source.')]);
+ let requests=0,code=200;
+ t.mock.method(globalThis,'fetch',async(url,options)=>{
+  requests++;
+  if(code!==200)return Response.json({error:{code:code===403?403001:503000}},{status:code});
+  return translatedByMock(url,options);
+ });
+ const run=async id=>(await translationBatch(call,[translationItem(id)],{locale:'fr'})).data.items[0];
+ env.TRANSLATOR_ENDPOINT='https://example.invalid/translate';
+ assert.equal((await run(ids[0])).reason,'translation_not_configured');
+ delete env.TRANSLATOR_ENDPOINT;
+ env.TRANSLATOR_F0_VERIFIED_AT=new Date(Date.now()-32*86400000).toISOString();
+ assert.equal((await run(ids[0])).reason,'translation_not_configured');
+ assert.equal(requests,0);
+ mockTranslator(env,DB);
+ DB.db.exec("INSERT INTO translation_usage_daily(provider,day_utc,characters,requests) VALUES('azure',date('now','-31 day'),199999,1)");
+ assert.equal((await run(ids[0])).reason,'translation_quota_reached');
+ DB.db.exec("UPDATE translation_usage_daily SET day_utc=date('now','-32 day')");
+ assert.equal((await run(ids[0])).translated,true);
+ code=503;
+ assert.equal((await run(ids[1])).reason,'translation_unavailable');
+ assert.equal((await run(ids[2])).reason,'translation_quota_reached');
+ DB.db.exec('UPDATE translation_budget SET cooldown_until=0');
+ code=403;
+ assert.equal((await run(ids[2])).reason,'translation_provider_paused');
+ assert.equal((await run(ids[0])).translated,true);
+ assert.equal((await run(ids[2])).reason,'translation_quota_reached');
+ assert.equal(requests,3);
+});
+
+test('only public text can reach Azure, and progress teasers translate their displayed excerpt',async t=>{
+ const {call,env,DB,topic}=await fixture();
+ mockTranslator(env,DB);
+ const id=await topic('Fictional public post','A public English text for testing.');
+ const privatePost=await topic('Private','A message with a promo code needing moderation.');
+ const contactPost=await topic('Contact test','Please contact me at fake@example.invalid about my session.');
+ const progress='My back felt a little better after the home exercises this week. '.repeat(7).trim();
+ const comment=await call('/api/topics/'+id+'/comments','POST',{kind:'progress',body:progress,source_lang:'en'});
+ const nested=await call('/api/topics/'+id+'/comments','POST',{body:'This fictional follow-up is visible.',source_lang:'en',parent_comment_id:comment.data.id},'bob');
+ const requests=[];
+ t.mock.method(globalThis,'fetch',async(url,options)=>{
+  requests.push(JSON.parse(options.body));
+  assert.equal(Object.keys(options.headers).some(key=>/cookie|authorization/i.test(key)),false);
+  return translatedByMock(url,options);
+ });
+ const progressId=translationItem(comment.data.id,{type:'comment',scope:'preview'});
+ const nestedId=translationItem(nested.data.id,{type:'comment'});
+ const run=async (...items)=>(await translationBatch(call,items,{locale:'fr'})).data.items;
+ const gated=await run(translationItem(privatePost),translationItem(contactPost),{...nestedId,scope:'preview'});
+ assert.deepEqual(gated.map(x=>x.reason),['not_found','source_contains_contact_details','not_found']);
+ assert.equal(requests.length,0);
+ assert.equal((await run(progressId))[0].translated,true);
+ assert.equal(requests[0][0].Text,progress.slice(0,180));
+ assert.equal((await run(nestedId))[0].translated,true);
+ assert.equal((await run({...progressId,scope:'full'}))[0].translated,true);
+ assert.equal(requests[2][0].Text,progress);
+ await call('/api/admin/content','POST',{type:'topic',id,action:'hide',reason:'Mock privacy test'},'admin');
+ assert.deepEqual((await run(progressId,nestedId)).map(x=>x.reason),['not_found','not_found']);
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM comment_translations').get().n,0);
+ assert.equal(requests.length,3);
+});
+
+test('a translated public page is enriched through R2 demand; stale ciphertext stays locked after edit or hide even if purge fails',async t=>{
+ const {call,env,DB,topic}=await fixture(),bucket=projectionBucket();
+ mockTranslator(env,DB);
+ enableProjection(env,bucket);
+ Object.assign(env,{PUBLIC_CONTENT_ON_DEMAND:'true',PUBLIC_CONTENT_FALLBACK:'true'});
+ const id=await topic('Fictional topic title','The original text is only for testing.');
+ const page=topicProjectionKey(id),jobs=[];
+ const ctx={waitUntil:promise=>jobs.push(promise)};
+ let failPurge=false,azureCalls=0;
+ t.mock.method(globalThis,'fetch',async(url,options)=>{
+  if(new URL(url).hostname==='api.cloudflare.com')return Response.json({success:!failPurge});
+  azureCalls++;return translatedByMock(url,options);
+ });
+ const drain=async()=>{while(jobs.length)await Promise.all(jobs.splice(0));};
+ await call('/api/topics/'+id,'GET',undefined,null,{'x-spine-projection-miss':page},ctx);
+ await drain();
+ const unfilled=await (await bucket.get(page)).json();
+ assert.equal(unfilled.data.topic.translations,undefined);
+ const item=translationItem(id,{page});
+ const read=async(entry,generate=true)=>(await translationBatch(call,[entry],{locale:'fr',generate,ctx})).data.items[0];
+ assert.equal((await read(item)).translated,true);
+ await drain();
+ const projected=await (await bucket.get(page)).json();
+ assert.equal(projected.contentVersion,unfilled.contentVersion);
+ const stale=projected.data.topic.translations.fr;
+ assert(stale.ciphertext);
+ assert.equal(JSON.stringify(projected).includes('mock The original'),false);
+ const {unpackTranslation}=await import('../public/translation-ui.js');
+ const wire=await read({...item,token:stale.token},false);
+ assert.equal(wire.body,undefined);
+ assert.equal((await unpackTranslation(wire,stale)).body,'mock The original text is only for testing.');
+ assert.equal(azureCalls,1);
+ failPurge=true;
+ await call('/api/topics/'+id,'PATCH',{title:'Updated fiction',body:'Latest original after editing.'},'alice',{},ctx);
+ await drain();
+ const rejected=await read({...item,token:stale.token},false);
+ assert.equal(rejected.reason,'content_changed');
+ assert.equal(rejected.key,undefined);
+ assert.equal((await call('/api/topics/'+id)).data.topic.body,'Latest original after editing.');
+ await call('/api/admin/content','POST',{type:'topic',id,action:'hide',reason:'Mock privacy test'},'admin',{},ctx);
+ await drain();
+ assert.equal((await read({...item,token:stale.token},false)).reason,'not_found');
+ assert.equal(azureCalls,1);
+});
+
+test('the browser controller keeps original text during a cache miss, queues only visible items and ignores old views',async t=>{
+ const {translationView}=await import('../public/translation-ui.js');
+ const previous={IntersectionObserver:globalThis.IntersectionObserver,innerHeight:globalThis.innerHeight,innerWidth:globalThis.innerWidth};
+ let observer;
+ globalThis.innerHeight=800;globalThis.innerWidth=1200;
+ globalThis.IntersectionObserver=class {
+  constructor(callback){this.callback=callback;observer=this;}
+  observe(){}
+  disconnect(){}
+ };
+ t.after(()=>Object.assign(globalThis,previous));
+ const requests=[],rendered=[];
+ let sent,release;
+ const inFlight=new Promise(resolve=>{sent=resolve;});
+ const delayed=new Promise(resolve=>{release=resolve;});
+ const data={translated:true,title:'Titre',body:'Texte',provider:'azure'};
+ const view=translationView('fr',{
+  configured:true,hasCache:true,
+  request:async payload=>{
+   requests.push(payload);
+   if(payload.generate){sent();await delayed;return {items:[data]};}
+   return {items:payload.items.map(item=>item.id==='warm'?data:{translated:false,reason:'translation_cache_miss'})};
+  },
+  render:(node,state)=>rendered.push([node.dataset.translation,state.original?null:state.result.body])
+ });
+ const row=id=>({id,body:'Original',source_lang:'en',source_lang_mode:'manual',content_version:1,status:'published'});
+ const warm=row('warm'),cold=row('cold'),offscreen=row('offscreen');
+ await view.prime([['topic',warm],['topic',cold]]);
+ assert.equal(requests[0].generate,false);
+ assert.equal(view.item('topic',warm).result.body,'Texte');
+ assert.equal(view.item('topic',cold).result,null);
+ const node=(source,top)=>({isConnected:true,dataset:{translation:view.item('topic',source).key},parentElement:{
+  getBoundingClientRect:()=>({top,bottom:top+100,left:0,right:100})
+ }});
+ const warmNode=node(warm,20),coldNode=node(cold,140),offscreenNode=node(offscreen,1200);
+ view.observe([warmNode,coldNode,offscreenNode]);
+ assert.deepEqual(rendered,[[warmNode.dataset.translation,'Texte']]);
+ view.toggle(warmNode);
+ assert.deepEqual(rendered.at(-1),[warmNode.dataset.translation,null]);
+ view.toggle(warmNode);
+ assert.deepEqual(rendered.at(-1),[warmNode.dataset.translation,'Texte']);
+ observer.callback([
+  {target:coldNode.parentElement,isIntersecting:true},
+  {target:offscreenNode.parentElement,isIntersecting:false}
+ ]);
+ await inFlight;
+ assert.deepEqual(requests[1].items.map(item=>item.id),['cold']);
+ view.close();
+ release();
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(view.item('topic',cold).result,null);
 });
