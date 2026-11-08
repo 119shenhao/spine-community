@@ -337,8 +337,8 @@ def collect(site, candidates, limit, export_dir):
             emit("candidate_skipped", site=site, source_id=identifier, url=url,
                  stage=stage, reason=reason, committed=committed)
             if not committed:
-                queue_mark(site, identifier, "retry" if isinstance(error, FetchProblem) else "rejected", reason)
-            if isinstance(error, FetchProblem) and error.status in (401, 403, 429):
+                queue_mark(site, identifier, "retry" if isinstance(error, FetchProblem) and (error.status in (0, 408, 429) or error.status >= 500) else "rejected", reason)
+            if isinstance(error, FetchProblem) and error.status in (401, 403, 405, 429):
                 stopped_reason = reason
         finally:
             if not committed:
