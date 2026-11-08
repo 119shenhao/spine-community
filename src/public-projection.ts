@@ -10,10 +10,12 @@ export function projectionConfig(env:Env) {
   if(!preview&&env.APP_ENV!=='production')return null;
   const base=preview?'https://spine-data-dev.nbn369.com':'https://spine-data.nbn369.com';
   if(env.PUBLIC_CONTENT_BASE_URL!==base||!env.PUBLIC_CONTENT_R2)return null;
+  const zoneConfigured=/^[a-f0-9]{32}$/i.test(env.CDN_ZONE_ID||'');
+  const tokenConfigured=Boolean(env.CDN_PURGE_API_TOKEN);
   return {
     base, origin:preview?PREVIEW_ORIGIN:PRODUCTION_ORIGIN, bucket:env.PUBLIC_CONTENT_R2,
     enabled:env.PUBLIC_CONTENT_ENABLED==='true',
-    purgeReady:/^[a-f0-9]{32}$/i.test(env.CDN_ZONE_ID||'')&&Boolean(env.CDN_PURGE_API_TOKEN)
+    zoneConfigured,tokenConfigured,purgeReady:zoneConfigured&&tokenConfigured
   };
 }
 

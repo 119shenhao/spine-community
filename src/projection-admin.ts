@@ -16,18 +16,17 @@ const audit=(env:Env,user:Row,scanId:string,action:string,reason:string)=>
 const owns='EXISTS(SELECT 1 FROM public_projection_scan WHERE id=? AND lease=?)';
 
 async function scanReport(env:Env,scan:Row,after:string) {
-  const counts=await all(env.DB,`SELECT coalesce(result,'unchecked') result,count(*) count
-    FROM public_projection_scan_item WHERE scan_id=? GROUP BY result`,scan.id);
+  const counts=await all(env.DB,`SELECT result,count
+    FROM public_projection_scan_count WHERE scan_id=? AND count>0`,scan.id);
   const items=await all(env.DB,`SELECT i.object_key,i.expected_version,i.expected_hash,i.r2_version,i.r2_hash,i.result,
     p.published_version,p.state purge_state,p.last_error purge_error,i.repair_version
     FROM public_projection_scan_item i LEFT JOIN public_projection p ON p.scope=i.scope AND p.target=i.target
-    WHERE i.scan_id=? AND i.result NOT IN ('ok','ignored') AND i.object_key>? ORDER BY i.object_key LIMIT 51`,scan.id,after);
+    WHERE i.scan_id=? AND i.result IS NOT NULL AND i.result NOT IN ('ok','ignored') AND i.object_key>? ORDER BY i.object_key LIMIT 51`,scan.id,after);
   const stats=Object.fromEntries(counts.map(r=>[r.result,r.count]));
   const next=items.length>50?items[49].object_key:null;
   return {
     id:scan.id,target:scan.target,phase:scan.phase,paused:Boolean(scan.paused),error:scan.error,
-    expected_count:scan.expected_count,checked_count:Object.entries(stats).reduce((n,[key,count])=>
-      n+(key==='unchecked'||key==='orphan'||key==='ignored'?0:Number(count)),0),
+    expected_count:scan.expected_count,checked_count:scan.checked_count,
     listed_count:scan.listed_count,counts:stats,items:items.slice(0,50),next
   };
 }

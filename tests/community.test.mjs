@@ -1201,7 +1201,7 @@ test('Preview exposes config readiness without credentials and scheduled handler
  enableProjection(env,bucket);
  delete env.CDN_ZONE_ID;
  const health=(await call('/api/health')).data;
- assert.deepEqual(health.publicContent,{baseUrl:null,fallback:false,ready:true,enabled:true,purgeConfigured:false});
+ assert.deepEqual(health.publicContent,{baseUrl:null,fallback:false,ready:true,enabled:true,purgeConfigured:false,zoneConfigured:false,tokenConfigured:true});
  assert(!JSON.stringify(health).includes('test-only'));
  assert.equal((await drainProjection(env)).configured,false);
  let jobs=[];
@@ -1274,11 +1274,20 @@ test('scan snapshots more than 1000 objects and identifies a write during check'
  const target=await topic('Snapshot fixture','This is synthetic');
  // Reserve retired pages to exercise the fixed key inventory without copying real data.
  DB.db.prepare("UPDATE public_projection SET last_object=1001 WHERE target=?").run(target);
+ for(let index=1;index<=1001;index++){
+  const key=index===1?topicProjectionKey(target):'topics/'+target+'/comments/page-'+index+'.json';
+  await bucket.put(key,'{}',{customMetadata:{projectionVersion:'1',payloadHash:'test'}});
+ }
  const started=await call(projectionRoot+'/start','POST',{target,deep:true},'admin');
  assert.equal(started.data.scan.expected_count,1001);
  const scan=started.data.scan.id;
  const action=op=>call(projectionRoot+'/'+op,'POST',{scan},'admin');
- await action('step');
+ let current=started.data.scan;
+ for(let i=0;current.phase==='listing'&&i<17;i++)current=(await action('step')).data.scan;
+ assert.equal(current.phase,'comparing');
+ assert.equal(current.listed_count,1001);
+ assert.equal(bucket.listCalls.length,16);
+ assert.equal(bucket.listCalls.at(-1).cursor,'960');
  await call('/api/topics/'+target+'/comments','POST',{body:'Write during the scan'},'bob');
  const compared=await action('step');
  assert.equal(compared.data.scan.counts.changed_during_scan,5);
@@ -1309,4 +1318,21 @@ test('anonymous standard routes fetch only their CDN host, pagination rejects st
  withdrawn=true;
  await assert.rejects(reader.topic('demo',new URLSearchParams()),error=>error.status===404);
  assert(requests.filter(url=>url.startsWith('https:')).every(url=>url.startsWith(health.publicContent.baseUrl)&&!url.includes('?')));
+});
+
+test('exhausted outbox keeps backoff across normal edits and is released by an owner retry',async()=>{
+ const {DB,env,call,topic}=await fixture(),bucket=projectionBucket();
+ enableProjection(env,bucket);
+ const target=await topic('Outbox dead letter fixture','Synthetic fixture');
+ const setDead=DB.db.prepare("UPDATE public_projection SET state='dead',attempts=8,priority=1,due_at=unixepoch()+600 WHERE target=?");
+ setDead.run(target);
+ const old=projectionTask(DB,'topic',target);
+ await call('/api/topics/'+target+'/like','PUT',{},'bob');
+ const task=projectionTask(DB,'topic',target);
+ assert.equal(task.state,'dead');
+ assert.equal(task.attempts,8);
+ assert.equal(task.due_at,old.due_at);
+ assert(task.version>old.version);
+ assert.equal((await call(projectionRoot+'/retry','POST',{key:topicProjectionKey(target),confirm:true},'admin')).status,200);
+ assert.equal(projectionTask(DB,'topic',target).state,'pending');
 });
