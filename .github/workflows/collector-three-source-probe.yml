@@ -28,11 +28,13 @@ jobs:
            "120ask_directory":"https://m.120ask.com/list/",
            "120ask_example":"https://www.120ask.com/question/34264704.htm",
            "120ask_home":"https://www.120ask.com/",
+           "120ask_spine_topics":"https://m.120ask.com/tongwen/70jc5yxi2h3kf46f",
            "ask39_category":"https://ask.39.net/browse/11760-1-1.html",
            "ask39_question":"https://ask.39.net/question/101085837.html",
            "mayo_pg1":"https://connect.mayoclinic.org/discussion/spinal-fusion-2/?pg=1",
            "mayo_pg2":"https://connect.mayoclinic.org/discussion/spinal-fusion-2/?pg=2",
            "mayo_short":"https://connect.mayoclinic.org/discussion/old-scoliosis-surgery/",
+           "mayo_nesting":"https://connect.mayoclinic.org/discussion/shower-chair-after-long-fusion/",
           }
           for name,url in pages.items():
               try:
@@ -54,6 +56,10 @@ jobs:
                   result["question_paths"]=list(dict.fromkeys(urlsplit(x).path for x in links))[:9]
                   result["relevant_anchor_count"]=sum(1 for x in soup.select("a[href]") if re.search("腰椎|颈椎|坐骨神经|腰突",x.get_text(" ",strip=True)))
                   result["question_classes"]=Counter(c for x in soup.select("[class]") for c in x.get("class",[]) if re.search("answer|ask|reply|question",c,re.I)).most_common(30)
+                  if name=="120ask_spine_topics":
+                      result["all_question_like_links"]=[{"host":urlsplit(urljoin(url,a["href"])).netloc,"path":urlsplit(urljoin(url,a["href"])).path} for a in soup.select("a[href]") if re.search(r"question|ask/|查看原文",a["href"]+" "+a.get_text(" ",strip=True))][:22]
+                  if name=="120ask_example":
+                      result["headings"]=[{"tag":x.name,"id":x.get("id"),"class":x.get("class",[])} for x in soup.select("#d_askH1,#d_msCon,.b_answerbox,.b_answerti,.b_answerli,.b_anscont_cont .crazy_new")[:12]]
               elif name.startswith("ask39"):
                   found=[]
                   for x in soup.select("a[href]"):
@@ -73,6 +79,16 @@ jobs:
                   result["pagination_links"]=[urljoin(url,x["href"]) for x in soup.select(".chv4-comment-pagination a[href], .pagination a[href]")][:15]
                   result["row_classes"]=[{"id":x.get("id"),"data_id":x.get("data-id"),"data_comment_id":x.get("data-comment-id"),"classes":x.get("class",[]),"parent_classes":x.parent.get("class",[])} for x in soup.select(".comment-individual-row")[:6]]
                   result["count_hints"]=[{"tag":x.name,"class":x.get("class",[])} for x in soup.select("[class*='comment-count'],[class*='comment-total'],[class*='comments-count'],[class*='pagination']")[:14]]
+                  if name in ("mayo_pg1","mayo_nesting"):
+                      nodes=soup.select(".comment-individual-row")
+                      for row in nodes[:4]:
+                          result.setdefault("row_structure",[]).append({
+                            "row_id":row.get("id"),
+                            "direct_children":[(a.name,a.get("class",[])) for a in row.find_all(recursive=False)],
+                            "body_nodes":[{"ancestors":[(a.name,a.get("class",[])) for a in list(t.parents)[:5]],"length":len(t.get_text(" ",strip=True))} for t in row.select(".single-comment-body")[:4]],
+                            "nested_reference_href":[{"href":a.get("href"),"text_len":len(a.get_text(" ",strip=True))} for a in row.select(".in-reply-to-reveal a[href], .in-reply-to-container a[href], a.jump-to-post[href]")[:4]],
+                            "nested_parent_ids":[x.get("id") for x in row.select("[id^='comment-']")[:4]],
+                          })
               print(json.dumps(result,ensure_ascii=False),flush=True)
               time.sleep(1.5)
           PY
