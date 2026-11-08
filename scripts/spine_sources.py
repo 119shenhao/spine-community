@@ -348,6 +348,9 @@ def read_topic(site, identifier, url, get, render):
         # Bind follow-up pages to the same validated canonical source ID.
         page1 = get(url)
         total = mayo_page_count(page1, identifier)
+        # Metadata-only diagnostic; no patient body or reply text enters Actions logs.
+        print(json.dumps({"event": "mayo_page_count", "site": "mayoclinic",
+                          "source_id": identifier, "pages": total}), flush=True)
         if total > 5:
             raise ValueError("mayoclinic_page_limit")
         from urllib.parse import urlunsplit
