@@ -1,8 +1,9 @@
 {
-  "request_id": "inspect-120ask-runner-20261108",
-  "mode": "inspect",
+  "request_id": "collect-ask39-and-120ask-20261108",
+  "mode": "collect",
   "sites": [
-    "120ask"
+    "120ask",
+    "ask39"
   ],
   "candidates": {},
   "limit": 7
