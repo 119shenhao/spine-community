@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from spine_discover import candidate_links, discover_candidates
-from spine_sources import source_id, read_topic, parse_mayoclinic, parse_healthunlocked
+from spine_sources import source_id, read_topic, parse_mayoclinic, parse_mayoclinic_pages, parse_healthunlocked
 
 
 class DiscoveryTests(unittest.TestCase):
@@ -100,12 +100,38 @@ class DiscoveryTests(unittest.TestCase):
         topic = parse_mayoclinic(html, "spinal-surgery-recovery")
         self.assertEqual(len(topic["comments"]), 2)
         self.assertEqual(topic["source_lang"], "en")
-        with self.assertRaisesRegex(ValueError, "mayoclinic_multipage_replies"):
-            parse_mayoclinic(html + '<div class="chv4-comment-pagination"><ul class="pagination"><li>1</li></ul></div>', "spinal-surgery-recovery")
-        with self.assertRaisesRegex(ValueError, "mayoclinic_nested_reply_parent_unverified"):
-            parse_mayoclinic(html.replace('<div class="comment-container">','<div class="comment-container"><div class="in-reply-to-container"></div>'), "spinal-surgery-recovery")
+        with self.assertRaisesRegex(ValueError, "mayoclinic_pagination_changed"):
+            parse_mayoclinic(html + '<div class="chv4-comment-pagination page-1"><a href="?pg=2">2</a></div>', "spinal-surgery-recovery")
+        with self.assertRaisesRegex(ValueError, "mayoclinic_parent_id_unverified"):
+            parse_mayoclinic(html.replace('<div class="single-comment-body"><p>Thanks for your updates.</p></div>', '<div class="in-reply-to-container"></div><div class="single-comment-body"><p>Thanks for your updates.</p></div>'), "spinal-surgery-recovery")
         with self.assertRaisesRegex(ValueError, "unexpected_source_redirect"):
             parse_mayoclinic(html, "another-spinal-surgery")
+
+    def test_mayo_cross_page_reply_parent_is_preserved_and_no_quote_duplication(self):
+        head = """<link rel="canonical" href="https://connect.mayoclinic.org/discussion/lumbar-recovery/">
+          <h1 class="chv4-discussion-title">Lumbar recovery</h1>
+          <div class="discussion-content"><div class="single-discussion-body"><p>I am recovering from surgery.</p></div></div>"""
+        p1 = head + """<div class="comment-container">
+           <div class="comment-individual-row" id="comment-111">
+             <div class="single-comment-body"><p>First reply.</p></div></div></div>
+           <div class="chv4-comment-pagination page-1"><a href="?pg=2">2</a></div>"""
+        p2 = head + """<div class="comment-container">
+           <div class="comment-individual-row" id="comment-112">
+             <div class="in-reply-to-container">
+               <a href="https://connect.mayoclinic.org/comment/111/">Earlier response</a>
+               <div class="single-comment-body"><p>Quoted reply not a separate message.</p></div>
+             </div>
+             <div class="single-comment-body"><p>Second reply.</p></div>
+           </div></div>
+           <div class="chv4-comment-pagination page-2"><a href="?pg=2">2</a></div>"""
+        topic = parse_mayoclinic_pages([p1,p2], "lumbar-recovery")
+        self.assertEqual(len(topic["comments"]),1)
+        self.assertEqual(topic["comments"][0]["body"],"First reply.")
+        self.assertEqual(topic["comments"][0]["replies"][0]["body"],"Second reply.")
+        with self.assertRaisesRegex(ValueError,"mayoclinic_pagination_changed"):
+            parse_mayoclinic_pages([p1,p2.replace('pg=2','pg=3')], "lumbar-recovery")
+        with self.assertRaisesRegex(ValueError,"mayoclinic_page_limit"):
+            parse_mayoclinic_pages([p1]*6, "lumbar-recovery")
 
     def test_healthunlocked_public_nested_reply_structure(self):
         html = """<link rel="canonical" href="https://healthunlocked.com/painconcern/posts/153318229/spinal-decompression-surgery-on-saturday">
