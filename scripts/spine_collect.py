@@ -11,7 +11,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from bs4 import BeautifulSoup
 from spine_discover import PUBLIC_LISTS, discover_candidates
 from spine_sources import (
-    ASK39_LISTS, SOURCE_URLS, SPINE, read_topic, source_id, validate_topic,
+    ASK39_LISTS, SOURCE_URLS, SPINE, ask39_has_ad, read_topic, source_id, validate_topic,
 )
 
 PREVIEW = "https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev"
@@ -177,7 +177,7 @@ def inspect_ask39():
 
 
 def ask39_listing_candidates(listing, markup, excluded):
-    """Only trust patient-authored question text; adjacent doctor excerpts inflate lengths."""
+    """Only assess spine relevance and advertising in a question title."""
     page = BeautifulSoup(markup, "html.parser")
     found = {}
     for link in page.select(".question-ask-title a[href]"):
@@ -189,24 +189,19 @@ def ask39_listing_candidates(listing, markup, excluded):
         if identifier in excluded:
             continue
         title = (link.get("title") or link.get_text(" ", strip=True)).strip()
-        # The original site's .question-ask panel contains the physician's
-        # longer answer snippet. Never use panel length as patient narrative.
-        patient_chars = len(re.sub(r"[\\s，。？！、：；,.?!:;]", "", title))
-        if patient_chars < 24 or not SPINE.search(title):
-            continue
-        personal = bool(re.search(
-            r"我|本人|家人|父亲|母亲|术后|复发|检查|[0-9一二三四五六七八九十]+[年月周天岁]",
-            title))
-        if not personal:
+        # Per product rules, a short question title is acceptable. Only require
+        # spine relevance and absence of advertising; check 24 patient chars
+        # later against the full question body, never an adjacent doctor excerpt.
+        if not SPINE.search(title) or ask39_has_ad(title):
             continue
         score = (24 * bool(re.search(r"术后|康复|复发|手术|复查|治疗|坐骨神经|腿麻", title))
-                 + patient_chars)
+                 + min(len(title), 100))
         found[identifier] = (score, url)
     return found
 
 
 def ask39_directory_candidates(excluded, maximum=60):
-    """Select high-value patient narratives instead of random question pages."""
+    """Rank relevant ad-free question titles; validate patient body later."""
     ranked = {}
     listings = list(ASK39_LISTS)
     for category in (11760, 625):
@@ -227,7 +222,7 @@ def ask39_directory_candidates(excluded, maximum=60):
     ordered = sorted(ranked.items(), key=lambda item: (-item[1][0], item[0]))
     selected = ordered[:maximum]
     emit("discovery_summary", site="ask39", unique_candidates=len(ranked),
-         selected=len(selected), strategy="patient_question_preview_ranked")
+         selected=len(selected), strategy="spine_title_no_ad_body_checked_in_detail")
     return {identifier: url for identifier, (_, url) in selected}
 
 
