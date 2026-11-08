@@ -266,6 +266,12 @@ def complete(payload):
             time.sleep(1)
 
 
+def queue_mark(site, identifier, status, reason="processed"):
+    api("/api/collect/queue", {"site": site, "action": "mark", "items": [
+        {"source_id": identifier, "status": status, "reason": reason[:80]}
+    ]})
+
+
 def collect(site, candidates, limit, export_dir):
     granted = new_topics = new_replies = duplicates = unverified = 0
     expected_marks = set()
@@ -318,6 +324,7 @@ def collect(site, candidates, limit, export_dir):
                 new_topics += 1
                 new_replies += count
                 emit("imported", site=site, source_id=identifier, url=url, topic_id=topic_id, replies=count)
+            queue_mark(site, identifier, "completed")
         except (FetchProblem, ValueError, TypeError, KeyError, OSError) as error:
             reason = str(error) if isinstance(error, FetchProblem) else "incomplete_or_unverified_payload"
             if isinstance(error, ValueError) and re.fullmatch(r"[a-z_]{3,80}", str(error)):
@@ -326,6 +333,8 @@ def collect(site, candidates, limit, export_dir):
                 unverified += 1
             emit("candidate_skipped", site=site, source_id=identifier, url=url,
                  stage=stage, reason=reason, committed=committed)
+            if not committed:
+                queue_mark(site, identifier, "retry" if isinstance(error, FetchProblem) else "rejected", reason)
             if isinstance(error, FetchProblem) and error.status in (401, 403, 429):
                 stopped_reason = reason
         finally:
@@ -377,6 +386,15 @@ def main():
                 candidates = discover_120ask(excluded)
             if site == "ask39" and request["mode"] == "collect" and not candidates and not args.export_dir:
                 candidates = ask39_directory_candidates(excluded)
+            if request["mode"] == "collect" and not args.export_dir:
+                if candidates:
+                    rows = list(candidates.items())
+                    for start in range(0, len(rows), 30):
+                        api("/api/collect/queue", {"site": site, "action": "enqueue", "items": [
+                            {"source_id": key, "url": url} for key, url in rows[start:start+30]
+                        ]})
+                queued = api("/api/collect/queue?"+urlencode({"site":site}))["items"]
+                candidates = {row["source_id"]: row["url"] for row in queued}
             eligible = {key: url for key, url in candidates.items() if key not in excluded}
             emit("plan", site=site, existing_exclusions=len(excluded), candidates=len(candidates),
                  excluded=len(candidates) - len(eligible), eligible=len(eligible))
