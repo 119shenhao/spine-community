@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from spine_discover import candidate_links, discover_candidates
-from spine_sources import source_id, read_topic, parse_mayoclinic, parse_mayoclinic_pages, parse_healthunlocked
+from spine_sources import source_id, read_topic, parse_mayoclinic, parse_mayoclinic_pages, parse_healthunlocked, parse_ask39, ask39_has_ad
 from spine_collect import read_120ask_links, ask39_listing_candidates
 
 
@@ -135,8 +135,51 @@ class DiscoveryTests(unittest.TestCase):
              <a href="/question/333333.html">今天眼睛痒怎么办</a></p>
              <p class="question-ask-content">我最近眼睛很干，非常不舒服，睡眠质量也不是很好，想知道怎么处理，需要做眼科检查吗</p></div>"""
         result = ask39_listing_candidates("https://ask.39.net/browse/11760-1-1.html",html,{})
-        self.assertEqual(list(result),["111111"])
-        self.assertEqual(ask39_listing_candidates("https://ask.39.net/browse/11760-1-1.html",html,{"111111":"completed"}),{})
+        self.assertEqual(set(result),{"111111","222222"},"short spine titles must not be discarded")
+        self.assertEqual(set(ask39_listing_candidates("https://ask.39.net/browse/11760-1-1.html",html,{"111111":"completed"})),{"222222"})
+        self.assertEqual(ask39_listing_candidates("https://ask.39.net/browse/11760-1-1.html",
+            '<p class="question-ask-title"><a href="/question/444444.html">腰椎病加微信咨询</a></p>',{}),{})
+
+
+    @staticmethod
+    def ask39_sample(body, reply_texts=None, title="腰椎间盘突出怎么办"):
+        if reply_texts is None:
+            reply_texts = ["建议根据症状到医院复查"]
+        replies = "".join(
+            f'<div class="answer"><div class="doctor_all" id="reply_{i}"></div>'
+            f'<p class="sele_txt">{reply}</p></div>'
+            for i, reply in enumerate(reply_texts, start=100)
+        )
+        return (f'<h1 class="ask_tit">{title}</h1>'
+                f'<div class="ask_hid"><div class="txt_ms">病情描述：{body}</div></div>'
+                f'<div class="sele_all">{replies}</div>')
+
+    def test_ask39_full_body_minimum_24_and_any_nonadvertising_reply(self):
+        body = "腰椎间盘突出伴右腿麻木已经持续两个多月左右，坐久以后疼痛更明显，想知道接下来应该怎样治疗"
+        self.assertGreaterEqual(len(body), 24)
+        topic = parse_ask39(self.ask39_sample(body, ["先做检查"]))
+        self.assertEqual(topic["body"], body)
+        self.assertEqual(topic["comments"], [{"body": "先做检查", "source_lang": "zh-CN"}])
+        # No requirement for 我、本人、术后 or other autobiographical cue words.
+        with self.assertRaisesRegex(ValueError, "patient_narrative_too_short"):
+            parse_ask39(self.ask39_sample("腰椎疼痛，怎么办"))
+        with self.assertRaisesRegex(ValueError, "no_nonadvertising_replies"):
+            parse_ask39(self.ask39_sample(body, []))
+
+    def test_ask39_ad_filter_rejects_topic_and_removes_promotional_replies(self):
+        body = "腰椎间盘突出伴右腿麻木已经持续两个月，久坐以后疼痛特别明显，需要如何治疗和恢复"
+        self.assertTrue(ask39_has_ad("腰椎治疗加微信咨询优惠"))
+        self.assertTrue(ask39_has_ad("扫码领取限时优惠的康复方案"))
+        self.assertFalse(ask39_has_ad("我买过腰靠，但康复效果不太理想"))
+        with self.assertRaisesRegex(ValueError, "advertising_in_topic"):
+            parse_ask39(self.ask39_sample(body, title="腰椎治疗加微信咨询优惠"))
+        with self.assertRaisesRegex(ValueError, "advertising_in_topic"):
+            parse_ask39(self.ask39_sample(body + " 加微信咨询领取康复方案"))
+        source = self.ask39_sample(body, ["添加微信咨询可以获得优惠套餐", "建议做核磁共振检查再评估"])
+        topic = parse_ask39(source)
+        self.assertEqual([r["body"] for r in topic["comments"]], ["建议做核磁共振检查再评估"])
+        with self.assertRaisesRegex(ValueError, "no_nonadvertising_replies"):
+            parse_ask39(self.ask39_sample(body, ["添加微信咨询领取优惠套餐"]))
 
     def test_mayo_cross_page_reply_parent_is_preserved_and_no_quote_duplication(self):
         head = """<link rel="canonical" href="https://connect.mayoclinic.org/discussion/lumbar-recovery/">
