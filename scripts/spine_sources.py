@@ -43,6 +43,10 @@ def source_id(site, url):
     if not isinstance(url, str) or not 1 <= len(url) <= 300:
         raise ValueError("invalid_candidate_url")
     address = urlsplit(url)
+    if site == "patientinfo" and address.scheme == "https" and address.netloc == "community.patient.info" and not (address.query or address.fragment):
+        modern = re.fullmatch(r"/t/[a-z0-9-]+/([0-9]{1,20})/?", address.path, re.I)
+        if modern:
+            return modern.group(1)
     host, pattern = SOURCE_URLS[site]
     match = re.fullmatch(pattern, address.path, re.I)
     if address.scheme != "https" or address.netloc != host or address.query or address.fragment or not match:
@@ -241,7 +245,11 @@ def read_topic(site, identifier, url, get, render):
         return parse_healthunlocked(get(url), identifier)
     if site != "patientinfo":
         raise ValueError("unsupported_direct_source")
-    slug = urlsplit(url).path.split("/")[-1].rsplit("-", 1)[0]
+    address = urlsplit(url)
+    if address.netloc == "community.patient.info":
+        slug = address.path.strip("/").split("/")[-2]
+    else:
+        slug = address.path.split("/")[-1].rsplit("-", 1)[0]
     return parse_patientinfo(
         json.loads(get(f"https://community.patient.info/t/{slug}/{identifier}.json")), identifier
     )
