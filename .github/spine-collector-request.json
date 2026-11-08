@@ -1,12 +1,12 @@
 {
-  "request_id": "verify-mayo-long-31pages-real-20261108",
+  "request_id": "verify-mayo-11page-full-20261108",
   "mode": "collect",
   "sites": [
     "mayoclinic"
   ],
   "candidates": {
     "mayoclinic": [
-      "https://connect.mayoclinic.org/discussion/spinal-fusion-2/"
+      "https://connect.mayoclinic.org/discussion/laminotomy-recovery/"
     ]
   },
   "limit": 1
