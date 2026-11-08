@@ -98,14 +98,16 @@ export async function collectRoute(req:Request,env:Env,path:string):Promise<Resp
  if(path==='/api/collect/queue'){
   if(req.method==='GET'){
    const url=new URL(req.url),site=validSite(url.searchParams.get('site'));
+   await rate(db,'collect:queue:read',240);
    const rows=await all(db,`SELECT source_id,url,status,reason,attempts,retry_at FROM collector_candidates
-     WHERE site=? AND (status='pending' OR (status='retry' AND retry_at<=unixepoch()) OR (status='processing' AND lease_until<=unixepoch()))
+     WHERE site=? AND (status='pending' OR (status IN ('retry','rejected') AND retry_at<=unixepoch()) OR (status='processing' AND lease_until<=unixepoch()))
      ORDER BY updated_at,source_id LIMIT 120`,site);
    return json({site,items:rows});
   }
   if(req.method!=='POST')fail(405,'method_not_allowed');
   const b=plainObject(await body(req),['site','action','items']);
   const site=validSite(b.site),action=textField(b.action,1,20,'action');
+  await rate(db,'collect:queue:write',90);
   const items=list(b.items);
   if(!items.length||items.length>30)fail(400,'invalid_queue_batch');
   if(action==='enqueue'){
@@ -113,7 +115,12 @@ export async function collectRoute(req:Request,env:Env,path:string):Promise<Resp
     const row=plainObject(raw,['source_id','url']),sourceId=validSource(row.source_id,site);
     const url=textField(row.url,10,300,'url');
     const parsed=new URL(url);
-    if(parsed.protocol!=='https:'||!['www.120ask.com','ask.39.net','club.xywy.com','patient.info','healthunlocked.com','connect.mayoclinic.org'].includes(parsed.hostname))fail(400,'invalid_source_url');
+    const hosts:Record<string,string>={ '120ask':'www.120ask.com','ask39':'ask.39.net',xywy:'club.xywy.com',patientinfo:'patient.info',healthunlocked:'healthunlocked.com',mayoclinic:'connect.mayoclinic.org',smoke:'ask.39.net'};
+    if(parsed.protocol!=='https:'||parsed.hostname!==hosts[site]||parsed.username||parsed.password||parsed.port||parsed.hash||parsed.search)fail(400,'invalid_source_url');
+    if(site!=='smoke'){
+     const patterns:Record<string,RegExp>={ '120ask':/^\\/question\\/([0-9]{1,20})\\.htm$/,ask39:/^\\/question\\/([A-Za-z0-9_-]{1,40})\\.html$/,xywy:/^\\/wenda\\/([0-9]{1,20})\\.htm$/,patientinfo:/^\\/forums\\/discuss\\/[a-z0-9-]+-([0-9]{1,20})\\/?$/,healthunlocked:/^\\/[a-z0-9-]+\\/posts\\/([0-9]{1,20})(?:\\/[a-z0-9-]+)?\\/?$/,mayoclinic:/^\\/discussion\\/([a-z0-9-]{1,100})\\/?$/};
+     if(!patterns[site]?.test(parsed.pathname)||parsed.pathname.match(patterns[site])?.[1]!==sourceId)fail(400,'source_url_mismatch');
+    }
     return stmt(db,`INSERT INTO collector_candidates(site,source_id,url,status) VALUES(?,?,?,'pending')
       ON CONFLICT(site,source_id) DO NOTHING`,site,sourceId,url);
    });
@@ -127,8 +134,8 @@ export async function collectRoute(req:Request,env:Env,path:string):Promise<Resp
     if(!['completed','rejected','retry'].includes(status))fail(400,'invalid_queue_status');
     const reason=row.reason===undefined?null:textField(row.reason,1,80,'reason');
     return stmt(db,`UPDATE collector_candidates SET status=?,reason=?,attempts=attempts+1,
-      retry_at=CASE WHEN ?='retry' THEN unixepoch()+MIN(86400,300*(attempts+1)*(attempts+1)) ELSE 0 END,
-      updated_at=unixepoch() WHERE site=? AND source_id=?`,status,reason,status,site,sourceId);
+      retry_at=CASE WHEN ?='retry' THEN unixepoch()+MIN(86400,300*(attempts+1)*(attempts+1)) WHEN ?='rejected' THEN unixepoch()+2592000 ELSE 0 END,
+      updated_at=unixepoch() WHERE site=? AND source_id=? AND status<>'completed' AND (?<>'completed' OR EXISTS(SELECT 1 FROM collect_sources WHERE collect_sources.site=collector_candidates.site AND collect_sources.source_id=collector_candidates.source_id AND state='completed'))`,status,reason,status,status,site,sourceId,status);
    });
    await db.batch(statements);
    return json({status:'marked',count:items.length});
