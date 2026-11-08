@@ -1,0 +1,78 @@
+name: Collector three-source structure probe
+on:
+  push:
+    branches: [feature/v1-community-build-20261106]
+    paths: [.github/workflows/collector-three-source-probe.yml]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - run: python -m pip -q install beautifulsoup4==4.13.4
+      - name: Inspect authorized public page structure (no patient body logging)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json,re,time
+          from collections import Counter
+          from urllib.parse import urljoin,urlsplit
+          from urllib.request import Request,build_opener,HTTPRedirectHandler
+          from urllib.error import HTTPError,URLError
+          from bs4 import BeautifulSoup
+          class NoRedirect(HTTPRedirectHandler):
+              def redirect_request(self,*a,**k):return None
+          http=build_opener(NoRedirect())
+          pages={
+           "120ask_directory":"https://m.120ask.com/list/",
+           "120ask_example":"https://www.120ask.com/question/34264704.htm",
+           "120ask_home":"https://www.120ask.com/",
+           "ask39_category":"https://ask.39.net/browse/11760-1-1.html",
+           "ask39_question":"https://ask.39.net/question/101085837.html",
+           "mayo_pg1":"https://connect.mayoclinic.org/discussion/spinal-fusion-2/?pg=1",
+           "mayo_pg2":"https://connect.mayoclinic.org/discussion/spinal-fusion-2/?pg=2",
+           "mayo_short":"https://connect.mayoclinic.org/discussion/old-scoliosis-surgery/",
+          }
+          for name,url in pages.items():
+              try:
+                  with http.open(Request(url,headers={"User-Agent":"SpineCommunityCollector/1.0","Accept":"text/html"}),timeout=17) as r:
+                      html=r.read(2_500_000)
+                      status=r.status
+              except HTTPError as e:
+                  print(json.dumps({"page":name,"http":e.code}),flush=True)
+                  time.sleep(1.5);continue
+              except (URLError,OSError):
+                  print(json.dumps({"page":name,"error":"network_error"}),flush=True)
+                  time.sleep(1.5);continue
+              soup=BeautifulSoup(html,"html.parser")
+              result={"page":name,"http":status,"bytes":len(html)}
+              if name.startswith("120ask"):
+                  result["selectors"]={s:len(soup.select(s)) for s in ["#d_askH1","#d_msCon",".b_answerbox",".b_answerli",".b_anscont_cont .crazy_new",".b_answerti","a[href*='/question/']","a[href*='question/']","a[href*='120ask.com/question/']"]}
+                  links=[urljoin(url,x["href"]) for x in soup.select("a[href]") if re.search(r"/question/[0-9]+[.]htm",x["href"])]
+                  result["question_hosts"]=dict(Counter(urlsplit(x).netloc for x in links))
+                  result["question_paths"]=list(dict.fromkeys(urlsplit(x).path for x in links))[:9]
+                  result["relevant_anchor_count"]=sum(1 for x in soup.select("a[href]") if re.search("腰椎|颈椎|坐骨神经|腰突",x.get_text(" ",strip=True)))
+                  result["question_classes"]=Counter(c for x in soup.select("[class]") for c in x.get("class",[]) if re.search("answer|ask|reply|question",c,re.I)).most_common(30)
+              elif name.startswith("ask39"):
+                  found=[]
+                  for x in soup.select("a[href]"):
+                      path=urlsplit(urljoin(url,x["href"])).path
+                      if re.fullmatch(r"/question/[A-Za-z0-9_-]+[.]html",path):
+                          parent=x
+                          parents=[]
+                          for i in range(3):
+                              parents.append({"tag":parent.name,"class":parent.get("class",[]),"len":len(parent.get_text(" ",strip=True))})
+                              parent=parent.parent
+                          found.append({"path":path,"title_len":len(x.get_text(" ",strip=True)),"parents":parents})
+                  result["question_links"]=len(found)
+                  result["question_link_samples"]=found[:3]
+                  result["selectors"]={k:len(soup.select(k)) for k in ["h1.ask_tit",".ask_hid .txt_ms",".sele_all p.sele_txt","div.doctor_all[id^=reply_]","a[href*='/question/']"]}
+              else:
+                  result["selectors"]={k:len(soup.select(k)) for k in ["h1.chv4-discussion-title",".single-discussion-body",".comment-individual-row",".single-comment-body",".chv4-comment-pagination li",".in-reply-to-reveal",".in-reply-to-container",".comment-reply-count",".comment-container","[id^='comment']"]}
+                  result["pagination_links"]=[urljoin(url,x["href"]) for x in soup.select(".chv4-comment-pagination a[href], .pagination a[href]")][:15]
+                  result["row_classes"]=[{"id":x.get("id"),"data_id":x.get("data-id"),"data_comment_id":x.get("data-comment-id"),"classes":x.get("class",[]),"parent_classes":x.parent.get("class",[])} for x in soup.select(".comment-individual-row")[:6]]
+                  result["count_hints"]=[{"tag":x.name,"class":x.get("class",[])} for x in soup.select("[class*='comment-count'],[class*='comment-total'],[class*='comments-count'],[class*='pagination']")[:14]]
+              print(json.dumps(result,ensure_ascii=False),flush=True)
+              time.sleep(1.5)
+          PY
