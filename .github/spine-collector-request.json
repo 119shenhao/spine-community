@@ -1,16 +1,9 @@
 {
-  "request_id": "verify-mayo-public-multi-page-reply-20261108",
-  "mode": "collect",
+  "request_id": "39-patient-only-filter-final-20261108",
+  "mode": "discover",
   "sites": [
-    "mayoclinic"
+    "ask39"
   ],
-  "candidates": {
-    "mayoclinic": [
-      "https://connect.mayoclinic.org/discussion/spinal-fusion-and-possible-laminectomy-have-been-recommended/",
-      "https://connect.mayoclinic.org/discussion/questions-for-anyone-who-has-had-a-full-spinal-fusion/",
-      "https://connect.mayoclinic.org/discussion/multi-level-lumbar-fusion/",
-      "https://connect.mayoclinic.org/discussion/shower-chair-after-long-fusion/"
-    ]
-  },
+  "candidates": {},
   "limit": 1
 }
