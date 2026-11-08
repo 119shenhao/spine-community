@@ -116,4 +116,4 @@ curl --request POST \
 - [查看实际测试讨论](https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev/#/topic/a2a118dc-a057-474d-9c05-a79c384d3bf6)。
 - 生产关闭由隔离Worker测试确认403且零数据库访问；**未向正式站发送写入测试、未提交main、未迁移生产D1**。现有正式站未发布本次代码。
 
-相关：[需求](requirements/content-import-api.md) · [实现进度](implementation-v1-2026-11-06.md) · [发布规范](development-release-workflow.md)。
+相关：[需求](开发需求/帖子与跟帖导入接口需求.md) · [实现进度](implementation-v1-2026-11-06.md) · [发布规范](development-release-workflow.md)。
