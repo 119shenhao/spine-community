@@ -177,7 +177,7 @@ def inspect_ask39():
 
 
 def ask39_listing_candidates(listing, markup, excluded):
-    """Rank only patient-question previews, never doctor-answer links or unrelated titles."""
+    """Only trust patient-authored question text; adjacent doctor excerpts inflate lengths."""
     page = BeautifulSoup(markup, "html.parser")
     found = {}
     for link in page.select(".question-ask-title a[href]"):
@@ -188,23 +188,19 @@ def ask39_listing_candidates(listing, markup, excluded):
             continue
         if identifier in excluded:
             continue
-        question = link.find_parent(class_="question-ask")
-        if question is None:
+        title = (link.get("title") or link.get_text(" ", strip=True)).strip()
+        # The original site's .question-ask panel contains the physician's
+        # longer answer snippet. Never use panel length as patient narrative.
+        patient_chars = len(re.sub(r"[\\s，。？！、：；,.?!:;]", "", title))
+        if patient_chars < 24 or not SPINE.search(title):
             continue
-        title = link.get("title") or link.get_text(" ", strip=True)
-        preview = question.get_text(" ", strip=True)
-        # The original body is verified after claim; this is only a ranking signal.
-        # No content from doctor answers is used to classify a patient's problem.
-        if not SPINE.search(title + " " + preview) or len(preview) < 55:
+        personal = bool(re.search(
+            r"我|本人|家人|父亲|母亲|术后|复发|检查|[0-9一二三四五六七八九十]+[年月周天岁]",
+            title))
+        if not personal:
             continue
-        personal = bool(re.search(r"我|本人|家人|父亲|母亲|术后|复发|检查|[0-9一二三四五六七八九十]+[年月周天岁]", preview))
-        substantial = len(preview) >= 85
-        if not (personal or substantial):
-            continue
-        score = (60 * bool(SPINE.search(title))
-                 + 24 * bool(re.search(r"术后|康复|复发|手术|复查|治疗|坐骨神经|腿麻", title))
-                 + 20 * personal + 8 * substantial
-                 + min(len(preview), 200) / 10)
+        score = (24 * bool(re.search(r"术后|康复|复发|手术|复查|治疗|坐骨神经|腿麻", title))
+                 + patient_chars)
         found[identifier] = (score, url)
     return found
 
@@ -475,7 +471,10 @@ def main():
                     # Respect failed-item cooldown; claim still enforces completed/claimed.
                     candidates = {key: url for key, url in candidates.items() if key in available}
                 else:
-                    candidates = available
+                    # Prefer newly ranked discoverable questions to an older
+                    # backlog, while still retaining all eligible queued IDs.
+                    candidates = {key: available[key] for key in candidates if key in available}
+                    candidates.update((key, url) for key, url in available.items() if key not in candidates)
             if request["mode"] in ("collect", "discover") and not args.export_dir:
                 already_done = [key for key in candidates if excluded.get(key) == "completed"]
                 for key in already_done:
