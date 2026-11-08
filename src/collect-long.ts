@@ -121,10 +121,10 @@ export async function collectLongRoute(req:Request,env:Env,path:string):Promise<
   return json({status:'page_saved',already_saved:false,page_number:pageNo,saved_comments:parsed.length});
  }
  // Complete only when every page and every original reply parent is present.
- const state=await one(db,`SELECT (SELECT COUNT(*) FROM collector_mayo_pages WHERE source_id=?) pages,
+ const state=(await one(db,`SELECT (SELECT COUNT(*) FROM collector_mayo_pages WHERE source_id=?) pages,
   (SELECT COUNT(*) FROM collector_mayo_comments WHERE source_id=?) replies,
   (SELECT COALESCE(SUM(comment_count),0) FROM collector_mayo_pages WHERE source_id=?) page_replies`,
-  sourceId,sourceId,sourceId);
+  sourceId,sourceId,sourceId))!;
  if(state.pages!==stage.expected_pages||state.replies!==state.page_replies||state.replies<1)
   fail(409,'mayo_staging_incomplete');
  const wrongParent=await one(db,`SELECT sc.source_comment_id
@@ -137,14 +137,15 @@ export async function collectLongRoute(req:Request,env:Env,path:string):Promise<
  if(wrongParent)fail(409,'mayo_missing_or_forward_parent');
  const unknown=await one(db,'SELECT is_system,status FROM users WHERE id=?',UNKNOWN_USER_ID);
  if(!unknown||unknown.is_system!==1||unknown.status!=='active')fail(503,'import_account_unavailable');
- const fp=stage.content_hash,topicId=id();
- let duplicate=await existingTopic(db,stage.title,stage.body,fp);
+ const stable=stage;
+ const fp=stable.content_hash,topicId=id();
+ let duplicate=await existingTopic(db,stable.title,stable.body,fp);
  async function commit(existing:Row|null){
   const chosen=existing?.id||topicId,duplicate=Boolean(existing);
   const writes:D1PreparedStatement[]=[guard(db,sourceId,tokenHash)];
   if(!existing){
    writes.push(stmt(db,`INSERT INTO topics(id,author_id,title,body,source_lang,status,content_hash)
-     VALUES(?,?,?,?,?,?,?)`,topicId,UNKNOWN_USER_ID,stage.title,stage.body,'en',risk(stage.title,stage.body),fp));
+     VALUES(?,?,?,?,?,?,?)`,topicId,UNKNOWN_USER_ID,stable.title,stable.body,'en',risk(stable.title,stable.body),fp));
    // A single SQL statement inserts the entire verified reply tree from private
    // staging. Parent references are stable UUIDs, never temporary positions.
    writes.push(stmt(db,`INSERT INTO comments
