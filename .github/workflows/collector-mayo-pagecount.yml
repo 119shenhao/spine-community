@@ -10,6 +10,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v4
       - run: python -m pip -q install beautifulsoup4==4.13.4
       - name: Probe page counts without writing topic data
         shell: bash
