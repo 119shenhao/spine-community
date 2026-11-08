@@ -17,9 +17,7 @@ from spine_sources import (
 PREVIEW = "https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev"
 JSON_LIMIT = 150000
 DEFAULT_TOPIC_LIMIT = 10
-SKIP = {
-    "mayoclinic": "public_thread_returned_403_use_authorized_export",
-}
+SKIP = {}
 
 
 class FetchProblem(Exception):
@@ -37,7 +35,7 @@ http = build_opener(NoRedirect())
 
 
 def fetch(url, payload=None):
-    headers = {"User-Agent": "SpineCommunityCollector/1.0"}
+    headers = {"User-Agent": "SpineCommunityCollector/1.0", "Accept": "text/html,application/xhtml+xml,application/json"}
     if payload is not None:
         payload = json.dumps(payload, ensure_ascii=False).encode()
         if len(payload) > JSON_LIMIT:
