@@ -52,7 +52,7 @@ PREFERRED = re.compile(
 )
 ENGLISH_SPINE = re.compile(
     r"backache|back pain|neck pain|spinal|lumbar|cervical|sciatica|"
-    r"herniated|disc|disk|stenosis|fusion|laminectomy|L[1-5]|S1", re.I
+    r"herniated|disc|disk|stenosis|scoliosis|radiculopathy|spondylosis|fusion|laminectomy|L[1-5]|S1", re.I
 )
 
 
