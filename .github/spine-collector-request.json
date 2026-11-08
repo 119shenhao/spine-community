@@ -1,9 +1,10 @@
 {
-  "request_id": "verify-xywy-auto-discovery-20261108-v2",
-  "mode": "collect",
+  "request_id": "discover-mayo-health-authorized-20261108-v2",
+  "mode": "discover",
   "sites": [
-    "xywy"
+    "mayoclinic",
+    "healthunlocked"
   ],
   "candidates": {},
-  "limit": 1
+  "limit": 5
 }
