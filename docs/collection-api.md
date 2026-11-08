@@ -201,3 +201,35 @@ Cloudflare 预览不再需要配置采集 Secret；本地/CI 测试通过不等�
 - 测试主题 UUID：`99e0bb7d-8936-44d6-8d92-e5b5ce59dbd2`；标识标题：`[E2E TEST 42331899579-1] Public back-pain thread collection pipeline`。**没有复制 Reddit 患者原文或实际用户评论**，测试帖和回复都是明确标识的模拟内容。
 - [清理验证：GitHub Actions run 42332094193](https://github.com/119shenhao/spine-community/actions/runs/42332094193)：**success**。通过隔离 Preview D1 的定向 SQL 删除该测试主题、3 条回复、对应全文索引和两条来源采集记录；随后从真实远程接口证实主题详情返回 404，两条原站 ID 均不再出现在排除清单。用户的其他内容、生产数据库没有被删除或修改。完成后，一次性测试工作流、脚本和部署清理钩子均从代码分支撤销。
 - 结论：**开发采集接口的九个关键步骤已经做过真实 HTTP + D1 远程闭环验证**；「直接从 Reddit/百度贴吧完整抓取并合法转载原文」属于另一个外部采集环节，并未通过该测试，不能与采集协调 API 的成功混为一谈。
+
+
+## 2026-11-08：候选历史状态批量预检查（开发预览专用）
+
+`POST /api/collect/queue` 请求如下，**只读检查、不修改任何候选状态**；它复用开发预览采集权限边界和限流，每次1至30个 source ID，适合在候选排序后、截取固定采集数量之前批量排除旧拒绝记录。
+
+```json
+{
+  "site": "ask39",
+  "action": "check",
+  "items": [
+    {"source_id": "111111"},
+    {"source_id": "222222"}
+  ]
+}
+```
+
+响应示例（其中第一条为被拒绝的旧候选，第二条仍可入队）：
+
+```json
+{
+  "site": "ask39",
+  "status": "checked",
+  "excluded": [
+    {"source_id": "111111", "status": "rejected"}
+  ]
+}
+```
+
+`excluded` 仅列出服务端已阻止的请求 ID，包括 `rejected`、`completed`、未到期的 `retry` 和未到期的 `processing`；没列出的只是**候选资格**，仍须通过原站合法访问、`exclusions`、`claim`、全文/回复校验和最终入库去重。不能把没列出等同于已获采集权。重复 ID 或格式不合法返回400。
+
+该接口用于修复39健康问答“排名前60条都已拒绝，剩余候选永远无法轮到”的情况，程序不会把过短的历史正文强行重新采集。开发分支单元及集成测试见 [#42469297093](https://github.com/119shenhao/spine-community/actions/runs/42469297093)。
