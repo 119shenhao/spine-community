@@ -9,7 +9,7 @@ const {default:worker}=await import('../.test-build/index.js');
 const {hash,now}=await import('../.test-build/core.js');
 const {verifyGoogle}=await import('../.test-build/auth.js');
 class D1 {
- constructor(){this.db=new DatabaseSync(':memory:');this.db.exec('PRAGMA foreign_keys=ON');for(const f of readdirSync('migrations/v1').filter(f=>f.endsWith('.sql')).sort())this.db.exec(readFileSync('migrations/v1/'+f,'utf8'));}
+ constructor(){this.db=new DatabaseSync(':memory:');this.db.exec('PRAGMA foreign_keys=ON');for(const dir of ['migrations/v1','migrations/preview-only'])for(const f of readdirSync(dir).filter(f=>f.endsWith('.sql')).sort())this.db.exec(readFileSync(dir+'/'+f,'utf8'));}
  prepare(sql){return new Prepared(this,sql);}
  async batch(stmts){this.db.exec('BEGIN');try{const results=[];for(const s of stmts)results.push(await s.all());this.db.exec('COMMIT');return results;}catch(e){this.db.exec('ROLLBACK');throw e;}}
 }
@@ -868,4 +868,35 @@ test('post/reply language menus use 简体中文 and 繁體中文 rather than re
  assert(source.includes('languageOptions(c?.source_lang||postingLanguage(state.user,locale,languages))'));
  assert(source.includes('languageOptions(editing?c.source_lang:postingLanguage(state.user,locale,languages))'));
  assert(source.includes('profilePostingLanguageOptions(u,locale,languages,t,languageOptions)'));
+});
+
+// D1-backed collector queue: dedupe, retry scheduling, preview-only gating, and URL safety.
+test('collector queue persists candidates, rejects invalid URLs and honors retry windows',async()=>{
+ const {collect,DB}=await collectFixture();
+ const site='ask39',source_id='99663344',url='https://ask.39.net/question/99663344.html';
+ const get=()=>collect('/api/collect/queue',undefined,{method:'GET',search:'?site='+site});
+ const put=()=>collect('/api/collect/queue',{site,action:'enqueue',items:[{source_id,url}]});
+ assert.equal((await put()).status,200);
+ assert.equal((await put()).status,200);
+ assert.equal(DB.db.prepare('SELECT count(*) AS n FROM collector_candidates WHERE site=? AND source_id=?').get(site,source_id).n,1);
+ assert.deepEqual((await get()).data.items.map(x=>x.source_id),[source_id]);
+ const invalid=await collect('/api/collect/queue',{site,action:'enqueue',items:[{source_id:'22',url:'https://www.120ask.com/question/22.htm'}]});
+ assert.equal(invalid.status,400);
+ const mismatch=await collect('/api/collect/queue',{site,action:'enqueue',items:[{source_id:'22',url:'https://ask.39.net/question/33.html'}]});
+ assert.equal(mismatch.status,400);
+ const mark=(status,reason='testing')=>collect('/api/collect/queue',{site,action:'mark',items:[{source_id,status,reason}]});
+ assert.equal((await mark('completed')).status,200);
+ assert.deepEqual((await get()).data.items.map(x=>x.source_id),[source_id],'unverified complete must not hide candidate');
+ assert.equal((await mark('retry','timeout')).status,200);
+ assert.deepEqual((await get()).data.items,[]);
+ assert.equal((await put()).status,200);
+ assert.deepEqual((await get()).data.items,[],'duplicate enqueue must preserve retry deadline');
+ DB.db.prepare('UPDATE collector_candidates SET retry_at=? WHERE site=? AND source_id=?').run(now()-1,site,source_id);
+ assert.deepEqual((await get()).data.items.map(x=>x.source_id),[source_id]);
+ assert.equal((await mark('rejected','patient_narrative_too_short')).status,200);
+ assert.deepEqual((await get()).data.items,[]);
+ DB.db.prepare('UPDATE collector_candidates SET retry_at=? WHERE site=? AND source_id=?').run(now()-1,site,source_id);
+ assert.deepEqual((await get()).data.items.map(x=>x.source_id),[source_id],'rejected candidates become reviewable after cooldown');
+ const prod={DB:{prepare(){throw Error('production DB touched');}},APP_ENV:'production',IMPORT_ENABLED:'true',COLLECT_ENABLED:'true'};
+ assert.equal((await collect('/api/collect/queue',undefined,{method:'GET',search:'?site='+site,env:prod})).status,403);
 });
