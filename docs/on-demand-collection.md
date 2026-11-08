@@ -73,3 +73,15 @@ python scripts/spine_collect.py /private/request.json --export-dir /private/auth
 | Mayo Clinic Connect | 普通公开原帖请求返回 HTTP 403，探测时释放认领，新增 0 篇。继续使用上文所列的完整授权导出方式。 | [访问探测](https://github.com/119shenhao/spine-community/actions/runs/42357347494) |
 
 两篇新增主帖的标题、正文、原文语言和回复树均已通过预览 API 回读核对，采集记录均为 `completed`。后续可直接说「执行 39 问医生和 HealthUnlocked 采集」或指定任一来源。39 问医生正文指纹去重与其他来源共享，另在同轮拒绝重复正文。正文近似改写不属于精确指纹去重。
+
+
+## 2026-11-08：39健康问答候选队列修复
+
+发现的问题：2026-11-08 的六站采集 [#42467718527](https://github.com/119shenhao/spine-community/actions/runs/42467718527) 中，39健康问答从官方目录识别312条脊椎相关候选，原程序仅截取排名前60条再尝试入队。候选表对重复 ID 使用 `ON CONFLICT DO NOTHING`，已经被标为 `rejected` 的旧 ID 无法重新入队，因此最终可采集0条。这不意味着312条全文均已被判断不合格。
+
+修复内容（仅 feature 分支代码）：
+
+- 开发预览 Worker `POST /api/collect/queue` 增加只读 `action:"check"`，一次最多查30个**已知候选 ID** 的队列状态（不查全表、不重开已拒绝条目、不创建/改写候选）；返回当前不能采集的 ID，包括历史 `rejected`、`completed`、未到期 `retry` 与 `processing`。
+- 39健康问答发现程序先扫描官方目录并排序，再按每批30个 ID 查询队列状态，跳过不能采集的历史候选，继续向排名靠后的**尚未检查过**帖子补足最多60个备选，然后才批量 enqueue 和逐帖认领、解析正文。
+- 坚持每篇患者原始正文去标点后至少24字、有至少一条可核实且非广告的回复，拒绝缺失结构、个人标识、广告和重复内容。**没有改动其他五个站点的逻辑**；与生产环境严格隔离。
+- 自动化验证：[GitHub Actions #42469297093](https://github.com/119shenhao/spine-community/actions/runs/42469297093)：Node.js 63项、Python 18项全部通过。真实39站点实采验收另见对应 GitHub Actions 日志（不得用单元测试代替真实入库）。
