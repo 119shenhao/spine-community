@@ -27,7 +27,7 @@ ASK39_LISTS = (
 SPINE = re.compile(
     r"颈椎|腰椎|腰突|腰痛|腰疼|腰部|椎间盘|椎管|坐骨神经|腰[1-5]|"
     r"\b(?:lumbar|cervical|stenosis|sciatica|spine|spinal|ACDF|L[1-5]|S1|"
-    r"lower back|herniated disc|laminectomy|discectomy|microdiscectomy)\b", re.I
+    r"lower back|scoliosis|radiculopathy|spondylosis|herniated disc|laminectomy|discectomy|microdiscectomy)\b", re.I
 )
 IDENTIFIER = re.compile(
     r"(?<!\d)(?:1[3-9]\d{9}|\d{17}[\dXx])(?!\d)|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|"
