@@ -25,10 +25,8 @@ jobs:
               def redirect_request(self,*args,**kwargs): return None
           op=build_opener(NoRedirect())
           pages={
-           'healthunlocked_home':'https://healthunlocked.com/',
-           'healthunlocked_painconcern':'https://healthunlocked.com/painconcern',
-           'mayo_spine_list':'https://connect.mayoclinic.org/group/spine-health/?index=discussions',
-           'mayo_public_thread':'https://connect.mayoclinic.org/discussion/will-i-ever-recover-from-my-operation-for-spinal-stenoses/',
+           'healthunlocked_thread':'https://healthunlocked.com/painconcern/posts/153318229/spinal-decompression-surgery-on-saturday',
+           'mayo_short_thread':'https://connect.mayoclinic.org/discussion/old-scoliosis-surgery/',
           }
           for label,url in pages.items():
               try:
@@ -46,6 +44,19 @@ jobs:
                   if (label.startswith('mayo') and '/discussion/' in path) or (label.startswith('healthunlocked') and ('/posts/' in path or 'pain' in path or 'spine' in path)):
                       links.append(path)
               classes=Counter((node.name,c) for node in soup.select('[class]') for c in node.get('class',[]) if re.search('comment|response|discussion|content|post|reply|body|pagination|forum|thread|message|topic|activity',c,re.I))
-              print(json.dumps({'page':label,'status':code,'bytes':len(html),'candidate_paths':list(dict.fromkeys(links))[:16],'classes':classes.most_common(65),'article_count':len(soup.select('article')),'h1_count':len(soup.select('h1')),'reply_button_count':len(soup.select('a[href*="reply"]'))}),flush=True)
+
+              h1=soup.select_one('h1')
+              ancestry=[]
+              for i in range(5):
+                  if h1 is None: break
+                  ancestry.append({'tag':h1.name,'classes':h1.get('class',[])})
+                  h1=h1.parent
+              results={}
+              for selector in ['.single-discussion-body','.single-comment-body','.comment-container','.discussion-content','.comment-individual-row','#js-post-heading','.js-post-body','[class*="postBody"]','[class*="reply"]','[class*="Reply"]','[class*="Response"]','[class*="post__"]','[class*="postDetail"]','[class*="postHeading"]']:
+                  nodes=soup.select(selector)
+                  if nodes:
+                      node=nodes[0]
+                      results[selector]={'count':len(nodes),'children':[{'tag':x.name,'classes':x.get('class',[])} for x in node.find_all(recursive=False)][:14]}
+              print(json.dumps({'page':label,'status':code,'bytes':len(html),'candidate_paths':list(dict.fromkeys(links))[:8],'classes':classes.most_common(90),'article_count':len(soup.select('article')),'h1_ancestry':ancestry,'structure':results}),flush=True)
               time.sleep(3)
           PY
