@@ -1118,6 +1118,7 @@ test('projection retries R2 and Purge independently, publishes public fields onl
  let rejectPurge=true;
  globalThis.fetch=async(url,options)=>{
   assert.match(url,/^https:\/\/api\.cloudflare\.com\/client\/v4\/zones\//);
+  assert.equal(options.redirect,'manual');
   purge.push(JSON.parse(options.body).files);
   return Response.json({success:!rejectPurge});
  };

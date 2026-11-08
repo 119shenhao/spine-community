@@ -117,7 +117,7 @@ export async function purgeProjection(env:Env,config:NonNullable<ReturnType<type
   let response:Response;
   try{
     response=await fetch(`https://api.cloudflare.com/client/v4/zones/${env.CDN_ZONE_ID}/purge_cache`,{
-      method:'POST',redirect:'error',signal:AbortSignal.timeout(5000),
+      method:'POST',redirect:'manual',signal:AbortSignal.timeout(5000),
       headers:{authorization:'Bearer '+env.CDN_PURGE_API_TOKEN,'content-type':'application/json'},
       body:JSON.stringify({files:[url,{url,headers:{Origin:config.origin}}]})
     });
