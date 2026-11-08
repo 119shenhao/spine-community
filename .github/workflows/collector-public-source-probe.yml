@@ -42,3 +42,42 @@ jobs:
                   result={'site':name,'http':None,'reason':'network_error'}
               print(json.dumps(result),flush=True)
           PY
+
+      - name: Inspect public DOM structure without recording patient text
+        shell: bash
+        run: |
+          python3 -m pip -q install 'beautifulsoup4==4.13.4'
+          python3 - <<'PY'
+          from urllib.request import Request, urlopen
+          from collections import Counter
+          from bs4 import BeautifulSoup
+          from urllib.parse import urlparse
+          import re,json
+          for label,url in [
+            ('healthunlocked_home','https://healthunlocked.com/'),
+            ('mayo_list','https://connect.mayoclinic.org/group/spine-health/?index=discussions'),
+            ('mayo_thread','https://connect.mayoclinic.org/discussion/will-i-ever-recover-from-my-operation-for-spinal-stenoses/')
+          ]:
+              try:
+                  with urlopen(Request(url,headers={'User-Agent':'SpineCommunityCollector/1.0'}),timeout=15) as r: html=r.read(1500000)
+              except Exception as e:
+                  print(json.dumps({'label':label,'access':'unavailable'}));continue
+              soup=BeautifulSoup(html,'html.parser')
+              counts=Counter((tag.name,c) for tag in soup.select('[class]') for c in tag.get('class',[]) if re.search(r'comment|response|discussion|content|post|reply|body|pagination|forum|thread|message|feed|topic|group',c,re.I))
+              print(json.dumps({'label':label,'classes':counts.most_common(45)}))
+              links=[]
+              for link in soup.select('a[href]'):
+                  target=urlparse(link['href'])
+                  if label=='healthunlocked_home' and ('healthunlocked' in target.netloc or not target.netloc) and re.search(r'pain|spine|arthritis|sciatica|fibromyal|bone',target.path,re.I):
+                      links.append(target.path)
+                  elif label=='mayo_list' and '/discussion/' in target.path:
+                      links.append(target.path)
+              print(json.dumps({'label':label,'link_paths':list(dict.fromkeys(links))[:22]}))
+              h=soup.select_one('h1')
+              if h and label=='mayo_thread':
+                  p=h
+                  for i in range(4):
+                      print(json.dumps({'label':label,'h1_ancestor_level':i,'tag':p.name,'class':p.get('class',[]),'id':p.get('id')}))
+                      p=p.parent
+              print(json.dumps({'label':label,'comments_like':len(soup.select('[class*="comment"],[class*="Comment"]')),'articles':len(soup.select('article')),'h2':len(soup.select('h2')),'list_items':len(soup.select('li'))}))
+          PY
