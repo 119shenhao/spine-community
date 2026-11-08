@@ -24,7 +24,7 @@
 | GitHub 仓库 | `119shenhao/spine-community` | 同一私有仓库 |
 | Git 分支 | `feature/v1-community-build-20261106`（目前第一版使用；将来可按任务建立其他 feature 分支） | `main` |
 | Cloudflare Worker | 同一 `spine-community` Worker 的 **Worker Preview** 环境 | `spine-community` 的 Production |
-| 网页地址 | [预览地址](https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev/) | [生产地址](https://spine-community.119shenhao.workers.dev/) |
+| 网页地址 | [预览地址](https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev/) | [生产自定义域名](https://spine.nbn369.com/)（旧 Worker 地址：`https://spine-community.119shenhao.workers.dev/`） |
 | D1 名称 | `spine-community-db-preview` | `spine-community-db` |
 | D1 ID | `4362537a-5748-4a05-b0c4-219c3db36996` | `5919ff78-b8fc-46ab-85f0-01fe5e6a41b0` |
 | 配置路径 | 分支中的 `wrangler.jsonc → previews.d1_databases` | `wrangler.jsonc → d1_databases` |
