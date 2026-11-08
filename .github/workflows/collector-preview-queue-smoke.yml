@@ -1,0 +1,51 @@
+name: Preview D1 collector queue integration smoke
+on:
+  push:
+    branches: [feature/v1-community-build-20261106]
+    paths: [.github/workflows/collector-preview-queue-smoke.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  queue-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      CLOUDFLARE_ACCOUNT_ID: '289976272520a38732bef34108585e11'
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PREVIEW_D1_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Verify actual deployed preview queue API
+        shell: bash
+        run: |
+          set -euo pipefail
+          base='https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev'
+          ready=0
+          for i in $(seq 1 60); do
+            code=$(curl -sS --connect-timeout 5 --max-time 10 -o queue.json -w '%{http_code}' "$base/api/collect/queue?site=smoke" || true)
+            if [[ "$code" == 200 ]] && python3 -c 'import json;d=json.load(open("queue.json"));assert d["site"]=="smoke" and isinstance(d["items"],list)'; then ready=1; break; fi
+            sleep 5
+          done
+          test "$ready" = 1 || { echo "::error::Deployed preview API queue endpoint did not become available"; cat queue.json || true; exit 1; }
+          id="smoke-$GITHUB_RUN_ID"
+          python3 -c 'import json,sys; i=sys.argv[1];json.dump({"site":"smoke","action":"enqueue","items":[{"source_id":i,"url":"https://ask.39.net/question/12345678.html"}]},open("enqueue.json","w"))' "$id"
+          curl -fsS --max-time 20 -H 'Content-Type: application/json' --data-binary @enqueue.json "$base/api/collect/queue" > enqueue-result.json
+          python3 -c 'import json; assert json.load(open("enqueue-result.json"))["status"]=="queued"'
+          curl -fsS --max-time 20 -H 'Content-Type: application/json' --data-binary @enqueue.json "$base/api/collect/queue" > /dev/null
+          curl -fsS --max-time 20 "$base/api/collect/queue?site=smoke" > queue.json
+          python3 -c 'import json,sys; d=json.load(open("queue.json"));assert any(x["source_id"]==sys.argv[1] for x in d["items"]),d' "$id"
+          python3 -c 'import json,sys;json.dump({"site":"smoke","action":"mark","items":[{"source_id":sys.argv[1],"status":"retry","reason":"smoke_retry"}]},open("retry.json","w"))' "$id"
+          curl -fsS --max-time 20 -H 'Content-Type: application/json' --data-binary @retry.json "$base/api/collect/queue" > /dev/null
+          curl -fsS --max-time 20 "$base/api/collect/queue?site=smoke" > queue.json
+          python3 -c 'import json,sys;d=json.load(open("queue.json"));assert not any(x["source_id"]==sys.argv[1] for x in d["items"])' "$id"
+          python3 -c 'import json,sys;json.dump({"site":"smoke","action":"mark","items":[{"source_id":sys.argv[1],"status":"rejected","reason":"smoke_rejection"}]},open("reject.json","w"))' "$id"
+          curl -fsS --max-time 20 -H 'Content-Type: application/json' --data-binary @reject.json "$base/api/collect/queue" > /dev/null
+          echo "Preview queue API enqueue, dedupe, retry and rejection passed."
+          test -n "$CLOUDFLARE_API_TOKEN" || exit 1
+          npx wrangler d1 execute PREVIEW_DB --remote --config wrangler.collector-preview.json --command "SELECT site,source_id,status,attempts,retry_at FROM collector_candidates WHERE site='smoke' AND source_id='$id'"
+          echo "Preview queue data persisted in remote D1."
