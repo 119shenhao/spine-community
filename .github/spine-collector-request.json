@@ -1,9 +1,9 @@
 {
-  "request_id": "verify-patientinfo-auto-discovery-20261108-v2",
+  "request_id": "verify-xywy-auto-discovery-20261108-v1",
   "mode": "collect",
   "sites": [
-    "patientinfo"
+    "xywy"
   ],
   "candidates": {},
-  "limit": 2
+  "limit": 1
 }
