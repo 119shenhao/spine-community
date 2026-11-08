@@ -41,6 +41,60 @@ class DiscoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "invalid_all_sites_request"):
             request(["all"], mode="inspect")
 
+    def test_unified_collector_runs_independent_per_site_quotas(self):
+        import json
+        import tempfile
+        from urllib.parse import parse_qs
+        from unittest.mock import patch
+        import spine_collect
+
+        for expected_per_site in (2, 0):
+            with self.subTest(last_site_result=expected_per_site):
+                with tempfile.TemporaryDirectory() as directory:
+                    config = Path(directory) / "request.json"
+                    # Intentionally omit limit: default is two for each source.
+                    config.write_text(json.dumps({
+                        "request_id": "collect-all-test",
+                        "mode": "collect",
+                        "sites": ["all"],
+                        "candidates": {},
+                    }), encoding="utf-8")
+                    calls, events = [], []
+                    def fake_api(path, payload=None):
+                        if path.startswith("/api/collect/queue?"):
+                            site = parse_qs(urlsplit(path).query)["site"][0]
+                            return {"items": [{"source_id": "1",
+                                               "url": "https://example.test/" + site}]}
+                        return {"status": "queued"}
+                    def fake_collect(site, candidates, limit, export_dir):
+                        calls.append((site, limit))
+                        result = expected_per_site if len(calls) == len(spine_collect.SOURCE_URLS) else 2
+                        return True, result
+                    def fake_emit(event, **data):
+                        events.append((event, data))
+                    with (patch("sys.argv", ["spine_collect.py", str(config)]),
+                          patch("spine_collect.exclusions", return_value={}),
+                          patch("spine_collect.api", side_effect=fake_api),
+                          patch("spine_collect.discover_120ask", return_value={}),
+                          patch("spine_collect.ask39_directory_candidates", return_value={}),
+                          patch("spine_collect.discover_candidates", return_value={}),
+                          patch("spine_collect.collect", side_effect=fake_collect),
+                          patch("spine_collect.emit", side_effect=fake_emit)):
+                        status = spine_collect.main()
+                    self.assertEqual(status, 0)
+                    self.assertEqual(calls, [(site, 2) for site in spine_collect.SOURCE_URLS],
+                                     "each source must run even after earlier sites reach their own quota")
+                    summary = [d for event, d in events if event == "run_summary"]
+                    self.assertEqual(len(summary), 1)
+                    data = summary[0]
+                    self.assertEqual(data["requested_target"], 2 * len(spine_collect.SOURCE_URLS))
+                    self.assertEqual(data["new_topics"], 2 * (len(spine_collect.SOURCE_URLS)-1) + expected_per_site)
+                    self.assertEqual(data["target_met"], expected_per_site == 2)
+                    self.assertEqual(data["partial_success"], expected_per_site == 0)
+                    self.assertEqual(len(data["site_results"]), len(spine_collect.SOURCE_URLS))
+                    self.assertEqual(len([e for e, _ in events if e == "site_target"]),
+                                     len(spine_collect.SOURCE_URLS))
+
     def test_legacy_and_modern_patient_ids(self):
         self.assertEqual(source_id("patientinfo",
             "https://community.patient.info/t/lumbar-spine-fusion/621432"), "621432")
