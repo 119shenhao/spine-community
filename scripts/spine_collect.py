@@ -232,10 +232,42 @@ def ask39_directory_candidates(excluded, maximum=60):
                 ranked[identifier] = item
         time.sleep(1)
     ordered = sorted(ranked.items(), key=lambda item: (-item[1][0], item[0]))
-    selected = ordered[:maximum]
+    selected = {}
+    checked = 0
+    rejected = 0
+    cooldown = 0
+    # The old code took the top 60 BEFORE checking the D1 candidate queue.
+    # When those 60 had all been rejected earlier, zero new posts could ever
+    # be attempted even if hundreds of unchecked titles remained.
+    for offset in range(0, len(ordered), 30):
+        if len(selected) >= maximum:
+            break
+        chunk = ordered[offset:offset + 30]
+        response = api("/api/collect/queue", {
+            "site": "ask39", "action": "check",
+            "items": [{"source_id": identifier} for identifier, _ in chunk],
+        })
+        if response.get("site") != "ask39" or response.get("status") != "checked":
+            raise ValueError("invalid_candidate_precheck_response")
+        blocked = {}
+        requested = {identifier for identifier, _ in chunk}
+        for item in response.get("excluded", []):
+            identifier = item.get("source_id")
+            status = item.get("status")
+            if identifier not in requested or identifier in blocked or status not in (
+                    "rejected", "completed", "retry", "processing"):
+                raise ValueError("invalid_candidate_precheck_response")
+            blocked[identifier] = status
+        checked += len(chunk)
+        rejected += sum(status in ("rejected", "completed") for status in blocked.values())
+        cooldown += sum(status in ("retry", "processing") for status in blocked.values())
+        for identifier, (_, url) in chunk:
+            if identifier not in blocked and len(selected) < maximum:
+                selected[identifier] = url
     emit("discovery_summary", site="ask39", unique_candidates=len(ranked),
-         selected=len(selected), strategy="spine_title_no_ad_body_checked_in_detail")
-    return {identifier: url for identifier, (_, url) in selected}
+         checked=checked, skipped_rejected=rejected, skipped_temporarily_unavailable=cooldown,
+         selected=len(selected), strategy="queue_prechecked_spine_titles_then_body_validation")
+    return selected
 
 
 def read_120ask_links(markup, base_url, excluded):
