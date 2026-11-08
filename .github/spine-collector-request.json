@@ -1,8 +1,8 @@
 {
-  "request_id": "collect-ask39-ranked-20261107",
-  "mode": "collect",
+  "request_id": "inspect-120ask-runner-20261108",
+  "mode": "inspect",
   "sites": [
-    "ask39"
+    "120ask"
   ],
   "candidates": {},
   "limit": 7
