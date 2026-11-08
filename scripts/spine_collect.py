@@ -438,6 +438,7 @@ def main():
         try:
             excluded = exclusions(site)
             candidates = request["candidates"].get(site, {})
+            explicit_candidates = bool(candidates)
             if site == "mayoclinic" and args.export_dir and candidates:
                 ids = json.loads((args.export_dir / "mayoclinic-ids.json").read_text(encoding="utf-8"))
                 stable = {}
@@ -453,8 +454,10 @@ def main():
                     candidates = {row["source_id"]: row["url"] for row in queued_first}
             if site == "120ask" and request["mode"] in ("collect", "discover") and not candidates and not args.export_dir:
                 candidates = discover_120ask(excluded)
+                total_discovered += len(candidates)
             if site == "ask39" and request["mode"] in ("collect", "discover") and not candidates and not args.export_dir:
                 candidates = ask39_directory_candidates(excluded)
+                total_discovered += len(candidates)
             if site in PUBLIC_LISTS and request["mode"] in ("collect", "discover") and not candidates and not args.export_dir:
                 candidates = discover_candidates(site, excluded, fetch, emit)
                 total_discovered += len(candidates)
@@ -466,7 +469,13 @@ def main():
                             {"source_id": key, "url": url} for key, url in rows[start:start+30]
                         ]})
                 queued = api("/api/collect/queue?"+urlencode({"site":site}))["items"]
-                candidates = {row["source_id"]: row["url"] for row in queued}
+                available = {row["source_id"]: row["url"] for row in queued}
+                if explicit_candidates:
+                    # An explicit test must not silently process unrelated queued topics.
+                    # Respect failed-item cooldown; claim still enforces completed/claimed.
+                    candidates = {key: url for key, url in candidates.items() if key in available}
+                else:
+                    candidates = available
             if request["mode"] in ("collect", "discover") and not args.export_dir:
                 already_done = [key for key in candidates if excluded.get(key) == "completed"]
                 for key in already_done:
