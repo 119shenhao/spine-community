@@ -17,8 +17,8 @@ PUBLIC_LISTS = {
         "https://community.patient.info/c/bones-joints-and-muscles/2",
     ),
     "healthunlocked": (
-        "https://healthunlocked.com/tag/spinal-stenosis",
-        "https://healthunlocked.com/tag/sciatica",
+        "https://healthunlocked.com/painconcern",
+        "https://healthunlocked.com/fibromyalgia-action-uk",
     ),
     "xywy": (
         "https://club.xywy.com/",
