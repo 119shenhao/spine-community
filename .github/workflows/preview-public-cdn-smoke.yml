@@ -1,0 +1,125 @@
+name: Preview public CDN smoke
+on:
+  push:
+    branches: [feature/v1-community-build-20261106]
+    paths: [.github/workflows/preview-public-cdn-smoke.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: spine-preview-public-cdn-smoke
+jobs:
+  smoke:
+    if: github.ref == 'refs/heads/feature/v1-community-build-20261106'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Check Preview D1, R2 and CDN lifecycle
+        env:
+          CLOUDFLARE_ACCOUNT_ID: '289976272520a38732bef34108585e11'
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PREVIEW_D1_API_TOKEN }}
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import {randomUUID,createHash} from 'node:crypto';
+          import {readFileSync} from 'node:fs';
+          import {execFileSync} from 'node:child_process';
+          import {setTimeout as delay} from 'node:timers/promises';
+
+          const preview='https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev';
+          const cdn='https://spine-data-dev.nbn369.com';
+          const cfg='wrangler.preview-migrations.jsonc';
+          const db=JSON.parse(readFileSync(cfg,'utf8')).d1_databases;
+          assert.equal(db.length,1);
+          assert.equal(db[0].binding,'PREVIEW_DB');
+          assert.equal(db[0].database_id,'4362537a-5748-4a05-b0c4-219c3db36996');
+          assert(Boolean(process.env.CLOUDFLARE_API_TOKEN),'Preview D1 credentials are required');
+          const health=await fetch(preview+'/api/health',{signal:AbortSignal.timeout(15000)}).then(r=>r.json());
+          assert.equal(health.environment,'preview');
+          assert.equal(health.publicContent.baseUrl,cdn);
+          assert.equal(health.publicContent.purgeConfigured,true);
+
+          const d1=sql=>JSON.parse(execFileSync(process.execPath,[
+            'node_modules/wrangler/bin/wrangler.js','d1','execute','PREVIEW_DB','--remote','--config',cfg,
+            '--command',sql,'--json'
+          ],{encoding:'utf8',stdio:['ignore','pipe','pipe']})).flatMap(r=>r.results||[]);
+          const actor=randomUUID(),topic=randomUUID(),token=randomUUID()+randomUUID();
+          const tokenHash=createHash('sha256').update(token).digest('hex');
+          const title='CDN validation fixture '+topic;
+          const key=cdn+'/topics/'+topic+'/detail.json';
+          const actorCall=async(method,path,data)=>{
+            const response=await fetch(preview+path,{method,signal:AbortSignal.timeout(15000),redirect:'error',
+              headers:{origin:preview,cookie:'sc_session='+token,'content-type':'application/json'},body:JSON.stringify(data)});
+            assert(response.ok,method+' '+path+' returned '+response.status);
+          };
+          const wake=()=>actorCall('PATCH','/api/me',{nickname:'CDN fixture',preferred_locale:'en'});
+          async function published(label) {
+            let row;
+            for(let i=0;i<12;i++){
+              row=d1("SELECT version,published_version,state,last_error FROM public_projection WHERE scope='topic' AND target='"+topic+"'")[0];
+              if(row?.state==='done'&&row.version===row.published_version)return row.version;
+              if(row?.last_error)throw Error(label+' projection failure: '+row.last_error);
+              await delay(800);
+            }
+            throw Error(label+' projection still pending');
+          }
+          async function inspect(origin) {
+            const r=await fetch(key,{headers:origin?{origin:preview}:{},signal:AbortSignal.timeout(12000),redirect:'error'});
+            assert.equal(r.status,200);
+            if(origin)assert.equal(r.headers.get('access-control-allow-origin'),preview);
+            return {cache:r.headers.get('cf-cache-status'),payload:await r.json()};
+          }
+          let fixtureCreated=false;
+          try {
+            d1("INSERT INTO users(id,nickname) VALUES('"+actor+"','CDN fixture')");
+            d1("INSERT INTO user_sessions(id,user_id,token_hash,expires_at) VALUES('"+actor+"','"+actor+"','"+tokenHash+"',unixepoch()+600)");
+            d1("INSERT INTO topics(id,author_id,title,body,source_lang,status) VALUES('"+topic+"','"+actor+"','"+title+"','Synthetic CDN version one','en','pending_review')");
+            fixtureCreated=true;
+            // Keep this isolated fixture out of the cross-environment sync while it is visible.
+            d1("INSERT INTO topic_sync_receipts(source_topic_id,production_topic_id,content_hash) VALUES('"+topic+"','preview-only-smoke','"+"0".repeat(64)+"')");
+            d1("UPDATE topics SET status='published' WHERE id='"+topic+"'; UPDATE public_projection SET priority=3 WHERE scope='topic' AND target='"+topic+"'");
+            await wake();
+            const v1=await published('Initial');
+            for(const cors of [false,true]){
+              let hit=false,states=[];
+              for(let i=0;i<4;i++){
+                const result=await inspect(cors);
+                assert.equal(result.payload.contentVersion,v1);
+                assert.equal(result.payload.data.topic.body,'Synthetic CDN version one');
+                states.push(result.cache);
+                if(result.cache==='HIT'){hit=true;break;}
+              }
+              console.log((cors?'CORS':'Direct')+' cache '+states.join(' -> '));
+              assert(hit,'The warmed projection did not return HIT');
+            }
+            await actorCall('PATCH','/api/topics/'+topic,{title,body:'Synthetic CDN version two',source_lang:'en'});
+            const v2=await published('Update');
+            assert(v2>v1);
+            for(const cors of [false,true]){
+              const result=await inspect(cors);
+              assert.equal(result.payload.contentVersion,v2);
+              assert.equal(result.payload.data.topic.body,'Synthetic CDN version two');
+              console.log((cors?'CORS':'Direct')+' after purge '+result.cache+', version '+v2);
+            }
+          } finally {
+            if(fixtureCreated){
+              d1("UPDATE topics SET status='hidden' WHERE id='"+topic+"'; UPDATE public_projection SET priority=3,attempts=0,state='pending',due_at=unixepoch() WHERE scope='topic' AND target='"+topic+"'");
+              await wake();
+              const withdrawn=await published('Withdrawal');
+              for(const cors of [false,true]){
+                const result=await inspect(cors);
+                assert.equal(result.payload.contentVersion,withdrawn);
+                assert.equal(result.payload.data,null);
+              }
+              d1("DELETE FROM topics WHERE id='"+topic+"' AND status='hidden'");
+              console.log('Fixture withdrawn from both cache variants and removed from Preview D1.');
+            }
+            d1("DELETE FROM user_sessions WHERE user_id='"+actor+"'; DELETE FROM users WHERE id='"+actor+"'");
+          }
+          JS
