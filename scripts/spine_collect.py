@@ -433,9 +433,9 @@ def main():
                 queued_first = api("/api/collect/queue?" + urlencode({"site": site}))["items"]
                 if len(queued_first) >= 30:
                     candidates = {row["source_id"]: row["url"] for row in queued_first}
-            if site == "120ask" and request["mode"] == "collect" and not candidates and not args.export_dir:
+            if site == "120ask" and request["mode"] in ("collect", "discover") and not candidates and not args.export_dir:
                 candidates = discover_120ask(excluded)
-            if site == "ask39" and request["mode"] == "collect" and not candidates and not args.export_dir:
+            if site == "ask39" and request["mode"] in ("collect", "discover") and not candidates and not args.export_dir:
                 candidates = ask39_directory_candidates(excluded)
             if site in PUBLIC_LISTS and request["mode"] in ("collect", "discover") and not candidates and not args.export_dir:
                 candidates = discover_candidates(site, excluded, fetch, emit)
