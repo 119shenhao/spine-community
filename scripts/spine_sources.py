@@ -234,6 +234,46 @@ def parse_healthunlocked(markup, expected_id):
             "source_lang": "en", "comments": roots}
 
 
+def parse_mayoclinic(markup, expected_id):
+    """Only import complete, single-page public discussions with reliably flat replies.
+
+    Threads using pagination or opaque parent/quoted replies are deferred rather
+    than partially copied or misrepresenting nested reply relationships.
+    """
+    page = BeautifulSoup(markup, "html.parser")
+    title = page.select_one("h1.chv4-discussion-title")
+    content = page.select_one(".discussion-content .single-discussion-body")
+    container = page.select_one(".comment-container")
+    canonical = page.select_one('link[rel="canonical"][href]')
+    if canonical and source_id("mayoclinic", canonical["href"]) != expected_id:
+        raise ValueError("unexpected_source_redirect")
+    if not title or not content or not container:
+        raise ValueError("mayoclinic_thread_structure_unverified")
+    if page.select(".chv4-comment-pagination .pagination li, .chv4-comment-pagination a[href*='pg=']"):
+        raise ValueError("mayoclinic_multipage_replies")
+    rows = container.select(".comment-individual-row")
+    if not 1 <= len(rows) <= 49:
+        raise ValueError("mayoclinic_reply_limit_or_missing")
+    if len(container.select(".single-comment-body")) != len(rows):
+        raise ValueError("mayoclinic_reply_count_mismatch")
+    if container.select(".in-reply-to-reveal, .in-reply-to-container, .comment-reply-count"):
+        raise ValueError("mayoclinic_nested_reply_parent_unverified")
+    if re.search(r"load more|show more (?:comments|replies)|view all replies",
+                 html_text(container), re.I):
+        raise ValueError("mayoclinic_hidden_replies")
+    comments = []
+    for row in rows:
+        nodes = row.select(".single-comment-body")
+        if len(nodes) != 1:
+            raise ValueError("mayoclinic_reply_structure_unverified")
+        reply = source_text(nodes[0])
+        if not reply:
+            raise ValueError("mayoclinic_empty_reply")
+        comments.append({"body": reply, "source_lang": "en"})
+    return {"title": source_text(title), "body": source_text(content),
+            "source_lang": "en", "comments": comments}
+
+
 def read_topic(site, identifier, url, get, render):
     if site == "120ask":
         return parse_120ask(get(url))
@@ -243,6 +283,8 @@ def read_topic(site, identifier, url, get, render):
         return parse_ask39(get(url))
     if site == "healthunlocked":
         return parse_healthunlocked(get(url), identifier)
+    if site == "mayoclinic":
+        return parse_mayoclinic(get(url), identifier)
     if site != "patientinfo":
         raise ValueError("unsupported_direct_source")
     address = urlsplit(url)
