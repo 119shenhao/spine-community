@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 import re
 import time
@@ -205,8 +206,11 @@ def ask39_directory_candidates(excluded, maximum=120):
             if identifier not in ranked or priority > ranked[identifier][0]:
                 ranked[identifier] = (priority, url)
         time.sleep(1)
-    selected = sorted(ranked.items(), key=lambda item: item[1][0], reverse=True)[:maximum]
-    emit("discovery_summary", site="ask39", unique_candidates=len(ranked), selected=len(selected))
+    # Rotate the discovery window across runs instead of retrying the same first 120.
+    ordered = sorted(ranked.items(), key=lambda item: item[1][0], reverse=True)
+    offset = int(hashlib.sha256(REQUEST_ID.encode()).hexdigest()[:8], 16) % max(1, len(ordered))
+    selected = (ordered[offset:] + ordered[:offset])[:maximum]
+    emit("discovery_summary", site="ask39", unique_candidates=len(ranked), selected=len(selected), offset=offset)
     return {identifier: url for identifier, (_, url) in selected}
 
 
@@ -341,15 +345,21 @@ def collect(site, candidates, limit, export_dir):
     return not (unverified or mark_failures or stopped_reason), new_topics
 
 
+REQUEST_ID = ""
+
+
 def main():
+    global REQUEST_ID
     parser = argparse.ArgumentParser()
     parser.add_argument("request", type=Path)
     parser.add_argument("--export-dir", type=Path)
     args = parser.parse_args()
     request = read_request(args.request)
+    REQUEST_ID = request["request_id"]
     emit("request", request_id=request["request_id"], mode=request["mode"])
     ok = True
     total_new_topics = 0
+    target = request["limit"] * len(request["sites"])
     for site in request["sites"]:
         try:
             excluded = exclusions(site)
@@ -385,7 +395,8 @@ def main():
     if request["mode"] == "collect" and total_new_topics == 0:
         emit("target_not_met", reason="zero_new_topics", new_topics=0)
         return 1
-    emit("run_summary", new_topics=total_new_topics, target_met=total_new_topics > 0)
+    emit("run_summary", new_topics=total_new_topics, requested_target=target,
+         target_met=total_new_topics >= target, partial_success=0 < total_new_topics < target)
     return 0 if ok else 1
 
 
