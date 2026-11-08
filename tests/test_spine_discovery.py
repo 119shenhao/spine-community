@@ -97,6 +97,8 @@ class DiscoveryTests(unittest.TestCase):
             <div class="comment-individual-row"><div class="single-comment-body"><p>I experienced recovery too.</p></div></div>
             <div class="comment-individual-row"><div class="single-comment-body"><p>Thanks for your updates.</p></div></div>
           </div>"""
+        html = html.replace('<div class="comment-individual-row">', '<div class="comment-individual-row" id="comment-111">', 1)
+        html = html.replace('<div class="comment-individual-row">', '<div class="comment-individual-row" id="comment-112">', 1)
         topic = parse_mayoclinic(html, "spinal-surgery-recovery")
         self.assertEqual(len(topic["comments"]), 2)
         self.assertEqual(topic["source_lang"], "en")
