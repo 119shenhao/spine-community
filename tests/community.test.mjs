@@ -900,3 +900,17 @@ test('collector queue persists candidates, rejects invalid URLs and honors retry
  const prod={DB:{prepare(){throw Error('production DB touched');}},APP_ENV:'production',IMPORT_ENABLED:'true',COLLECT_ENABLED:'true'};
  assert.equal((await collect('/api/collect/queue',undefined,{method:'GET',search:'?site='+site,env:prod})).status,403);
 });
+
+
+test('preview collector queue accepts modern Patient.info links with matching stable IDs only',async()=>{
+ const {collect,DB}=await collectFixture();
+ const site='patientinfo',source_id='621432';
+ const valid='https://community.patient.info/t/lumbar-spine-fusion/621432';
+ const post=(id,url)=>collect('/api/collect/queue',{site,action:'enqueue',items:[{source_id:id,url}]});
+ const ok=await post(source_id,valid);
+ assert.equal(ok.status,200,JSON.stringify(ok.data));
+ assert.equal(DB.db.prepare("SELECT url FROM collector_candidates WHERE site=? AND source_id=?").get(site,source_id).url,valid);
+ assert.equal((await post('621433',valid)).status,400);
+ assert.equal((await post('621433','https://community.patient.info/t/lumbar-spine-fusion/621433?source=tracker')).status,400);
+ assert.equal((await post('621433','https://example.org/t/lumbar-spine-fusion/621433')).status,400);
+});
