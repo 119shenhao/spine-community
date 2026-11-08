@@ -1,9 +1,13 @@
 {
-  "request_id": "mayoclinic-public-direct-test-20261108",
+  "request_id": "mayoclinic-public-short-thread-20261108-v2",
   "mode": "collect",
   "sites": [
     "mayoclinic"
   ],
-  "candidates": {},
+  "candidates": {
+    "mayoclinic": [
+      "https://connect.mayoclinic.org/discussion/old-scoliosis-surgery/"
+    ]
+  },
   "limit": 1
 }
