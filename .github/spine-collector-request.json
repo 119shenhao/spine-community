@@ -1,13 +1,10 @@
 {
-  "request_id": "mayoclinic-public-short-thread-20261108-v2",
-  "mode": "collect",
+  "request_id": "verify-mayo-health-public-discovery-20261108-final",
+  "mode": "discover",
   "sites": [
-    "mayoclinic"
+    "mayoclinic",
+    "healthunlocked"
   ],
-  "candidates": {
-    "mayoclinic": [
-      "https://connect.mayoclinic.org/discussion/old-scoliosis-surgery/"
-    ]
-  },
-  "limit": 1
+  "candidates": {},
+  "limit": 2
 }
