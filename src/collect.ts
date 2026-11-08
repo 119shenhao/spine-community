@@ -118,7 +118,14 @@ export async function collectRoute(req:Request,env:Env,path:string):Promise<Resp
     const hosts:Record<string,string>={ '120ask':'www.120ask.com','ask39':'ask.39.net',xywy:'club.xywy.com',patientinfo:'patient.info',healthunlocked:'healthunlocked.com',mayoclinic:'connect.mayoclinic.org',smoke:'ask.39.net'};
     if(parsed.protocol!=='https:'||parsed.hostname!==hosts[site]||parsed.username||parsed.password||parsed.port||parsed.hash||parsed.search)fail(400,'invalid_source_url');
     if(site!=='smoke'){
-     const patterns:Record<string,RegExp>={ '120ask':/^\\/question\\/([0-9]{1,20})\\.htm$/,ask39:/^\\/question\\/([A-Za-z0-9_-]{1,40})\\.html$/,xywy:/^\\/wenda\\/([0-9]{1,20})\\.htm$/,patientinfo:/^\\/forums\\/discuss\\/[a-z0-9-]+-([0-9]{1,20})\\/?$/,healthunlocked:/^\\/[a-z0-9-]+\\/posts\\/([0-9]{1,20})(?:\\/[a-z0-9-]+)?\\/?$/,mayoclinic:/^\\/discussion\\/([a-z0-9-]{1,100})\\/?$/};
+     const patterns:Record<string,RegExp>={
+       '120ask':new RegExp('^/question/([0-9]{1,20})[.]htm$'),
+       ask39:new RegExp('^/question/([A-Za-z0-9_-]{1,40})[.]html$'),
+       xywy:new RegExp('^/wenda/([0-9]{1,20})[.]htm$'),
+       patientinfo:new RegExp('^/forums/discuss/[a-z0-9-]+-([0-9]{1,20})/?$'),
+       healthunlocked:new RegExp('^/[a-z0-9-]+/posts/([0-9]{1,20})(?:/[a-z0-9-]+)?/?$'),
+       mayoclinic:new RegExp('^/discussion/([a-z0-9-]{1,100})/?$')
+     };
      if(!patterns[site]?.test(parsed.pathname)||parsed.pathname.match(patterns[site])?.[1]!==sourceId)fail(400,'source_url_mismatch');
     }
     return stmt(db,`INSERT INTO collector_candidates(site,source_id,url,status) VALUES(?,?,?,'pending')
