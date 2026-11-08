@@ -984,6 +984,12 @@ test('Mayo long staging refuses incomplete parent trees without publishing parti
  assert.equal((await run('finish')).status,409);
  assert.equal(DB.db.prepare('SELECT COUNT(*) c FROM topics WHERE title=?').get('Spinal recovery after surgery').c,0);
  assert.equal(DB.db.prepare('SELECT COUNT(*) c FROM collector_mayo_pages WHERE source_id=?').get(source).c,2);
+ // Explicitly reset a permanently-invalid stage; ordinary transient errors
+ // retain the page checkpoint. Reset requires the active claim.
+ assert.equal((await run('reset')).status,200);
+ assert.equal(DB.db.prepare('SELECT COUNT(*) c FROM collector_mayo_stage WHERE source_id=?').get(source).c,0);
+ assert.equal(DB.db.prepare('SELECT COUNT(*) c FROM collector_mayo_comments WHERE source_id=?').get(source).c,0);
+ assert.equal((await run('status')).status,409);
 });
 
 
