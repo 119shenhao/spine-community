@@ -12,7 +12,7 @@ jobs:
   smoke:
     if: github.ref == 'refs/heads/feature/v1-community-build-20261106'
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -40,7 +40,13 @@ jobs:
           assert.equal(db[0].binding,'PREVIEW_DB');
           assert.equal(db[0].database_id,'4362537a-5748-4a05-b0c4-219c3db36996');
           assert(Boolean(process.env.CLOUDFLARE_API_TOKEN),'Preview D1 credentials are required');
-          const health=await fetch(preview+'/api/health',{signal:AbortSignal.timeout(15000)}).then(r=>r.json());
+          let health;
+          for(let i=0;i<36;i++){
+            health=await fetch(preview+'/api/health',{signal:AbortSignal.timeout(10000)}).then(r=>r.json()).catch(()=>null);
+            if(health?.publicContent?.onDemand)break;
+            await delay(8000);
+          }
+          assert.equal(health?.publicContent?.onDemand,true,'Preview deployment has not enabled on-demand projection');
           assert.equal(health.environment,'preview');
           assert.equal(health.publicContent.baseUrl,cdn);
           assert.equal(health.publicContent.purgeConfigured,true);
@@ -52,7 +58,8 @@ jobs:
           const actor=randomUUID(),topic=randomUUID(),token=randomUUID()+randomUUID();
           const tokenHash=createHash('sha256').update(token).digest('hex');
           const title='CDN validation fixture '+topic;
-          const key=cdn+'/topics/'+topic+'/detail.json';
+          const objectKey='topics/'+topic+'/detail.json';
+          const key=cdn+'/'+objectKey;
           const actorCall=async(method,path,data)=>{
             const response=await fetch(preview+path,{method,signal:AbortSignal.timeout(15000),redirect:'error',
               headers:{origin:preview,cookie:'sc_session='+token,'content-type':'application/json'},body:JSON.stringify(data)});
@@ -69,11 +76,19 @@ jobs:
             }
             throw Error(label+' projection still pending');
           }
-          async function inspect(origin) {
-            const r=await fetch(key,{headers:origin?{origin:preview}:{},signal:AbortSignal.timeout(12000),redirect:'error'});
+          async function inspect(origin,query='') {
+            const r=await fetch(key+query,{headers:origin?{origin:typeof origin==='string'?origin:preview}:{},signal:AbortSignal.timeout(12000),redirect:'error'});
+            if(r.status===404)return {status:404};
             assert.equal(r.status,200);
-            if(origin)assert.equal(r.headers.get('access-control-allow-origin'),preview);
-            return {cache:r.headers.get('cf-cache-status'),payload:await r.json()};
+            if(origin===true)assert.equal(r.headers.get('access-control-allow-origin'),preview);
+            return {status:r.status,cache:r.headers.get('cf-cache-status'),payload:await r.json()};
+          }
+          async function workerFallback(expected) {
+            const r=await fetch(preview+'/api/topics/'+topic,{
+              headers:{'x-spine-projection-miss':objectKey},signal:AbortSignal.timeout(12000)
+            });
+            assert.equal(r.status,200);
+            assert.equal((await r.json()).topic.body,expected);
           }
           let fixtureCreated=false;
           try {
@@ -85,7 +100,10 @@ jobs:
             d1("INSERT INTO topic_sync_receipts(source_topic_id,production_topic_id,content_hash) VALUES('"+topic+"','preview-only-smoke','"+"0".repeat(64)+"')");
             d1("UPDATE topics SET status='published' WHERE id='"+topic+"'; UPDATE public_projection SET priority=3 WHERE scope='topic' AND target='"+topic+"'");
             await wake();
-            const v1=await published('Initial');
+            for(const cors of [false,true])assert.equal((await inspect(cors)).status,404);
+            console.log('Publishing the fixture left its CDN key absent until the first read.');
+            await workerFallback('Synthetic CDN version one');
+            const v1=await published('First request');
             for(const cors of [false,true]){
               let hit=false,states=[];
               for(let i=0;i<4;i++){
@@ -98,26 +116,50 @@ jobs:
               console.log((cors?'CORS':'Direct')+' cache '+states.join(' -> '));
               assert(hit,'The warmed projection did not return HIT');
             }
+            const externalOrigin='https://preview-cache-variant.invalid';
+            for(let i=0;i<2;i++)assert.equal((await inspect(externalOrigin)).payload.data.topic.body,'Synthetic CDN version one');
             await actorCall('PATCH','/api/topics/'+topic,{title,body:'Synthetic CDN version two',source_lang:'en'});
             const v2=await published('Update');
             assert(v2>v1);
+            for(const cors of [false,true,externalOrigin]){
+              const result=await inspect(cors);
+              assert.equal(result.payload.contentVersion,v2);
+              assert.equal(result.payload.invalidated,true);
+              assert.deepEqual(result.payload.data,{});
+            }
+            await workerFallback('Synthetic CDN version two');
+            for(let i=0;i<12;i++){
+              const result=await inspect(false);
+              if(result.payload?.data?.topic?.body==='Synthetic CDN version two')break;
+              if(i===11)assert.fail('The edited object did not regenerate after the next read');
+              await delay(800);
+            }
             for(const cors of [false,true]){
               const result=await inspect(cors);
               assert.equal(result.payload.contentVersion,v2);
               assert.equal(result.payload.data.topic.body,'Synthetic CDN version two');
-              console.log((cors?'CORS':'Direct')+' after purge '+result.cache+', version '+v2);
+              console.log((cors?'CORS':'Direct')+' after on-demand regeneration '+result.cache+', version '+v2);
             }
           } finally {
             if(fixtureCreated){
               d1("UPDATE topics SET status='hidden' WHERE id='"+topic+"'; UPDATE public_projection SET priority=3,attempts=0,state='pending',due_at=unixepoch() WHERE scope='topic' AND target='"+topic+"'");
               await wake();
-              const withdrawn=await published('Withdrawal');
-              for(const cors of [false,true]){
-                const result=await inspect(cors);
-                assert.equal(result.payload.contentVersion,withdrawn);
-                assert.equal(result.payload.data,null);
+              try {
+                const reserved=d1("SELECT reserved FROM public_projection_demand WHERE scope='topic' AND target='"+topic+"' AND object_index=1")[0]?.reserved;
+                const withdrawn=reserved?await published('Withdrawal'):null;
+                for(const cors of [false,true,'https://preview-cache-variant.invalid']){
+                  for(const query of ['', '?preview-smoke=withdrawn']){
+                    const result=await inspect(cors,query);
+                    if(!reserved)assert.equal(result.status,404);
+                    else{
+                      assert.equal(result.payload.contentVersion,withdrawn);
+                      assert.equal(result.payload.data,null);
+                    }
+                  }
+                }
+              } finally {
+                d1("DELETE FROM topics WHERE id='"+topic+"' AND status='hidden'");
               }
-              d1("DELETE FROM topics WHERE id='"+topic+"' AND status='hidden'");
               console.log('Fixture withdrawn from both cache variants and removed from Preview D1.');
             }
             d1("DELETE FROM user_sessions WHERE user_id='"+actor+"'; DELETE FROM users WHERE id='"+actor+"'");

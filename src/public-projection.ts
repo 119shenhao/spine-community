@@ -15,6 +15,7 @@ export function projectionConfig(env:Env) {
   return {
     base, origin:preview?PREVIEW_ORIGIN:PRODUCTION_ORIGIN, bucket:env.PUBLIC_CONTENT_R2,
     enabled:env.PUBLIC_CONTENT_ENABLED==='true',
+    onDemand:env.PUBLIC_CONTENT_ON_DEMAND==='true',
     zoneConfigured,tokenConfigured,purgeReady:zoneConfigured&&tokenConfigured
   };
 }
@@ -112,14 +113,15 @@ function canonical(value:unknown):string {
 }
 export const payloadHash=(data:unknown)=>hash(canonical(data));
 
-export async function purgeProjection(env:Env,config:NonNullable<ReturnType<typeof projectionConfig>>,key:string) {
+export async function purgeProjection(env:Env,config:NonNullable<ReturnType<typeof projectionConfig>>,key:string,allVariants=false) {
   const url=config.base+'/'+key;
   let response:Response;
   try{
     response=await fetch(`https://api.cloudflare.com/client/v4/zones/${env.CDN_ZONE_ID}/purge_cache`,{
       method:'POST',redirect:'manual',signal:AbortSignal.timeout(5000),
       headers:{authorization:'Bearer '+env.CDN_PURGE_API_TOKEN,'content-type':'application/json'},
-      body:JSON.stringify({files:[url,{url,headers:{Origin:config.origin}}]})
+      body:JSON.stringify(allVariants?{prefixes:[new URL(url).host+new URL(url).pathname]}:
+        {files:[url,{url,headers:{Origin:config.origin}}]})
     });
   }catch{throw Error('purge_unavailable');}
   if(!response.ok)throw Error('purge_http_'+response.status);
@@ -154,21 +156,7 @@ export async function drainProjection(env:Env,limit=2) {
         WHERE scope=? AND target=? AND lease=? AND lease_until>? AND version=? RETURNING last_object`,index,scope,target,token,now(),version);
       if(!reserved)continue;
       error='r2_publish_failed';
-      const digest=await payloadHash(current.data);
-      const old=await config.bucket.head(key);
-      const oldVersion=Number(old?.customMetadata?.projectionVersion)||0;
-      if(oldVersion>version)throw Error('r2_version_ahead');
-      if(oldVersion!==version||old?.customMetadata?.payloadHash!==digest){
-        const result=await config.bucket.put(key,JSON.stringify({
-          schemaVersion:1,contentVersion:version,generatedAt:new Date().toISOString(),
-          ...(scope==='topic'?{topicId:target}:{}),data:current.data
-        }),{
-          onlyIf:old?{etagMatches:old.etag}:{etagDoesNotMatch:'*'},
-          httpMetadata:{contentType:'application/json',cacheControl:'public, max-age=0, must-revalidate'},
-          customMetadata:{projectionVersion:String(version),payloadHash:digest,visibility:current.data?'public':'withdrawn'}
-        });
-        if(!result)throw Error('r2_conditional_write_conflict');
-      }
+      await writeProjection(config,key,scope,target,version,current.data);
       error='purge_failed';
       await purgeProjection(env,config,key);
       error='projection_checkpoint_failed';
@@ -190,4 +178,23 @@ export async function drainProjection(env:Env,limit=2) {
     }finally{await release();}
   }
   return {processed,failed,configured:true};
+}
+
+export async function writeProjection(config:NonNullable<ReturnType<typeof projectionConfig>>,key:string,
+  scope:string,target:string,version:number,data:unknown,invalidated=false) {
+  const digest=await payloadHash(data);
+  const visibility=invalidated?'invalidated':data===null?'withdrawn':'public';
+  const old=await config.bucket.head(key);
+  const oldVersion=Number(old?.customMetadata?.projectionVersion)||0;
+  if(oldVersion>version)throw Error('r2_version_ahead');
+  if(oldVersion===version&&old?.customMetadata?.payloadHash===digest&&old.customMetadata.visibility===visibility)return;
+  const result=await config.bucket.put(key,JSON.stringify({
+    schemaVersion:1,contentVersion:version,generatedAt:new Date().toISOString(),
+    ...(scope==='topic'?{topicId:target}:{}),...(invalidated?{invalidated:true}:{}),data
+  }),{
+    onlyIf:old?{etagMatches:old.etag}:{etagDoesNotMatch:'*'},
+    httpMetadata:{contentType:'application/json',cacheControl:'public, max-age=0, must-revalidate'},
+    customMetadata:{projectionVersion:String(version),payloadHash:digest,visibility}
+  });
+  if(!result)throw Error('r2_conditional_write_conflict');
 }

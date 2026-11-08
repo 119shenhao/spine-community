@@ -7,13 +7,14 @@ import {translationRoute} from './translation';
 import {adminRoute} from './admin';
 import {importRoute,importEnabled} from './import';
 import {collectRoute} from './collect';
-import {drainProjection,projectionConfig} from './public-projection';
+import {projectionConfig} from './public-projection';
+import {drainPublicContent,requestProjection} from './projection-demand';
 import {projectionAdminRoute} from './projection-admin';
 
 function wakeProjection(env:Env,ctx:ExecutionContext|undefined) {
  const config=projectionConfig(env);
  if(!ctx||!config?.enabled||!config.purgeReady)return;
- ctx.waitUntil(drainProjection(env).catch(()=>console.warn('public_projection_drain_failed')));
+ ctx.waitUntil(drainPublicContent(env).catch(()=>console.warn('public_projection_drain_failed')));
 }
 
 function changesProjection(path:string,method:string) {
@@ -51,20 +52,22 @@ export default {
    if(path==='/api/uploads'||path.startsWith('/api/uploads/'))fail(403,'image_feature_disabled');
    if(path==='/api/health'){
     let ready=false,projectionReady=false;
+    const config=projectionConfig(env);
     try{
      const row=env.DB&&await one(env.DB,`SELECT value,EXISTS(SELECT 1 FROM sqlite_master WHERE type='table'
-       AND name='public_projection_scan_count') projection FROM settings WHERE key='schema_version' AND value='1'`);
-     ready=Boolean(row);projectionReady=Boolean(row?.projection);
+       AND name='public_projection_scan_count') projection,EXISTS(SELECT 1 FROM sqlite_master WHERE type='table'
+       AND name='public_projection_demand') demand FROM settings WHERE key='schema_version' AND value='1'`);
+     ready=Boolean(row);projectionReady=Boolean(row?.projection&&(!config?.onDemand||row?.demand));
     }catch{}
-    const config=projectionConfig(env);
     const projectionEnabled=Boolean(projectionReady&&config?.enabled&&config.purgeReady);
     const publicContent={
      baseUrl:projectionEnabled&&env.PUBLIC_CONTENT_READS==='true'?config!.base:null,
+     onDemand:projectionEnabled&&Boolean(config?.onDemand),
      fallback:env.PUBLIC_CONTENT_FALLBACK==='true',
      ready:projectionReady,enabled:Boolean(config?.enabled),purgeConfigured:Boolean(config?.purgeReady),
      zoneConfigured:Boolean(config?.zoneConfigured),tokenConfigured:Boolean(config?.tokenConfigured)
     };
-    return json({environment:env.APP_ENV==='preview'?'preview':'production',status:ready?'ok':'setup_required',stage:'v1-development',version:'0.2.0-cdn.3',publicContent,databaseConfigured:Boolean(env.DB),databaseReady:ready,imageUploadsEnabled:false,importEnabled:importEnabled(req,env),googleConfigured:Boolean(env.GOOGLE_CLIENT_ID&&env.GOOGLE_CLIENT_SECRET),translationConfigured:env.TRANSLATION_ENABLED==='true'&&Boolean(env.TRANSLATOR_KEY),analyticsConfigured:Boolean(env.ANALYTICS_SALT)},ready?200:503);
+    return json({environment:env.APP_ENV==='preview'?'preview':'production',status:ready?'ok':'setup_required',stage:'v1-development',version:'0.2.0-cdn.4',publicContent,databaseConfigured:Boolean(env.DB),databaseReady:ready,imageUploadsEnabled:false,importEnabled:importEnabled(req,env),googleConfigured:Boolean(env.GOOGLE_CLIENT_ID&&env.GOOGLE_CLIENT_SECRET),translationConfigured:env.TRANSLATION_ENABLED==='true'&&Boolean(env.TRANSLATOR_KEY),analyticsConfigured:Boolean(env.ANALYTICS_SALT)},ready?200:503);
    }
    if(!env.DB)fail(503,'database_not_configured');
    if(!['GET','HEAD'].includes(req.method))sameOrigin(req);
@@ -73,7 +76,16 @@ export default {
    const user=await currentUser(req,env);
    for(const route of [authRoute,communityRoute,contentRoute,searchRoute,translationRoute,projectionAdminRoute,adminRoute]){
     const response=await route(req,env,user,path);
-    if(response){if(response.ok&&changesProjection(path,req.method))wakeProjection(env,ctx);response.headers.set('x-content-type-options','nosniff');response.headers.set('referrer-policy','no-referrer');return response;}
+    if(!response)continue;
+    if(response.ok){
+     if(changesProjection(path,req.method))wakeProjection(env,ctx);
+     if(ctx&&!user&&req.method==='GET'&&req.headers.has('x-spine-projection-miss')){
+      ctx.waitUntil(requestProjection(env,req,path).catch(()=>console.warn('public_projection_request_failed')));
+     }
+    }
+    response.headers.set('x-content-type-options','nosniff');
+    response.headers.set('referrer-policy','no-referrer');
+    return response;
    }
    fail(404,'not_found');
   }catch(error){

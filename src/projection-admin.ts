@@ -1,5 +1,6 @@
 import {Env,Row,all,one,stmt,body,json,requireRole,fail,now,id,rate} from './core';
-import {buildProjection,drainProjection,FEED_LIMIT,objectKey,parseObjectKey,payloadHash,projectionConfig} from './public-projection';
+import {buildProjection,FEED_LIMIT,objectKey,parseObjectKey,payloadHash,projectionConfig} from './public-projection';
+import {drainPublicContent} from './projection-demand';
 
 const ROOT='/api/admin/public-projection';
 const SCAN_BUDGET=5000;
@@ -13,6 +14,8 @@ const scanAt=(env:Env,scanId:string)=>one(env.DB,'SELECT * FROM public_projectio
 const audit=(env:Env,user:Row,scanId:string,action:string,reason:string)=>
   stmt(env.DB,`INSERT INTO moderation_actions(id,actor_id,target_type,target_id,action,reason)
     VALUES(?,?,'setting',?,?,?)`,id(),user.id,'public-projection:'+scanId,action,reason);
+const hasReservedPage=(alias:string)=>`(${alias}.last_object>0 OR EXISTS(
+  SELECT 1 FROM public_projection_demand d WHERE d.scope=${alias}.scope AND d.target=${alias}.target AND d.reserved=1))`;
 const owns='EXISTS(SELECT 1 FROM public_projection_scan WHERE id=? AND lease=?)';
 
 async function scanReport(env:Env,scan:Row,after:string) {
@@ -42,22 +45,27 @@ async function startScan(env:Env,config:Config,user:Row,input:Row) {
   const snapshot=stmt(env.DB,`WITH RECURSIVE
     sizes AS (
       SELECT p.scope,p.target,p.version,
-        max(1,p.last_object,
+        CASE WHEN ? THEN p.last_object ELSE max(1,p.last_object,
           CASE WHEN p.scope='feed' THEN min(?,(SELECT (count(*)+19)/20 FROM topics WHERE status='published'))
           WHEN EXISTS(SELECT 1 FROM topics t WHERE t.id=p.target AND t.status IN ('published','deleted'))
           THEN (SELECT (count(*)+49)/50 FROM comments c WHERE c.topic_id=p.target AND c.status IN ('published','deleted'))
-          ELSE 1 END) objects
+          ELSE 1 END) END objects
       FROM public_projection p WHERE (? IS NULL OR (p.scope='topic' AND p.target=?))
     ),
     pages(scope,target,version,objects,n) AS (
-      SELECT scope,target,version,objects,1 FROM sizes
+      SELECT scope,target,version,objects,1 FROM sizes WHERE objects>0
       UNION ALL SELECT scope,target,version,objects,n+1 FROM pages WHERE n<objects LIMIT ?
+    ),
+    expected(scope,target,version,n) AS (
+      SELECT scope,target,version,n FROM pages
+      UNION ALL SELECT s.scope,s.target,s.version,d.object_index FROM sizes s
+      JOIN public_projection_demand d USING(scope,target) WHERE ? AND d.reserved=1 AND d.object_index>s.objects
     )
     INSERT INTO public_projection_scan_item(scan_id,object_key,scope,target,object_index,expected_version)
     SELECT ?,CASE WHEN scope='feed' THEN 'feeds/latest/page-'||n||'.json'
       WHEN n=1 THEN 'topics/'||target||'/detail.json'
-      ELSE 'topics/'||target||'/comments/page-'||n||'.json' END,scope,target,n,version FROM pages`,
-    FEED_LIMIT,target,target,SCAN_BUDGET+1,scanId);
+      ELSE 'topics/'||target||'/comments/page-'||n||'.json' END,scope,target,n,version FROM expected LIMIT ?`,
+    Number(config.onDemand),FEED_LIMIT,target,target,SCAN_BUDGET+1,Number(config.onDemand),scanId,SCAN_BUDGET+1);
   if(await one(env.DB,"SELECT id FROM public_projection_scan WHERE environment=? AND phase IN ('listing','comparing')",env.APP_ENV))fail(409,'scan_already_active');
   try{
     await env.DB.batch([
@@ -121,7 +129,9 @@ async function compareItem(env:Env,config:Config,scan:Row,item:Row) {
         expectedHash=await payloadHash(current.data);
         result=item.r2_version===null?'missing'
           :item.r2_version<current.version?'outdated'
-          :item.r2_version!==current.version||item.r2_hash!==expectedHash?'mismatch':'ok';
+          :item.r2_version!==current.version?'mismatch'
+          :item.r2_hash===expectedHash?'ok'
+          :config.onDemand&&item.r2_hash===await payloadHash({})?'ignored':'mismatch';
         if(result==='ok'&&scan.deep){
           const object=await config.bucket.get(item.object_key);
           if(!object)result='missing';
@@ -155,9 +165,10 @@ async function compareBatch(env:Env,config:Config,scan:Row,lease:string) {
     stmt(env.DB,`UPDATE public_projection_scan SET phase=CASE
       WHEN EXISTS(SELECT 1 FROM public_projection_scan_item WHERE scan_id=? AND result IN ('check_failed','changed_during_scan'))
       OR EXISTS(SELECT 1 FROM public_projection p WHERE (? IS NULL OR (p.scope='topic' AND p.target=?))
+        AND (NOT ? OR ${hasReservedPage('p')})
         AND NOT EXISTS(SELECT 1 FROM public_projection_scan_item i WHERE i.scan_id=? AND i.scope=p.scope AND i.target=p.target))
       THEN 'partial' ELSE 'complete' END,error=NULL WHERE id=? AND lease=?`,
-      scan.id,scan.target,scan.target,scan.id,scan.id,lease)
+      scan.id,scan.target,scan.target,Number(config.onDemand),scan.id,scan.id,lease)
   ]);
 }
 
@@ -197,7 +208,11 @@ async function repair(env:Env,config:Config,user:Row,scan:Row,input:Row) {
       SELECT ?,?,?,?,2 WHERE EXISTS(SELECT 1 FROM public_projection_scan_item WHERE scan_id=? AND object_key=? AND repair_version IS NULL)
       ON CONFLICT(scope,target) DO UPDATE SET version=max(version+1,excluded.version),last_object=max(last_object,excluded.last_object),
         state='pending',priority=2,due_at=unixepoch(),updated_at=unixepoch(),next_object=1,attempts=0`,
-      item.scope,item.target,Math.max(1,Number(item.r2_version)+1),item.object_index,scan.id,item.object_key));
+      item.scope,item.target,Math.max(1,Number(item.r2_version)+1),config.onDemand?0:item.object_index,scan.id,item.object_key));
+    if(config.onDemand)writes.push(stmt(env.DB,`INSERT INTO public_projection_demand(scope,target,object_index,reserved,pending)
+      SELECT ?,?,?,1,? WHERE EXISTS(SELECT 1 FROM public_projection_scan_item WHERE scan_id=? AND object_key=? AND repair_version IS NULL)
+      ON CONFLICT(scope,target,object_index) DO UPDATE SET reserved=1,pending=excluded.pending,
+        attempts=0,last_error=NULL,due_at=unixepoch()`,item.scope,item.target,item.object_index,Number(item.result!=='orphan'),scan.id,item.object_key));
     writes.push(stmt(env.DB,`UPDATE public_projection_scan_item SET repair_version=
       (SELECT version FROM public_projection WHERE scope=? AND target=?) WHERE scan_id=? AND object_key=? AND repair_version IS NULL`,
       item.scope,item.target,scan.id,item.object_key));
@@ -215,12 +230,22 @@ export async function projectionAdminRoute(req:Request,env:Env,user:Row|null,pat
     const requested=url.searchParams.get('scan');
     const scan=requested?await scanAt(env,requested):await one(env.DB,
       'SELECT * FROM public_projection_scan WHERE environment=? ORDER BY created_at DESC,rowid DESC LIMIT 1',env.APP_ENV);
-    const queue=await all(env.DB,`SELECT state,count(*) count,min(updated_at) oldest
-      FROM public_projection GROUP BY state`);
-    const failed=await all(env.DB,`SELECT scope,target,version,published_version,attempts,due_at,state,last_error
-      FROM public_projection WHERE last_error IS NOT NULL AND state<>'done' ORDER BY priority DESC,updated_at LIMIT 25`);
+    const queue=await all(env.DB,`SELECT state,count(*) count,min(updated_at) oldest FROM (
+      SELECT p.state,p.updated_at FROM public_projection p WHERE NOT ? OR ${hasReservedPage('p')}
+      UNION ALL SELECT CASE WHEN d.pending=1 THEN 'pending' ELSE 'dead' END,p.updated_at
+      FROM public_projection_demand d JOIN public_projection p USING(scope,target)
+      WHERE ? AND (d.pending=1 OR d.last_error IS NOT NULL)
+      ) GROUP BY state`,Number(config.onDemand),Number(config.onDemand));
+    const failed=await all(env.DB,`SELECT scope,target,version,published_version,attempts,due_at,state,last_error,object_index
+      FROM (SELECT scope,target,version,published_version,attempts,due_at,state,last_error,priority,updated_at,next_object object_index
+        FROM public_projection WHERE last_error IS NOT NULL AND state<>'done'
+        UNION ALL SELECT d.scope,d.target,p.version,p.published_version,d.attempts,d.due_at,
+          CASE WHEN d.pending=1 THEN 'pending' ELSE 'dead' END,d.last_error,p.priority,p.updated_at,d.object_index
+        FROM public_projection_demand d JOIN public_projection p USING(scope,target)
+        WHERE ? AND d.last_error IS NOT NULL)
+      ORDER BY priority DESC,updated_at LIMIT 25`,Number(config.onDemand));
     return json({scan:scan?await scanReport(env,scan,url.searchParams.get('after')||''):null,
-      queue,failed,purge_ready:config.purgeReady,enabled:config.enabled,preview:env.APP_ENV==='preview'});
+      queue,failed:failed.map(row=>({...row,key:objectKey(row.scope,row.target,row.object_index)})),purge_ready:config.purgeReady,enabled:config.enabled,preview:env.APP_ENV==='preview'});
   }
   if(req.method!=='POST')fail(405,'method_not_allowed');
   await rate(env.DB,'projection-admin:'+owner.id,30,60);
@@ -232,7 +257,7 @@ export async function projectionAdminRoute(req:Request,env:Env,user:Row|null,pat
   if(operation==='/drain'){
     if(env.APP_ENV!=='preview')fail(403,'preview_only');
     await rate(env.DB,'projection-drain:'+owner.id,12,60);
-    return json(await drainProjection(env,4));
+    return json(await drainPublicContent(env,4));
   }
   if(operation==='/retry'){
     if(!config.enabled||!config.purgeReady)fail(503,'projection_purge_not_configured');
@@ -241,6 +266,10 @@ export async function projectionAdminRoute(req:Request,env:Env,user:Row|null,pat
     await env.DB.batch([
       stmt(env.DB,`UPDATE public_projection SET state='pending',attempts=0,due_at=unixepoch()
         WHERE scope=? AND target=? AND state<>'done'`,key.scope,key.target),
+      ...(config.onDemand?[stmt(env.DB,`UPDATE public_projection_demand
+        SET pending=1,attempts=0,due_at=unixepoch(),last_error=NULL
+        WHERE scope=? AND target=? AND object_index=? AND (pending=1 OR last_error IS NOT NULL)`,
+        key.scope,key.target,key.index)]:[]),
       audit(env,owner,key.target,'retry_confirmed',key.scope)
     ]);
     return json({ok:true});

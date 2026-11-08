@@ -23,7 +23,7 @@ export async function renderProjectionAdmin(target,api,esc,locale,after=null) {
   <p>${label('Purge configuration','CDN 清理配置')} · ${purge_ready?label('Present','已设置'):label('Missing','缺失')} · ${enabled?label('Publishing enabled','投影已启用'):label('Publishing disabled','投影关闭')}</p>
   <p>${label('Publishing queue','发布队列')} · ${queue.map(row=>esc(row.state)+': '+esc(row.count)).join(' · ')}</p>
   ${failed.map(row=>`<div class="admin-row"><code>${esc(row.scope)} / ${esc(row.target)}</code> · ${esc(row.last_error)} · ${esc(row.attempts)}
-   ${button('retry',label('Retry task','重试任务'),`data-key="${esc(row.scope==='feed'?'feeds/latest/page-1.json':'topics/'+row.target+'/detail.json')}"`)}
+   ${button('retry',label('Retry task','重试任务'),`data-key="${esc(row.key||(row.scope==='feed'?'feeds/latest/page-1.json':'topics/'+row.target+'/detail.json'))}"`)}
   </div>`).join('')}
   ${preview?button('drain',label('Process Preview queue','处理预览队列')):''}
   ${active?'':`<div class="form-grid">

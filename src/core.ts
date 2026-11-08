@@ -6,7 +6,7 @@ export interface Env {
   IMPORT_DB?: D1Database; IMPORT_ENABLED?: string;
   COLLECT_ENABLED?: string;
   PUBLIC_CONTENT_R2?: R2Bucket; PUBLIC_CONTENT_BASE_URL?: string;
-  PUBLIC_CONTENT_ENABLED?: string; PUBLIC_CONTENT_READS?: string; PUBLIC_CONTENT_FALLBACK?: string;
+  PUBLIC_CONTENT_ENABLED?: string; PUBLIC_CONTENT_READS?: string; PUBLIC_CONTENT_FALLBACK?: string; PUBLIC_CONTENT_ON_DEMAND?: string;
   CDN_ZONE_ID?: string; CDN_PURGE_API_TOKEN?: string;
 }
 export type Row = Record<string, any>;

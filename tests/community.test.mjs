@@ -22,7 +22,7 @@ class Prepared {
 }
 async function fixture(){const DB=new D1();for(const uid of ['alice','bob','carol','admin','mod']){DB.db.prepare('INSERT INTO users(id,nickname) VALUES(?,?)').run(uid,uid);DB.db.prepare('INSERT INTO user_sessions(id,user_id,token_hash,expires_at) VALUES(?,?,?,?)').run(uid,uid,await hash(uid+'-token'),now()+3600);}DB.db.exec("INSERT INTO user_roles(user_id,role) VALUES('admin','admin'),('mod','moderator')");
  const env={DB,ASSETS:{fetch:async()=>new Response('static')},ANALYTICS_SALT:'test-only-salt'};
- const call=async(path,method='GET',data,user='alice',extra={})=>{const headers={origin:'https://preview.test','user-agent':'Test Browser',...extra};if(user)headers.cookie='sc_session='+user+'-token';if(data!==undefined)headers['content-type']='application/json';const req=new Request('https://preview.test'+path,{method,headers,body:data===undefined?undefined:JSON.stringify(data)});const r=await worker.fetch(req,env);return {status:r.status,data:await r.json(),headers:r.headers};};
+ const call=async(path,method='GET',data,user='alice',extra={},ctx)=>{const headers={origin:'https://preview.test','user-agent':'Test Browser',...extra};if(user)headers.cookie='sc_session='+user+'-token';if(data!==undefined)headers['content-type']='application/json';const req=new Request('https://preview.test'+path,{method,headers,body:data===undefined?undefined:JSON.stringify(data)});const r=await worker.fetch(req,env,ctx);return {status:r.status,data:await r.json(),headers:r.headers};};
  const topic=async(title='A story of lower back pain',body='Pain when sitting and morning stiffness',user='alice',extra={})=>{const r=await call('/api/topics','POST',{title,body,source_lang:'en',...extra},user);assert.equal(r.status,201,JSON.stringify(r));return r.data.id;};
  return {DB,env,call,topic};
 }
@@ -1202,7 +1202,7 @@ test('Preview exposes config readiness without credentials and scheduled handler
  enableProjection(env,bucket);
  delete env.CDN_ZONE_ID;
  const health=(await call('/api/health')).data;
- assert.deepEqual(health.publicContent,{baseUrl:null,fallback:false,ready:true,enabled:true,purgeConfigured:false,zoneConfigured:false,tokenConfigured:true});
+ assert.deepEqual(health.publicContent,{baseUrl:null,onDemand:false,fallback:false,ready:true,enabled:true,purgeConfigured:false,zoneConfigured:false,tokenConfigured:true});
  assert(!JSON.stringify(health).includes('test-only'));
  assert.equal((await drainProjection(env)).configured,false);
  let jobs=[];
@@ -1336,4 +1336,139 @@ test('exhausted outbox keeps backoff across normal edits and is released by an o
  assert(task.version>old.version);
  assert.equal((await call(projectionRoot+'/retry','POST',{key:topicProjectionKey(target),confirm:true},'admin')).status,200);
  assert.equal(projectionTask(DB,'topic',target).state,'pending');
+});
+
+test('on-demand projection warms exact public pages and invalidates existing copies without eager publication',async()=>{
+ const {DB,env,call,topic}=await fixture(),bucket=projectionBucket();
+ const {drainPublicContent}=await import('../.test-build/projection-demand.js');
+ enableProjection(env,bucket);
+ Object.assign(env,{PUBLIC_CONTENT_ON_DEMAND:'true',PUBLIC_CONTENT_FALLBACK:'true'});
+ const main=await topic('On-demand topic','Synthetic original body');
+ const other=await topic('Cold topic','Synthetic cold body');
+ const paths=['feeds/latest/page-1.json',topicProjectionKey(main),`topics/${main}/comments/page-2.json`];
+ for(let i=0;i<51;i++)DB.db.prepare("INSERT INTO comments(id,topic_id,author_id,body,status) VALUES(?,?,? ,?,'published')")
+   .run('on-demand-reply-'+i,main,'bob','Synthetic reply '+i);
+ const cursor=DB.db.prepare("SELECT rowid FROM comments WHERE id='on-demand-reply-49'").get().rowid;
+ const originFetch=globalThis.fetch;
+ const purges=[];
+ globalThis.fetch=async(url,options)=>{
+  assert.match(url,/^https:\/\/api\.cloudflare\.com\//);
+  purges.push(JSON.parse(options.body));
+  return Response.json({success:true});
+ };
+ const background=[];
+ const ctx={waitUntil:p=>background.push(p)};
+ const flush=async()=>{await Promise.all(background.splice(0));};
+ const fallback=(path,key,user=null)=>call(path,'GET',undefined,user,{'x-spine-projection-miss':key},ctx);
+ try{
+  assert.equal((await drainPublicContent(env,8)).processed,0);
+  assert.equal(bucket.files.size,0);
+  const health=await call('/api/health','GET',undefined,null);
+  assert.equal(health.data.publicContent.onDemand,true);
+  assert.equal((await fallback('/api/topics/'+other,paths[1])).status,200);
+  assert.equal((await fallback('/api/topics/'+other,topicProjectionKey(other),'bob')).status,200);
+  assert.equal((await fallback('/api/topics/missing',topicProjectionKey('missing'))).status,404);
+  await flush();
+  assert.equal(bucket.files.size,0);
+  const feed=await fallback('/api/topics?sort=latest',paths[0]);
+  assert.equal(feed.status,200);
+  await flush();
+  assert.deepEqual([...bucket.files.keys()],paths.slice(0,1));
+  const detail=await fallback('/api/topics/'+main,paths[1]);
+  assert.equal(detail.data.topic.body,'Synthetic original body');
+  await flush();
+  assert.deepEqual([...bucket.files.keys()],paths.slice(0,2));
+  await fallback('/api/topics/'+main+'?before=1',paths[2]);
+  await flush();
+  assert.equal(bucket.files.size,2);
+  const reply=await fallback('/api/topics/'+main+'?before='+cursor,paths[2]);
+  assert.equal(reply.data.comments[0].id,'on-demand-reply-50');
+  await flush();
+  assert.deepEqual([...bucket.files.keys()],paths);
+  assert.equal((await bucket.get(paths[2]).then(r=>r.json())).data.comments[0].id,'on-demand-reply-50');
+  const oldTag=(await bucket.head(paths[1])).etag;
+  await fallback('/api/topics/'+main,paths[1]);
+  await flush();
+  assert.equal((await bucket.head(paths[1])).etag,oldTag);
+  assert.equal(purges.length,3);
+
+  await call('/api/topics/'+main,'PATCH',{title:'On-demand edited',body:'Synthetic changed body'},'alice',{},ctx);
+  await flush();
+  await drainPublicContent(env,6);
+  for(const path of paths){
+   const invalidated=await bucket.get(path);
+   assert.equal(invalidated.customMetadata.visibility,'invalidated');
+   assert.equal((await invalidated.json()).invalidated,true);
+   assert(!invalidated.value.includes('Synthetic original body'));
+  }
+  await fallback('/api/topics/'+main,paths[1]);
+  await flush();
+  assert.equal((await bucket.get(paths[1]).then(r=>r.json())).data.topic.body,'Synthetic changed body');
+  assert.equal((await bucket.get(paths[0]).then(r=>r.json())).invalidated,true);
+  assert.equal((await bucket.get(paths[2]).then(r=>r.json())).invalidated,true);
+
+  const hidden=await call('/api/admin/content','POST',{type:'topic',id:main,action:'hide',reason:'fixture'},'admin',{},ctx);
+  assert.equal(hidden.status,200);
+  await flush();
+  await drainPublicContent(env,6);
+  assert.equal((await bucket.get(paths[1]).then(r=>r.json())).data,null);
+  assert.equal((await bucket.get(paths[2]).then(r=>r.json())).data,null);
+  assert.equal((await fallback('/api/topics/'+main,paths[1])).status,404);
+  await flush();
+  assert.equal((await bucket.get(paths[1]).then(r=>r.json())).data,null);
+  assert.equal(await bucket.get(topicProjectionKey(other)),null);
+  assert(purges.some(purge=>purge.prefixes?.includes('spine-data-dev.nbn369.com/'+paths[1])));
+ }finally{globalThis.fetch=originFetch;}
+});
+
+test('on-demand browser fallback distinguishes a missing or invalidated object from failure or withdrawal',async()=>{
+ const {publicContentReader}=await import('../public/public-content.js');
+ const calls=[];
+ const health={environment:'preview',publicContent:{baseUrl:'https://spine-data-dev.nbn369.com',fallback:true,onDemand:true}};
+ const api=async(path,options)=>{calls.push([path,options]);return {worker:true};};
+ let result=new Response(null,{status:404});
+ const reader=publicContentReader(health,null,api,async()=>result.clone());
+ await reader.topic('old',new URLSearchParams());
+ assert.deepEqual(calls.at(-1),['/api/topics/old?',{headers:{'x-spine-projection-miss':'topics/old/detail.json'}}]);
+ await reader.feed(new URLSearchParams('offset=20'),1);
+ assert.deepEqual(calls.at(-1),['/api/topics?',{headers:{'x-spine-projection-miss':'feeds/latest/page-2.json'}}]);
+ result=Response.json({schemaVersion:1,contentVersion:2,topicId:'old',invalidated:true,data:{}});
+ await reader.topic('old',new URLSearchParams());
+ assert.equal(calls.at(-1)[1].headers['x-spine-projection-miss'],'topics/old/detail.json');
+ result=new Response('broken',{status:503});
+ await reader.topic('old',new URLSearchParams());
+ assert.equal(calls.at(-1)[1],undefined);
+ result=Response.json({schemaVersion:1,contentVersion:3,topicId:'old',data:null});
+ const count=calls.length;
+ await assert.rejects(reader.topic('old',new URLSearchParams()),error=>error.status===404);
+ assert.equal(calls.length,count);
+});
+
+test('a late on-demand R2 write cannot restore a withdrawn page',async()=>{
+ const {DB,env,call,topic}=await fixture(),bucket=projectionBucket();
+ const {drainPublicContent}=await import('../.test-build/projection-demand.js');
+ enableProjection(env,bucket);
+ Object.assign(env,{PUBLIC_CONTENT_ON_DEMAND:'true',PUBLIC_CONTENT_FALLBACK:'true'});
+ const target=await topic('Race fixture','Synthetic text to withdraw');
+ const key=topicProjectionKey(target);
+ const originalFetch=globalThis.fetch;
+ globalThis.fetch=async()=>Response.json({success:true});
+ const background=[];
+ const ctx={waitUntil:p=>background.push(p)};
+ let paused,continuePut;
+ const atPut=new Promise(resolve=>{paused=resolve;});
+ const resume=new Promise(resolve=>{continuePut=resolve;});
+ bucket.onPut=async name=>{if(name===key){bucket.onPut=null;paused();await resume;}};
+ try{
+  const fallback=await call('/api/topics/'+target,'GET',undefined,null,{'x-spine-projection-miss':key},ctx);
+  assert.equal(fallback.status,200);
+  await atPut;
+  await call('/api/admin/content','POST',{type:'topic',id:target,action:'hide',reason:'fixture'},'admin');
+  DB.db.prepare("UPDATE public_projection SET lease_until=0 WHERE scope='topic' AND target=?").run(target);
+  assert.equal((await drainPublicContent(env,2)).processed,2);
+  assert.equal((await bucket.get(key).then(r=>r.json())).data,null);
+  continuePut();
+  await Promise.all(background);
+  assert.equal((await bucket.get(key).then(r=>r.json())).data,null);
+ }finally{continuePut();globalThis.fetch=originalFetch;}
 });

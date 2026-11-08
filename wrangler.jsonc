@@ -15,6 +15,7 @@
   },
   "vars": {
     "APP_ENV": "production",
+    "PUBLIC_CONTENT_ON_DEMAND": "true",
     "GOOGLE_CLIENT_ID": "294338107553-k5bts5abj3tg85lt82moelv40sph3tuh.apps.googleusercontent.com",
     "PUBLIC_CONTENT_BASE_URL": "https://spine-data.nbn369.com"
   },
@@ -44,6 +45,7 @@
     "vars": {
       "APP_ENV": "preview",
       "CDN_ZONE_ID": "7857d08dff2a46bf824914c687a21413",
+      "PUBLIC_CONTENT_ON_DEMAND": "true",
       "GOOGLE_CLIENT_ID": "294338107553-bht5pr4qa112e9knbst517b0mvb9pus9.apps.googleusercontent.com",
       "TRANSLATION_ENABLED": "false",
       "IMPORT_ENABLED": "true",
