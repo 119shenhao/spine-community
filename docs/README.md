@@ -23,6 +23,8 @@
 
 ## 最新专项开发需求（2026-11-08）
 
+[多语言与自动翻译需求](开发需求/多语言与自动翻译需求.md)：用户语言自动显示、首屏原文先行、按需异步翻译、缓存复用与医学用语质量优先。此文件是该功能唯一详细需求正文；目前仅设计，未授权接入付费翻译服务。
+
 [公开阅读 CDN + R2 分流与 D1 最终一致性改造](开发需求/公开阅读CDN-R2改造与D1一致性方案-2026-11-08.md)：将匿名公开帖子列表、正文和回复从高频 Worker+D1 查询迁移为 CDN+R2 JSON；D1 持久化同步任务、版本与恢复，生产一个 Cron、开发手动测试。**仅需求方案，尚未授权修改生产环境或开通 R2。**
 
 ## Codex 开发前阅读顺序
@@ -36,7 +38,6 @@
 
 - [需求主文档](requirements/README.md)
 - [需求决定记录](requirements/decisions.md)
-- [多语言及自动翻译](requirements/multilingual.md)
 - [跨语言症状搜索](requirements/search.md)
 - [楼主进展与帖子关注](requirements/author-progress.md)
 - [后台管理、举报、日志及统计](requirements/admin-moderation-analytics.md)
