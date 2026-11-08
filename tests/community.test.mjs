@@ -914,3 +914,75 @@ test('preview collector queue accepts modern Patient.info links with matching st
  assert.equal((await post('621433','https://community.patient.info/t/lumbar-spine-fusion/621433?source=tracker')).status,400);
  assert.equal((await post('621433','https://example.org/t/lumbar-spine-fusion/621433')).status,400);
 });
+
+
+test('Mayo long threads resume from private D1 staging and publish 60 replies atomically',async()=>{
+ const {collect,claim,DB}=await collectFixture();
+ const source='long-lumbar-recovery';
+ const token1=(await claim('mayoclinic',[source])).data.results[0].lease_token;
+ const long=(action,token,extra={})=>collect('/api/collect/long/'+action,{
+   site:'mayoclinic',source_id:source,lease_token:token,...extra
+ });
+ const meta={expected_pages:6,title:'Lumbar fusion recovery diary',
+             body:'I had lumbar fusion surgery and recorded my progress over time.',
+             source_lang:'en'};
+ assert.equal((await long('start',token1,meta)).status,200);
+ assert.equal((await long('start',token1,meta)).data.already_started,true);
+ assert.equal((await long('start',token1,{...meta,expected_pages:401})).status,400);
+ const items=p=>Array.from({length:10},(_,i)=>{
+   const number=(p-1)*10+i+1;
+   return {source_comment_id:String(number),parent_source_comment_id:number===1?null:String(number-1),
+     body:'Detailed lumbar recovery reply '+number,source_lang:'en'};
+ });
+ assert.equal((await long('page',token1,{page_number:1,comments:items(1)})).status,200);
+ assert.equal((await long('page',token1,{page_number:1,comments:items(1)})).data.already_saved,true);
+ assert.equal((await long('page',token1,{page_number:1,comments:[items(1)[0]]})).status,409);
+ assert.equal((await long('finish',token1)).status,409,'never publish incomplete pages');
+ assert.equal(DB.db.prepare('SELECT COUNT(*) c FROM topics WHERE title=?').get(meta.title).c,0);
+ assert.equal((await long('status',token1)).data.saved_replies,10);
+ assert.equal((await collect('/api/collect/release',{site:'mayoclinic',source_id:source,lease_token:token1})).status,200);
+ const token2=(await claim('mayoclinic',[source],'resume-worker')).data.results[0].lease_token;
+ assert.equal((await long('status',token1)).status,409,'old lease must never read staging');
+ assert.equal((await long('start',token2,meta)).data.already_started,true);
+ assert.deepEqual((await long('status',token2)).data.pages.map(x=>x.page_number),[1]);
+ for(let p=2;p<=6;p++)assert.equal((await long('page',token2,{page_number:p,comments:items(p)})).status,200);
+ assert.equal(DB.db.prepare('SELECT COUNT(*) c FROM topics WHERE title=?').get(meta.title).c,0,'staging cannot leak to forum');
+ const finished=await long('finish',token2);
+ assert.equal(finished.status,200,JSON.stringify(finished.data));
+ assert.equal(finished.data.imported.topics,1);
+ assert.equal(finished.data.imported.comments,60);
+ assert.equal(finished.data.persisted_comments,60);
+ const topicId=finished.data.topic_id;
+ assert.equal(DB.db.prepare('SELECT COUNT(*) c FROM comments WHERE topic_id=?').get(topicId).c,60);
+ assert.equal(DB.db.prepare('SELECT reply_count c FROM topics WHERE id=?').get(topicId).c,60);
+ const a=DB.db.prepare('SELECT id FROM comments WHERE topic_id=? AND body=?').get(topicId,'Detailed lumbar recovery reply 1');
+ const b=DB.db.prepare('SELECT parent_comment_id p FROM comments WHERE topic_id=? AND body=?').get(topicId,'Detailed lumbar recovery reply 60');
+ const p59=DB.db.prepare('SELECT id FROM comments WHERE topic_id=? AND body=?').get(topicId,'Detailed lumbar recovery reply 59');
+ assert.equal(b.p,p59.id);
+ assert.equal(DB.db.prepare('PRAGMA foreign_key_check').all().length,0);
+ assert.equal(DB.db.prepare('SELECT COUNT(*) c FROM collector_mayo_stage WHERE source_id=?').get(source).c,0);
+ assert.equal(DB.db.prepare('SELECT state FROM collect_sources WHERE site=? AND source_id=?').get('mayoclinic',source).state,'completed');
+ assert.equal((await collect('/api/topics/'+topicId,undefined,{method:'GET'})).status,200);
+ const replay=await long('finish',token2);
+ assert.equal(replay.status,200);
+ assert.equal(replay.data.persisted_comments,60);
+ assert.equal(DB.db.prepare('SELECT COUNT(*) c FROM comments WHERE topic_id=?').get(topicId).c,60,'no duplicate rows on replay');
+ const denied={DB:{prepare(){throw Error('production DB used');}},APP_ENV:'production',IMPORT_ENABLED:'true',COLLECT_ENABLED:'true'};
+ assert.equal((await long('status',token2,{env:denied})).status,409); // closed lease on completed source
+});
+
+test('Mayo long staging refuses incomplete parent trees without publishing partial data',async()=>{
+ const {collect,claim,DB}=await collectFixture();
+ const source='lumbar-parent-missing';
+ const token=(await claim('mayoclinic',[source])).data.results[0].lease_token;
+ const run=(action,data={})=>collect('/api/collect/long/'+action,{site:'mayoclinic',source_id:source,lease_token:token,...data});
+ assert.equal((await run('start',{expected_pages:2,title:'Spinal recovery after surgery',
+    body:'My lumbar surgery recovery experience',source_lang:'en'})).status,200);
+ assert.equal((await run('page',{page_number:1,comments:[{source_comment_id:'10',parent_source_comment_id:null,
+    body:'First reply',source_lang:'en'}]})).status,200);
+ assert.equal((await run('page',{page_number:2,comments:[{source_comment_id:'20',parent_source_comment_id:'99',
+    body:'References missing comment',source_lang:'en'}]})).status,200);
+ assert.equal((await run('finish')).status,409);
+ assert.equal(DB.db.prepare('SELECT COUNT(*) c FROM topics WHERE title=?').get('Spinal recovery after surgery').c,0);
+ assert.equal(DB.db.prepare('SELECT COUNT(*) c FROM collector_mayo_pages WHERE source_id=?').get(source).c,2);
+});
