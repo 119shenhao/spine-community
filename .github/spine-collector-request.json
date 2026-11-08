@@ -1,9 +1,9 @@
 {
-  "request_id": "verify-120ask-fixed-discovery-20261108-v2",
+  "request_id": "verify-39-ranked-discovery-20261108-v1",
   "mode": "discover",
   "sites": [
-    "120ask"
+    "ask39"
   ],
   "candidates": {},
-  "limit": 2
+  "limit": 1
 }
