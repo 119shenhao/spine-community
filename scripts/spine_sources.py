@@ -314,12 +314,16 @@ def parse_mayoclinic_pages(markups, expected_id):
             items[match[1]] = ({"body": content, "source_lang": "en"}, parent_id)
             sequence.append(match[1])
     roots = []
+    positions = {comment_id: pos for pos, comment_id in enumerate(sequence)}
     for comment_id in sequence:
         comment, parent_id = items[comment_id]
         if parent_id is None:
             roots.append(comment)
-        elif parent_id not in items or parent_id == comment_id:
+        elif parent_id not in positions:
             raise ValueError("mayoclinic_missing_reply_parent")
+        elif positions[parent_id] >= positions[comment_id]:
+            # A missing/forward parent could create a cycle or a false hierarchy.
+            raise ValueError("mayoclinic_reply_parent_order_unverified")
         else:
             parent, _ = items[parent_id]
             parent.setdefault("replies", []).append(comment)
