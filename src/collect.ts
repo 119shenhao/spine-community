@@ -112,6 +112,20 @@ export async function collectRoute(req:Request,env:Env,path:string):Promise<Resp
   await rate(db,'collect:queue:write',90);
   const items=list(b.items);
   if(!items.length||items.length>30)fail(400,'invalid_queue_batch');
+  // Read-only candidate status preflight. Checking BEFORE ranking/truncating
+  // keeps permanently rejected titles from occupying every discovery slot.
+  // Only returns statuses for caller-supplied IDs; no full-table scan.
+  if(action==='check'){
+   const ids=items.map(raw=>validSource(plainObject(raw,['source_id']).source_id,site));
+   if(new Set(ids).size!==ids.length)fail(400,'duplicate_source_id');
+   const rows=await all(db,`SELECT source_id,status,retry_at,lease_until FROM collector_candidates
+     WHERE site=? AND source_id IN (${ids.map(()=>'?').join(',')})`,site,...ids);
+   const stamp=now();
+   const blocked=rows.filter(r=>r.status==='rejected'||r.status==='completed'||
+     (r.status==='retry'&&r.retry_at>stamp)||
+     (r.status==='processing'&&r.lease_until>stamp));
+   return json({site,status:'checked',excluded:blocked.map(r=>({source_id:r.source_id,status:r.status}))});
+  }
   if(action==='enqueue'){
    const statements=items.map(raw=>{
     const row=plainObject(raw,['source_id','url']),sourceId=validSource(row.source_id,site);
