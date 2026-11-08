@@ -42,4 +42,4 @@ Only Google login is implemented. There is **no preview login bypass**. Tests in
 
 Reviewed implementation migrations are in `migrations/v1/`. The obsolete initial migration was moved to `docs/archive/0001-initial-legacy.sql` and is excluded from all active migration configs. Production `main`, deployment, D1 writes and data copying are not part of this task.
 
-[Implementation status and limitations](docs/implementation-v1-2026-11-06.md) · [Canonical requirements](docs/requirements/README.md) · [Development/release policy](docs/development-release-workflow.md)
+[Implementation status and limitations](../docs/implementation-v1-2026-11-06.md) · [Canonical requirements](../docs/开发需求/项目需求总览.md) · [Development/release policy](../docs/development-release-workflow.md)
