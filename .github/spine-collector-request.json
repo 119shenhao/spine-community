@@ -1,10 +1,9 @@
 {
-  "request_id": "collect-rotated-candidates-20261108",
+  "request_id": "verify-d1-queue-live-20261108",
   "mode": "collect",
   "sites": [
-    "120ask",
     "ask39"
   ],
   "candidates": {},
-  "limit": 7
+  "limit": 2
 }
