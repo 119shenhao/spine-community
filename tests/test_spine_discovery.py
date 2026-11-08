@@ -8,7 +8,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from spine_discover import candidate_links, discover_candidates
 from spine_sources import source_id, read_topic, parse_mayoclinic, parse_mayoclinic_pages, parse_mayoclinic_stage_page, parse_healthunlocked, parse_ask39, ask39_has_ad
-from spine_collect import read_120ask_links, ask39_listing_candidates, read_request
+from spine_collect import read_120ask_links, ask39_listing_candidates, ask39_directory_candidates, read_request
 
 
 class DiscoveryTests(unittest.TestCase):
@@ -223,6 +223,46 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(ask39_listing_candidates("https://ask.39.net/browse/11760-1-1.html",
             '<p class="question-ask-title"><a href="/question/444444.html">腰椎病加微信咨询</a></p>',{}),{})
 
+
+    def test_ask39_preselects_new_candidates_beyond_rejected_top_sixty(self):
+        import spine_collect
+        # All 100 are valid spine-related titles; the previously highest ranked
+        # 65 entries were rejected in earlier runs and MUST NOT consume slots.
+        html = ''.join(
+            '<p class="question-ask-title"><a href="/question/%d.html">腰椎疼痛术后康复</a></p>' % i
+            for i in range(100000, 100100)
+        )
+        requests = []
+        def check(path, payload=None):
+            self.assertEqual(path, "/api/collect/queue")
+            self.assertEqual(payload["action"], "check")
+            self.assertEqual(payload["site"], "ask39")
+            self.assertLessEqual(len(payload["items"]), 30)
+            requests.append(payload)
+            return {"site": "ask39", "status": "checked", "excluded": [
+                {"source_id": row["source_id"], "status": "rejected"}
+                for row in payload["items"] if int(row["source_id"]) < 100065
+            ]}
+        with (patch.object(spine_collect, "ASK39_LISTS", ("https://ask.39.net/browse/11760-1-1.html",)),
+              patch.object(spine_collect, "fetch", return_value=html),
+              patch.object(spine_collect, "api", side_effect=check),
+              patch.object(spine_collect.time, "sleep"),
+              patch.object(spine_collect, "emit")):
+            results = ask39_directory_candidates({}, maximum=12)
+        self.assertEqual(list(results), [str(i) for i in range(100065,100077)])
+        self.assertEqual(len(requests), 3)
+        self.assertEqual(sum(len(req["items"]) for req in requests), 90)
+
+    def test_ask39_rejects_invalid_server_precheck(self):
+        import spine_collect
+        html = '<p class="question-ask-title"><a href="/question/123456.html">腰椎疼痛术后康复</a></p>'
+        with (patch.object(spine_collect, "ASK39_LISTS", ()),
+              patch.object(spine_collect, "fetch", return_value=html),
+              patch.object(spine_collect, "api", return_value={"site":"other","status":"checked","excluded":[]}),
+              patch.object(spine_collect.time, "sleep"),
+              patch.object(spine_collect, "emit")):
+            with self.assertRaisesRegex(ValueError,"invalid_candidate_precheck_response"):
+                ask39_directory_candidates({})
 
     @staticmethod
     def ask39_sample(body, reply_texts=None, title="腰椎间盘突出怎么办"):
