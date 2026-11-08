@@ -4,7 +4,7 @@ All accepted URLs pass spine_sources.source_id; fetched site lists are metadata-
 """
 import re
 import time
-from urllib.parse import urljoin, urlencode
+from urllib.parse import urljoin, urlencode, urlsplit, unquote
 
 from bs4 import BeautifulSoup
 
@@ -62,6 +62,13 @@ def candidate_links(site, listing, markup, excluded):
     found = {}
     for link in page.select("a[href]"):
         url = urljoin(listing, link["href"])
+        if urlsplit(listing).hostname == "www.bing.com":
+            # Search engines sometimes wrap an on-site URL in a query parameter.
+            decoded = unquote(url)
+            pattern = r"https://(?:community[.]patient[.]info/t/|patient[.]info/forums/discuss/|healthunlocked[.]com/|club[.]xywy[.]com/wenda/|connect[.]mayoclinic[.]org/discussion/)[^&#\s\"'<>]+"
+            match = re.search(pattern, decoded)
+            if match:
+                url = match.group(0)
         try:
             identifier = source_id(site, url)
         except ValueError:
@@ -87,7 +94,12 @@ def discover_candidates(site, excluded, fetch, emit, maximum=48):
     pages = [("site_listing", url) for url in PUBLIC_LISTS[site]]
     pages += [("search_index", "https://www.bing.com/search?" +
                urlencode({"q": q, "count": 30})) for q in SEARCH_TERMS[site]]
+    blocked_hosts = set()
     for kind, url in pages:
+        hostname = urlsplit(url).hostname
+        if hostname in blocked_hosts:
+            emit("discovery_skipped", site=site, reason="origin_rejected_access", kind=kind)
+            continue
         try:
             candidates = candidate_links(site, url, fetch(url), excluded)
             for identifier, (score, origin) in candidates.items():
@@ -102,11 +114,8 @@ def discover_candidates(site, excluded, fetch, emit, maximum=48):
             failures.append(reason)
             emit("discovery_unavailable", site=site, kind=kind, reason=reason)
             if getattr(error, "status", 0) in (401, 403, 429):
-                # Don't attempt additional requests to a host that explicitly denied access.
-                if kind == "site_listing":
-                    pages = [item for item in pages if item[0] != "site_listing"]
-                else:
-                    break
+                # Don't request another page from a host that explicitly refused access.
+                blocked_hosts.add(hostname)
         time.sleep(1)
     ordered = sorted(found.items(), key=lambda item: (-item[1][0], item[0]))
     selected = {identifier: url for identifier, (_, url) in ordered[:maximum]}
