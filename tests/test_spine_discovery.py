@@ -2,6 +2,7 @@
 import sys
 import unittest
 from pathlib import Path
+from urllib.parse import urlsplit
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -55,7 +56,7 @@ class DiscoveryTests(unittest.TestCase):
         events = []
         def fake_fetch(url):
             calls.append(url)
-            if "healthunlocked.com" in url:
+            if urlsplit(url).hostname == "healthunlocked.com":
                 raise FetchProblem()
             return "<html><body></body></html>"
 
@@ -63,7 +64,7 @@ class DiscoveryTests(unittest.TestCase):
             got = discover_candidates("healthunlocked", {}, fake_fetch,
                                       lambda event, **kw: events.append((event, kw)))
         self.assertEqual(got, {})
-        self.assertEqual(len([x for x in calls if "healthunlocked.com" in x]), 1,
+        self.assertEqual(len([x for x in calls if urlsplit(x).hostname == "healthunlocked.com"]), 1,
                          "do not retry forbidden host")
         self.assertTrue(any(e == "discovery_unavailable" for e, _ in events))
 
