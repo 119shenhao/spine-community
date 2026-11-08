@@ -24,3 +24,9 @@
 .sidebar .nav-compose{border:0;background:transparent;text-align:left;width:100%;line-height:1.6;white-space:nowrap}
 .sidebar .nav-compose:hover{background:#e9eee4}
 @media(max-width:700px){.sidebar .nav-compose{width:auto;flex-shrink:0}}
+/* iOS Safari zooms the visual viewport when a focused form control uses text smaller than 16px. Keep readable controls without disabling pinch zoom. */
+@supports (-webkit-touch-callout: none) {
+  input:not([type="checkbox"]):not([type="radio"]),
+  textarea,
+  select { font-size: 16px !important; }
+}
