@@ -1,0 +1,43 @@
+name: Mayo pagination candidate metadata probe
+on:
+  push:
+    branches: [feature/v1-community-build-20261106]
+    paths: [.github/workflows/collector-mayo-pagination-probe.yml]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - run: python -m pip -q install beautifulsoup4==4.13.4
+      - name: Check bounded public discussion pagination metadata
+        shell: bash
+        run: |
+          python - <<'PY'
+          from urllib.request import Request,urlopen
+          from urllib.parse import urljoin,urlsplit,parse_qs
+          from bs4 import BeautifulSoup
+          import time,json,re
+          index="https://connect.mayoclinic.org/group/spine-health/?index=discussions"
+          def get(url):
+              with urlopen(Request(url,headers={"User-Agent":"SpineCommunityCollector/1.0"}),timeout=15) as r:
+                  return BeautifulSoup(r.read(1600000),"html.parser")
+          root=get(index)
+          urls=list(dict.fromkeys(urljoin(index,a["href"]) for a in root.select("a.discussion-title[href]")))[:14]
+          for url in urls:
+              try:
+                  page=get(url)
+                  allpg=[1]
+                  for a in page.select(".chv4-comment-pagination a[href]"):
+                      q=parse_qs(urlsplit(a["href"]).query)
+                      if "pg" in q and len(q["pg"])==1 and q["pg"][0].isdigit():
+                          allpg.append(int(q["pg"][0]))
+                  count=len(page.select(".comment-individual-row"))
+                  print(json.dumps({"path":urlsplit(url).path,"page_count":max(allpg),"page1_comments":count,
+                      "has_reply_quote":bool(page.select(".in-reply-to-container")),
+                      "reply_count_nodes":len(page.select(".comment-reply-count"))}),flush=True)
+              except Exception as e:
+                  print(json.dumps({"path":urlsplit(url).path,"status":"network_or_source_error"}),flush=True)
+              time.sleep(1)
+          PY
