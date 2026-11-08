@@ -1,0 +1,43 @@
+name: Mayo public page-count verification
+on:
+  push:
+    branches: [feature/v1-community-build-20261106]
+    paths: [.github/workflows/collector-mayo-pagecount.yml]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - run: python -m pip -q install beautifulsoup4==4.13.4
+      - name: Probe page counts without writing topic data
+        shell: bash
+        run: |
+          python - <<'PY'
+          import sys,json,time
+          from urllib.request import Request,build_opener,HTTPRedirectHandler
+          from urllib.error import HTTPError,URLError
+          sys.path.insert(0,'scripts')
+          from spine_sources import mayo_page_count
+          class NoRedirect(HTTPRedirectHandler):
+              def redirect_request(self,*a,**kw):return None
+          op=build_opener(NoRedirect())
+          slugs=['post-scoliosis-surgery-management',
+                 'shower-chair-after-long-fusion',
+                 'what-can-i-take-for-chronic-lower-back-pain',
+                 'old-scoliosis-surgery',
+                 'spinal-fusion-2']
+          for slug in slugs:
+              url='https://connect.mayoclinic.org/discussion/'+slug+'/'
+              try:
+                  with op.open(Request(url,headers={'User-Agent':'SpineCommunityCollector/1.0','Accept':'text/html,application/xhtml+xml,application/json'}),timeout=16) as response:
+                      html=response.read(2000000)
+                  count=mayo_page_count(html,slug)
+                  print(json.dumps({'source_id':slug,'pages':count}),flush=True)
+              except HTTPError as e:
+                  print(json.dumps({'source_id':slug,'http':e.code}),flush=True)
+              except (URLError,OSError,ValueError) as e:
+                  print(json.dumps({'source_id':slug,'reason':type(e).__name__}),flush=True)
+              time.sleep(1)
+          PY
