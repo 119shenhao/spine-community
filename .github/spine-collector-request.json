@@ -1,15 +1,9 @@
 {
-  "request_id": "mayo-explicit-multipage-verified-20261108",
+  "request_id": "39-three-rule-verified-20261108",
   "mode": "collect",
   "sites": [
-    "mayoclinic"
+    "ask39"
   ],
-  "candidates": {
-    "mayoclinic": [
-      "https://connect.mayoclinic.org/discussion/post-lumbar-fusion-recovery-question/",
-      "https://connect.mayoclinic.org/discussion/ct-myelogram-embolization-for-csf-leak-experiences/",
-      "https://connect.mayoclinic.org/discussion/three-level-cervical-fusion-possibly-c3-c4-c5-c6-and-c6-c7/"
-    ]
-  },
-  "limit": 1
+  "candidates": {},
+  "limit": 2
 }
