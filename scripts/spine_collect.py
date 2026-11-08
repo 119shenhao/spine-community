@@ -10,6 +10,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from bs4 import BeautifulSoup
 from spine_discover import PUBLIC_LISTS, discover_candidates
+from spine_mayo_long import collect_mayo_long, verify_mayo_long
 from spine_sources import (
     ASK39_LISTS, SOURCE_URLS, SPINE, ask39_has_ad, read_topic, source_id, validate_topic,
 )
@@ -345,21 +346,24 @@ def collect(site, candidates, limit, export_dir):
         committed = False
         stage = "source"
         try:
-            if export_dir:
-                path = export_dir / site / f"{identifier}.json"
-                if path.stat().st_size > JSON_LIMIT:
-                    raise ValueError("export_too_large")
-                draft = json.loads(path.read_text(encoding="utf-8"))
+            if site == "mayoclinic" and not export_dir:
+                result, count, draft = collect_mayo_long(identifier, url, payload, fetch, api, emit)
             else:
-                draft = read_topic(site, identifier, url, fetch, render_xywy)
-            count = validate_topic(draft)
-            if site == "ask39" and not export_dir:
-                body_key = re.sub(r"\s+", "", draft["body"])
-                if body_key in ask39_bodies:
-                    raise ValueError("repeated_patient_narrative_in_run")
-                ask39_bodies.add(body_key)
-            stage = "complete"
-            result = complete({**payload, "topic": draft})
+                if export_dir:
+                    path = export_dir / site / f"{identifier}.json"
+                    if path.stat().st_size > JSON_LIMIT:
+                        raise ValueError("export_too_large")
+                    draft = json.loads(path.read_text(encoding="utf-8"))
+                else:
+                    draft = read_topic(site, identifier, url, fetch, render_xywy)
+                count = validate_topic(draft)
+                if site == "ask39" and not export_dir:
+                    body_key = re.sub(r"\s+", "", draft["body"])
+                    if body_key in ask39_bodies:
+                        raise ValueError("repeated_patient_narrative_in_run")
+                    ask39_bodies.add(body_key)
+                stage = "complete"
+                result = complete({**payload, "topic": draft})
             committed = result["status"] == "completed"
             if not committed:
                 raise ValueError("unexpected_complete_response")
@@ -372,7 +376,7 @@ def collect(site, candidates, limit, export_dir):
                 stage = "readback"
                 if ((not result.get("already_completed")
                      and result["imported"] != {"topics": 1, "comments": count})
-                        or not verify(topic_id, draft, count)):
+                        or not (verify_mayo_long(topic_id, draft, count, api) if site == "mayoclinic" and not export_dir else verify(topic_id, draft, count))):
                     raise ValueError("forum_readback_mismatch")
                 new_topics += 1
                 new_replies += count
