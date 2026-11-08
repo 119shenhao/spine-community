@@ -1,4 +1,4 @@
-name: Mayo pagination candidate metadata probe
+name: Mayo public pagination and media metadata probe
 on:
   push:
     branches: [feature/v1-community-build-20261106]
@@ -11,33 +11,42 @@ jobs:
     timeout-minutes: 6
     steps:
       - run: python -m pip -q install beautifulsoup4==4.13.4
-      - name: Check bounded public discussion pagination metadata
+      - name: Check public candidate pagination and media without logging patient text
         shell: bash
         run: |
           python - <<'PY'
-          from urllib.request import Request,urlopen
-          from urllib.parse import urljoin,urlsplit,parse_qs
+          from urllib.request import Request,build_opener,HTTPRedirectHandler
+          from urllib.error import HTTPError,URLError
+          from urllib.parse import urlsplit,parse_qs
           from bs4 import BeautifulSoup
           import time,json,re
-          index="https://connect.mayoclinic.org/group/spine-health/?index=discussions"
-          def get(url):
-              with urlopen(Request(url,headers={"User-Agent":"SpineCommunityCollector/1.0"}),timeout=15) as r:
-                  return BeautifulSoup(r.read(1600000),"html.parser")
-          root=get(index)
-          urls=list(dict.fromkeys(urljoin(index,a["href"]) for a in root.select("a.discussion-title[href]")))[:14]
-          for url in urls:
+          class NoRedirect(HTTPRedirectHandler):
+              def redirect_request(self,*a,**k):return None
+          opener=build_opener(NoRedirect())
+          sources=['4-fusion-back-surgery','current-c4c7-fusion-doc-wants-to-remove-hardware-and-fus-from-c3t2',
+            'lumbar-radiculopathy-lumbar-spondylitis','spinal-fusion-2',
+            'told-i-would-not-walk-without-surgery','what-can-i-take-for-chronic-lower-back-pain',
+            'three-level-cervical-fusion-possibly-c3-c4-c5-c6-and-c6-c7',
+            'shower-chair-after-long-fusion','spinal-stenosis-and-surgery','back-surgery-recovery',
+            'adult-scoliosis','post-lumbar-fusion-recovery-question','post-scoliosis-surgery-management']
+          for source in sources:
+              url='https://connect.mayoclinic.org/discussion/'+source+'/'
               try:
-                  page=get(url)
-                  allpg=[1]
-                  for a in page.select(".chv4-comment-pagination a[href]"):
-                      q=parse_qs(urlsplit(a["href"]).query)
-                      if "pg" in q and len(q["pg"])==1 and q["pg"][0].isdigit():
-                          allpg.append(int(q["pg"][0]))
-                  count=len(page.select(".comment-individual-row"))
-                  print(json.dumps({"path":urlsplit(url).path,"page_count":max(allpg),"page1_comments":count,
-                      "has_reply_quote":bool(page.select(".in-reply-to-container")),
-                      "reply_count_nodes":len(page.select(".comment-reply-count"))}),flush=True)
-              except Exception as e:
-                  print(json.dumps({"path":urlsplit(url).path,"status":"network_or_source_error"}),flush=True)
-              time.sleep(1)
+                  with opener.open(Request(url,headers={'User-Agent':'SpineCommunityCollector/1.0'}),timeout=15) as response:
+                      markup=response.read(1500000)
+                  page=BeautifulSoup(markup,'html.parser')
+                  pages=[1]
+                  for link in page.select('.chv4-comment-pagination a[href]'):
+                      values=parse_qs(urlsplit(link['href']).query).get('pg',[])
+                      if len(values)==1 and values[0].isdigit():pages.append(int(values[0]))
+                  bodies=[x for row in page.select('.comment-individual-row') for x in row.select('.single-comment-body') if not x.find_parent(class_='in-reply-to-container')]
+                  media=sum(bool(x.select('img,video,iframe,a[data-attachment]')) for x in bodies)
+                  print(json.dumps({'source':source,'status':200,'pages':max(pages),
+                     'replies_first_page':len(bodies),'media_replies_first_page':media,
+                     'has_title':bool(page.select_one('h1.chv4-discussion-title'))}),flush=True)
+              except HTTPError as e:
+                  print(json.dumps({'source':source,'status':e.code}),flush=True)
+              except (URLError,OSError):
+                  print(json.dumps({'source':source,'status':'network_error'}),flush=True)
+              time.sleep(1.5)
           PY
