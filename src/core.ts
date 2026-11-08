@@ -5,6 +5,9 @@ export interface Env {
   ANALYTICS_SALT?: string; APP_ENV?: string; DEV_AUTH?: string;
   IMPORT_DB?: D1Database; IMPORT_ENABLED?: string;
   COLLECT_ENABLED?: string;
+  PUBLIC_CONTENT_R2?: R2Bucket; PUBLIC_CONTENT_BASE_URL?: string;
+  PUBLIC_CONTENT_ENABLED?: string; PUBLIC_CONTENT_READS?: string; PUBLIC_CONTENT_FALLBACK?: string;
+  CDN_ZONE_ID?: string; CDN_PURGE_API_TOKEN?: string;
 }
 export type Row = Record<string, any>;
 export const locales = ['en','zh-CN','zh-TW','es','pt-BR','de','fr','ja'];

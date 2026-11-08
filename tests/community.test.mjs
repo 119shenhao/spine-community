@@ -1036,3 +1036,277 @@ test('Mayo only: reopen one legacy size rejection for a new long-thread parser',
  const other=await collect('/api/collect/queue',{site:'ask39',action:'reconsider',items:[{source_id:'123'}]});
  assert.equal(other.status,400);
 });
+
+const {buildProjection,drainProjection}=await import('../.test-build/public-projection.js');
+
+function projectionBucket(pageLimit=100) {
+ const files=new Map();
+ let seq=0;
+ const bucket={
+  files,listCalls:[],failPut:false,failList:false,onPut:null,
+  async head(key){return files.get(key)||null;},
+  async put(key,value,options){
+   if(bucket.failPut)throw Error('R2 down');
+   if(bucket.onPut)await bucket.onPut(key);
+   const old=files.get(key);
+   if(options.onlyIf?.etagMatches&&options.onlyIf.etagMatches!==old?.etag)return null;
+   if(options.onlyIf?.etagDoesNotMatch==='*'&&old)return null;
+   const object={key,etag:String(++seq),customMetadata:options.customMetadata,
+    json:async()=>JSON.parse(value),value};
+   files.set(key,object);
+   return object;
+  },
+  async get(key){return bucket.head(key);},
+  async list(options){
+   bucket.listCalls.push(options);
+   if(bucket.failList)throw Error('R2 list down');
+   const matches=[...files.values()].filter(o=>o.key.startsWith(options.prefix)).sort((a,b)=>a.key<b.key?-1:1);
+   const start=Number(options.cursor||0),end=start+Math.min(pageLimit,options.limit);
+   const truncated=end<matches.length;
+   return {objects:matches.slice(start,end),truncated,...(truncated?{cursor:String(end)}:{})};
+  }
+ };
+ return bucket;
+}
+function enableProjection(env,bucket,environment='preview') {
+ Object.assign(env,{APP_ENV:environment,PUBLIC_CONTENT_R2:bucket,
+  PUBLIC_CONTENT_BASE_URL:environment==='preview'?'https://spine-data-dev.nbn369.com':'https://spine-data.nbn369.com',
+  PUBLIC_CONTENT_ENABLED:'true',PUBLIC_CONTENT_READS:'true',CDN_ZONE_ID:'a'.repeat(32),CDN_PURGE_API_TOKEN:'test-only'});
+}
+const projectionRoot='/api/admin/public-projection';
+const topicProjectionKey=id=>'topics/'+id+'/detail.json';
+const projectionTask=(DB,scope,target)=>DB.db.prepare('SELECT * FROM public_projection WHERE scope=? AND target=?').get(scope,target);
+
+test('projection outbox is atomic with direct D1 SQL, import and collection; repeats coalesce',async()=>{
+ const f=await importFixture(),{DB,imp}=f;
+ const {buildInserts,fingerprint}=await import('../scripts/sync-preview-to-production.mjs');
+ const src={id:'isolated-sync',title:'Fixture topic',body:'Fictional original',source_lang:'en',created_at:123,symptom_duration_days:null};
+ const comments=[{id:'test-parent',kind:'regular',body:'Parent',source_lang:'en',status:'published',created_at:124,parent_comment_id:null},
+  {id:'test-child',kind:'regular',body:'Child',source_lang:'en',status:'published',created_at:125,parent_comment_id:'test-parent'}];
+ const inserts=buildInserts(src,comments,[],fingerprint(src.title,src.body));
+ DB.db.exec('BEGIN; '+inserts+' ROLLBACK;');
+ assert.equal(projectionTask(DB,'topic',src.id),undefined);
+ DB.db.exec('BEGIN; '+inserts+' COMMIT;');
+ const task=projectionTask(DB,'topic',src.id);
+ DB.db.exec('BEGIN; '+inserts+' COMMIT;');
+ assert.equal(projectionTask(DB,'topic',src.id).version,task.version);
+ const projected=await buildProjection(DB,'topic',src.id,1);
+ assert.deepEqual(projected.data.comments.map(x=>[x.id,x.parent_comment_id]),[['test-parent',null],['test-child','test-parent']]);
+ const imported=await imp('/api/import/batch',{topics:[{title:'Made-up test thread',body:'Test body'}]});
+ assert.equal(imported.status,201,JSON.stringify(imported));
+ assert.equal(DB.db.prepare("SELECT count(*) AS n FROM public_projection WHERE scope='topic'").get().n,2);
+ f.env.COLLECT_ENABLED='true';
+ const site='120ask',source_id='99990001';
+ const claim=await imp('/api/collect/claim',{site,collector_id:'test-projection',source_ids:[source_id]});
+ assert.equal(claim.status,200,JSON.stringify(claim));
+ const lease_token=claim.data.results[0].lease_token;
+ const collected=await imp('/api/collect/complete',{site,source_id,lease_token,topic:{title:'Fictional collector projection',body:'Synthetic test body',source_lang:'en'}});
+ assert.equal(collected.status,201,JSON.stringify(collected));
+ assert.equal(projectionTask(DB,'topic',collected.data.topic_id).state,'pending');
+});
+
+test('projection retries R2 and Purge independently, publishes public fields only and withdraws deleted content',async()=>{
+ const {DB,env,call,topic}=await fixture(),bucket=projectionBucket();
+ enableProjection(env,bucket);
+ const key=topicProjectionKey(await topic('Public title','Public original'));
+ const topicId=key.split('/')[1];
+ await call('/api/me','PATCH',{nickname:'Public display',preferred_locale:'en',public_region:'Public region'},'alice');
+ const parent=await call('/api/topics/'+topicId+'/comments','POST',{body:'Synthetic parent'},'bob');
+ const child=await call('/api/topics/'+topicId+'/comments','POST',{body:'Synthetic child',parent_comment_id:parent.data.id},'carol');
+ await call('/api/topics/'+topicId+'/comments','POST',{body:'promo code Private pending body'},'alice');
+ const purge=[],original=globalThis.fetch;
+ let rejectPurge=true;
+ globalThis.fetch=async(url,options)=>{
+  assert.match(url,/^https:\/\/api\.cloudflare\.com\/client\/v4\/zones\//);
+  purge.push(JSON.parse(options.body).files);
+  return Response.json({success:!rejectPurge});
+ };
+ const due=()=>DB.db.exec("UPDATE public_projection SET due_at=0 WHERE state='pending'");
+ try{
+  bucket.failPut=true;
+  assert.equal((await drainProjection(env,2)).failed,2);
+  assert.equal(purge.length,0);
+  assert.match(projectionTask(DB,'topic',topicId).last_error,/r2_publish/);
+  bucket.failPut=false;due();
+  assert.equal((await drainProjection(env,2)).failed,2);
+  const first=await bucket.head(key);
+  assert.equal(projectionTask(DB,'topic',topicId).last_error,'purge_rejected');
+  assert.equal(projectionTask(DB,'topic',topicId).published_version,0);
+  rejectPurge=false;due();
+  assert.equal((await drainProjection(env,4)).processed,2);
+  assert.equal((await bucket.head(key)).etag,first.etag);
+  const published=await first.json();
+  assert.deepEqual(published.data.comments.map(c=>c.id),[parent.data.id,child.data.id]);
+  assert.equal(published.data.topic.nickname,'Public display');
+  assert.equal(published.data.topic.public_region,'Public region');
+  assert(!/author_id|content_hash|Private pending body|token_hash|liked|bookmarked|followed/.test(first.value));
+  assert.deepEqual(purge.at(-1),['https://spine-data-dev.nbn369.com/'+key,
+    {url:'https://spine-data-dev.nbn369.com/'+key,headers:{Origin:IMPORT_ORIGIN}}]);
+  await call('/api/comments/'+parent.data.id,'DELETE',undefined,'bob');
+  await call('/api/topics/'+topicId,'DELETE',undefined,'alice');
+  assert.equal(projectionTask(DB,'topic',topicId).priority,2);
+  await drainProjection(env,4);
+  const deleted=await (await bucket.get(key)).json();
+  assert.equal(deleted.data.topic.body,null);
+  assert.equal(deleted.data.topic.public_region,null);
+  assert.equal(deleted.data.comments[0].body,null);
+  assert.equal(deleted.data.comments[1].parent_comment_id,parent.data.id);
+  assert(!JSON.stringify(deleted).includes('Public original'));
+ }finally{globalThis.fetch=original;}
+});
+
+test('late R2 writers cannot overwrite a newer version and the newest reply page is eventually published',async()=>{
+ const {DB,env,topic,call}=await fixture(),bucket=projectionBucket();
+ enableProjection(env,bucket);
+ const topicId=await topic('Concurrent test','Original before concurrent writes');
+ const detail=topicProjectionKey(topicId);
+ const original=globalThis.fetch;
+ globalThis.fetch=async()=>Response.json({success:true});
+ try{
+  await drainProjection(env,4);
+  await call('/api/topics/'+topicId,'PATCH',{title:'Version B',body:'Intermediate'},'alice');
+  let unblock,arrived;
+  const wait=new Promise(resolve=>{unblock=resolve;});
+  const entered=new Promise(resolve=>{arrived=resolve;});
+  bucket.onPut=async key=>{if(key!==detail)return;bucket.onPut=null;arrived();await wait;};
+  const stale=drainProjection(env,2);
+  await entered;
+  await call('/api/topics/'+topicId,'PATCH',{title:'Version C',body:'Newest'},'alice');
+  DB.db.prepare("UPDATE public_projection SET lease_until=0 WHERE scope='topic' AND target=?").run(topicId);
+  await drainProjection(env,4);
+  unblock();
+  await stale;
+  assert.equal((await (await bucket.get(detail)).json()).data.topic.body,'Newest');
+  assert.equal(projectionTask(DB,'topic',topicId).state,'done');
+  const insert=DB.db.prepare("INSERT INTO comments(id,topic_id,author_id,body,status) VALUES(?,?,'bob',?,'published')");
+  DB.db.exec('BEGIN');
+  for(let i=0;i<51;i++)insert.run('page-reply-'+i,topicId,'Fictional reply '+i);
+  DB.db.exec('COMMIT');
+  await drainProjection(env,8);
+  const p1=await (await bucket.get(detail)).json();
+  const p2key='topics/'+topicId+'/comments/page-2.json';
+  const p2=await (await bucket.get(p2key)).json();
+  assert.equal(p1.data.comments.length,50);
+  assert.equal(p2.data.comments.length,1);
+  assert.equal(p1.contentVersion,p2.contentVersion);
+  await call('/api/admin/content','POST',{type:'topic',id:topicId,action:'hide',reason:'fixture'},'admin');
+  await drainProjection(env,8);
+  assert.equal((await (await bucket.get(detail)).json()).data,null);
+  assert.equal((await (await bucket.get(p2key)).json()).data,null);
+ }finally{globalThis.fetch=original;}
+});
+
+test('Preview exposes config readiness without credentials and scheduled handler does not scan R2',async()=>{
+ const {env,call}=await fixture(),bucket=projectionBucket();
+ enableProjection(env,bucket);
+ delete env.CDN_ZONE_ID;
+ const health=(await call('/api/health')).data;
+ assert.deepEqual(health.publicContent,{baseUrl:null,fallback:false,ready:true,enabled:true,purgeConfigured:false});
+ assert(!JSON.stringify(health).includes('test-only'));
+ assert.equal((await drainProjection(env)).configured,false);
+ let jobs=[];
+ const ctx={waitUntil(p){jobs.push(p);}};
+ await worker.scheduled({},env,ctx);
+ assert.equal(jobs.length,0);
+ enableProjection(env,bucket,'production');
+ const original=globalThis.fetch;
+ globalThis.fetch=async()=>Response.json({success:true});
+ try{
+  await worker.scheduled({},env,ctx);
+  await Promise.all(jobs);
+  assert.equal(bucket.listCalls.length,0);
+  assert.equal((await call(projectionRoot+'/drain','POST',{},'admin')).status,403);
+ }finally{globalThis.fetch=original;}
+});
+
+test('owner scan resumes with short R2 pages, classifies discrepancies, and requires confirmation to repair',async()=>{
+ const {DB,env,call,topic}=await fixture(),bucket=projectionBucket(1);
+ enableProjection(env,bucket);
+ const a=await topic('Scan A','Body A'),b=await topic('Scan B','Body B','bob'),c=await topic('Scan C','Body C','carol');
+ const original=globalThis.fetch;
+ globalThis.fetch=async()=>Response.json({success:true});
+ try{
+  await drainProjection(env,8);
+  bucket.files.delete(topicProjectionKey(a));
+  bucket.files.get(topicProjectionKey(b)).customMetadata.projectionVersion='0';
+  bucket.files.get(topicProjectionKey(c)).customMetadata.payloadHash='incorrect';
+  const orphan=topicProjectionKey('orphan');
+  await bucket.put(orphan,'{"data":"fixture"}',{customMetadata:{projectionVersion:'3',payloadHash:'old'}});
+  assert.equal((await call(projectionRoot,'GET',undefined,null)).status,401);
+  assert.equal((await call(projectionRoot+'/start','POST',{},'mod')).status,403);
+  const start=await call(projectionRoot+'/start','POST',{include_orphans:true},'admin');
+  assert.equal(start.status,201,JSON.stringify(start));
+  const scan=start.data.scan.id;
+  assert.equal((await call(projectionRoot+'/start','POST',{},'admin')).status,409);
+  const action=(op,input={})=>call(projectionRoot+'/'+op,'POST',{scan,...input},'admin');
+  await action('step');
+  bucket.failList=true;
+  const failed=await action('step');
+  assert.equal(failed.data.scan.error,'batch_failed_retry');
+  assert.equal(failed.data.scan.listed_count,1);
+  bucket.failList=false;
+  assert.equal((await action('pause')).data.scan.paused,true);
+  assert.equal((await action('step')).status,409);
+  await action('resume');
+  let report;
+  for(let i=0;i<12;i++){
+   report=(await action('step')).data.scan;
+   if(report.phase==='complete')break;
+  }
+  assert.equal(report.phase,'complete');
+  assert.equal(report.checked_count,4);
+  assert.deepEqual(report.counts,{mismatch:1,missing:1,ok:1,orphan:1,outdated:1});
+  assert(bucket.listCalls.some(req=>req.prefix==='topics/'&&req.cursor==='1'));
+  assert.equal((await action('repair',{keys:[orphan]})).status,400);
+  assert.equal((await action('repair',{keys:[orphan,topicProjectionKey(a)],confirm:true})).status,200);
+  const version=projectionTask(DB,'topic','orphan').version;
+  assert.equal((await action('repair',{keys:[orphan],confirm:true})).status,200);
+  assert.equal(projectionTask(DB,'topic','orphan').version,version);
+  await drainProjection(env,10);
+  assert.equal((await (await bucket.get(orphan)).json()).data,null);
+  assert.equal((await (await bucket.get(topicProjectionKey(a))).json()).data.topic.id,a);
+ }finally{globalThis.fetch=original;}
+});
+
+test('scan snapshots more than 1000 objects and identifies a write during check',async()=>{
+ const {DB,env,call,topic}=await fixture(),bucket=projectionBucket(64);
+ enableProjection(env,bucket);
+ const target=await topic('Snapshot fixture','This is synthetic');
+ // Reserve retired pages to exercise the fixed key inventory without copying real data.
+ DB.db.prepare("UPDATE public_projection SET last_object=1001 WHERE target=?").run(target);
+ const started=await call(projectionRoot+'/start','POST',{target,deep:true},'admin');
+ assert.equal(started.data.scan.expected_count,1001);
+ const scan=started.data.scan.id;
+ const action=op=>call(projectionRoot+'/'+op,'POST',{scan},'admin');
+ await action('step');
+ await call('/api/topics/'+target+'/comments','POST',{body:'Write during the scan'},'bob');
+ const compared=await action('step');
+ assert.equal(compared.data.scan.counts.changed_during_scan,5);
+ assert.equal((await action('cancel')).data.scan.phase,'partial');
+});
+
+test('anonymous standard routes fetch only their CDN host, pagination rejects stale versions, and private reads stay on Worker',async()=>{
+ const {publicContentReader}=await import('../public/public-content.js');
+ const requests=[];
+ const api=async path=>{requests.push(path);return {worker:true};};
+ let version=2,withdrawn=false;
+ const fetcher=async(url,options)=>{
+  requests.push(url);
+  assert.equal(options.credentials,'omit');
+  return Response.json({schemaVersion:1,contentVersion:version,topicId:'demo',data:withdrawn?null:
+   {topics:[],topic:{id:'demo'},comments:[],progress:[]}});
+ };
+ const health={environment:'preview',publicContent:{baseUrl:'https://spine-data-dev.nbn369.com',fallback:true}};
+ const reader=publicContentReader(health,null,api,fetcher);
+ assert.equal((await reader.feed(new URLSearchParams('sort=latest'))).projectionVersion,2);
+ assert.equal((await reader.topic('demo',new URLSearchParams())).projectionVersion,2);
+ version=3;
+ assert.equal((await reader.topic('demo',new URLSearchParams('before=10'),2,2)).worker,true);
+ assert.equal((await reader.feed(new URLSearchParams('offset=20'),2)).worker,true);
+ assert.equal((await reader.topic('demo',new URLSearchParams('focus=reply'))).worker,true);
+ assert.equal((await publicContentReader(health,{id:'me'},api,fetcher).topic('demo',new URLSearchParams())).worker,true);
+ assert.equal((await reader.feed(new URLSearchParams('body_part=neck'))).worker,true);
+ withdrawn=true;
+ await assert.rejects(reader.topic('demo',new URLSearchParams()),error=>error.status===404);
+ assert(requests.filter(url=>url.startsWith('https:')).every(url=>url.startsWith(health.publicContent.baseUrl)&&!url.includes('?')));
+});

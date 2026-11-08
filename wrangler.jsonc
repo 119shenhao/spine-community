@@ -47,6 +47,9 @@
       "TRANSLATION_ENABLED": "false",
       "IMPORT_ENABLED": "true",
       "COLLECT_ENABLED": "true",
+      "PUBLIC_CONTENT_ENABLED": "true",
+      "PUBLIC_CONTENT_READS": "true",
+      "PUBLIC_CONTENT_FALLBACK": "true",
       "PUBLIC_CONTENT_BASE_URL": "https://spine-data-dev.nbn369.com"
     },
     "r2_buckets": [

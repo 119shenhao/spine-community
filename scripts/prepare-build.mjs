@@ -12,6 +12,11 @@ if(process.env.WORKERS_CI==='1'&&process.env.WORKERS_CI_BRANCH===expectedBranch)
  if(cfg.d1_databases.length!==1||cfg.d1_databases[0].database_id!==PREVIEW||cfg.d1_databases[0].binding!=='PREVIEW_DB'||cfg.d1_databases[0].migrations_dir!=='migrations/v1'||main.previews.d1_databases[0].database_id!==PREVIEW)throw Error('Preview database isolation check failed');
  const imports=main.previews.d1_databases.filter(b=>b.binding==='IMPORT_DB');
  if(imports.length!==1||imports[0].database_id!==PREVIEW||main.d1_databases.some(b=>b.binding==='IMPORT_DB')||main.vars?.IMPORT_ENABLED==='true')throw Error('Import binding must exist only in the isolated preview environment');
+ const productionBucket=main.r2_buckets?.find(b=>b.binding==='PUBLIC_CONTENT_R2');
+ const previewBucket=main.previews.r2_buckets?.find(b=>b.binding==='PUBLIC_CONTENT_R2');
+ if(previewBucket?.bucket_name!=='spine-community-public-dev'||productionBucket?.bucket_name!=='spine-community-public-prod'||
+  main.previews.vars?.PUBLIC_CONTENT_BASE_URL!=='https://spine-data-dev.nbn369.com'||
+  main.vars?.PUBLIC_CONTENT_BASE_URL!=='https://spine-data.nbn369.com')throw Error('Public projection binding isolation check failed');
  const cli=['node_modules/wrangler/bin/wrangler.js','d1'];
  const common=['PREVIEW_DB','--remote','--config','wrangler.preview-migrations.jsonc'];
  const raw=run([...cli,'execute',...common,'--command',"SELECT name FROM sqlite_master WHERE type='table' AND name IN ('users','topics','settings')",'--json'],true);

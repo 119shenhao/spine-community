@@ -77,6 +77,10 @@ function assertReady(){
   const cols=query(dest,'PRAGMA table_info(topics)');
   if(!cols.some(c=>c.name==='content_hash'))throw Error('Missing content_hash on '+dest.binding);
  }
+ const projection=query(PRODUCTION,`SELECT name FROM sqlite_master WHERE
+  (type='table' AND name='public_projection') OR
+  (type='trigger' AND name IN ('public_projection_topic_insert','public_projection_comment_insert','public_projection_invalidate_write'))`);
+ if(projection.length!==4)throw Error('Production projection outbox is unavailable. Apply the approved projection migration before running this sync implementation.');
  const author=query(PRODUCTION,"SELECT id FROM users WHERE id='system-unknown-import' AND is_system=1 AND status='active'");
  if(author.length!==1)throw Error('Production Unknown User account not initialized; no writes attempted');
 }
