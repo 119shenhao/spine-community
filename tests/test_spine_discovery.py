@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from spine_discover import candidate_links, discover_candidates
-from spine_sources import source_id, read_topic, parse_mayoclinic, parse_mayoclinic_pages, parse_healthunlocked, parse_ask39, ask39_has_ad
+from spine_sources import source_id, read_topic, parse_mayoclinic, parse_mayoclinic_pages, parse_mayoclinic_stage_page, parse_healthunlocked, parse_ask39, ask39_has_ad
 from spine_collect import read_120ask_links, ask39_listing_candidates
 
 
@@ -211,6 +211,34 @@ class DiscoveryTests(unittest.TestCase):
              '<div class="in-reply-to-container"><a href="https://connect.mayoclinic.org/comment/112/">Parent</a></div><div class="single-comment-body"><p>First reply.</p></div>')
         with self.assertRaisesRegex(ValueError, "mayoclinic_reply_parent_order_unverified"):
             parse_mayoclinic_pages([forward,p2], "lumbar-recovery")
+
+    def test_mayo_stage_page_ids_and_quote_are_not_duplicated(self):
+        head = """<link rel="canonical" href="https://connect.mayoclinic.org/discussion/my-lumbar-story/">
+        <h1 class="chv4-discussion-title">Lumbar fusion experience</h1>
+        <div class="discussion-content"><div class="single-discussion-body">My recovery diary.</div></div>"""
+        first = head + """<div class="comment-container"><div class="comment-individual-row" id="comment-111">
+          <div class="single-comment-body">First reply.</div></div></div>
+          <div class="chv4-comment-pagination page-1"><a href="?pg=2">2</a></div>"""
+        second = head + """<div class="comment-container"><div class="comment-individual-row" id="comment-112">
+          <div class="in-reply-to-container">
+            <a href="https://connect.mayoclinic.org/comment/111/">Earlier reply</a>
+            <div class="single-comment-body">Quoted old text not an extra reply.</div>
+          </div>
+          <div class="single-comment-body">Actual second reply.</div>
+        </div></div><div class="chv4-comment-pagination page-2"><a href="?pg=2">2</a></div>"""
+        one = parse_mayoclinic_stage_page(first, "my-lumbar-story", 1, 2)
+        two = parse_mayoclinic_stage_page(second, "my-lumbar-story", 2, 2)
+        self.assertEqual(one["comments"][0]["source_comment_id"], "111")
+        self.assertIsNone(one["comments"][0]["parent_source_comment_id"])
+        self.assertEqual(two["comments"], [{
+            "source_comment_id": "112", "parent_source_comment_id": "111",
+            "body": "Actual second reply.", "source_lang": "en"}])
+        with self.assertRaisesRegex(ValueError, "mayoclinic_pagination_changed"):
+            parse_mayoclinic_stage_page(first, "my-lumbar-story", 1, 3)
+        with self.assertRaisesRegex(ValueError, "mayoclinic_page_order_unverified"):
+            parse_mayoclinic_stage_page(second, "my-lumbar-story", 1, 2)
+        with self.assertRaisesRegex(ValueError, "uncollected_media"):
+            parse_mayoclinic_stage_page(second.replace("Actual second reply.", "<img src='/image.png'>"), "my-lumbar-story", 2, 2)
 
     def test_healthunlocked_public_nested_reply_structure(self):
         html = """<link rel="canonical" href="https://healthunlocked.com/painconcern/posts/153318229/spinal-decompression-surgery-on-saturday">
