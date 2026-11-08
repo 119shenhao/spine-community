@@ -5,13 +5,13 @@ import re
 import time
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urljoin
+from urllib.parse import urlencode, urljoin, unquote, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from bs4 import BeautifulSoup
 from spine_discover import PUBLIC_LISTS, discover_candidates
 from spine_sources import (
-    ASK39_LISTS, SOURCE_URLS, read_topic, source_id, validate_topic,
+    ASK39_LISTS, SOURCE_URLS, SPINE, read_topic, source_id, validate_topic,
 )
 
 PREVIEW = "https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev"
@@ -176,82 +176,125 @@ def inspect_ask39():
 
 
 
-def ask39_directory_candidates(excluded, maximum=120):
+def ask39_listing_candidates(listing, markup, excluded):
+    """Rank only patient-question previews, never doctor-answer links or unrelated titles."""
+    page = BeautifulSoup(markup, "html.parser")
+    found = {}
+    for link in page.select(".question-ask-title a[href]"):
+        url = urljoin(listing, link["href"])
+        try:
+            identifier = source_id("ask39", url)
+        except ValueError:
+            continue
+        if identifier in excluded:
+            continue
+        question = link.find_parent(class_="question-ask")
+        if question is None:
+            continue
+        title = link.get("title") or link.get_text(" ", strip=True)
+        preview = question.get_text(" ", strip=True)
+        # The original body is verified after claim; this is only a ranking signal.
+        # No content from doctor answers is used to classify a patient's problem.
+        if not SPINE.search(title + " " + preview) or len(preview) < 55:
+            continue
+        personal = bool(re.search(r"我|本人|家人|父亲|母亲|术后|复发|检查|[0-9一二三四五六七八九十]+[年月周天岁]", preview))
+        substantial = len(preview) >= 85
+        if not (personal or substantial):
+            continue
+        score = (60 * bool(SPINE.search(title))
+                 + 24 * bool(re.search(r"术后|康复|复发|手术|复查|治疗|坐骨神经|腿麻", title))
+                 + 20 * personal + 8 * substantial
+                 + min(len(preview), 200) / 10)
+        found[identifier] = (score, url)
+    return found
+
+
+def ask39_directory_candidates(excluded, maximum=60):
+    """Select high-value patient narratives instead of random question pages."""
     ranked = {}
     listings = list(ASK39_LISTS)
     for category in (11760, 625):
-        for page_number in (3, 4, 6, 8, 15, 20, 30, 70, 150, 200):
+        for page_number in (3, 4, 6, 8, 15, 20, 30):
             listings.append(f"https://ask.39.net/browse/{category}-1-{page_number}.html")
     for listing in listings:
         try:
-            page = BeautifulSoup(fetch(listing), "html.parser")
+            candidates = ask39_listing_candidates(listing, fetch(listing), excluded)
         except FetchProblem as error:
             emit("archive_list_unavailable", site="ask39", url=listing, reason=str(error))
-            if error.status in (401, 403, 429):
+            if error.status in (401, 403, 405, 429):
                 break
             continue
-        for link in page.select("a[href]"):
-            url = urljoin(listing, link["href"])
-            try:
-                identifier = source_id("ask39", url)
-            except ValueError:
-                continue
-            if identifier in excluded:
-                continue
-            title = link.get("title") or link.get_text(" ", strip=True)
-            priority = (12 * bool(re.search(r"术后|康复|手术后|复发|保守治疗", title))
-                        + 8 * bool(re.search(r"我|妈妈|父亲|母亲|[0-9一二三四五六七八九十]+[年月周天岁]", title))
-                        + min(len(title), 60))
-            if identifier not in ranked or priority > ranked[identifier][0]:
-                ranked[identifier] = (priority, url)
+        for identifier, item in candidates.items():
+            if identifier not in ranked or item[0] > ranked[identifier][0]:
+                ranked[identifier] = item
         time.sleep(1)
-    # Rotate the discovery window across runs instead of retrying the same first 120.
-    ordered = sorted(ranked.items(), key=lambda item: item[1][0], reverse=True)
-    offset = int(hashlib.sha256(REQUEST_ID.encode()).hexdigest()[:8], 16) % max(1, len(ordered))
-    selected = (ordered[offset:] + ordered[:offset])[:maximum]
-    emit("discovery_summary", site="ask39", unique_candidates=len(ranked), selected=len(selected), offset=offset)
+    ordered = sorted(ranked.items(), key=lambda item: (-item[1][0], item[0]))
+    selected = ordered[:maximum]
+    emit("discovery_summary", site="ask39", unique_candidates=len(ranked),
+         selected=len(selected), strategy="patient_question_preview_ranked")
     return {identifier: url for identifier, (_, url) in selected}
 
 
+def read_120ask_links(markup, base_url, excluded):
+    """Extract only genuine question links from public pages/search results."""
+    page = BeautifulSoup(markup, "html.parser")
+    found = {}
+    for link in page.select("a[href]"):
+        href = unquote(link["href"])
+        url = urljoin(base_url, href)
+        match = re.search(r"https?://www[.]120ask[.]com/question/[0-9]{1,20}[.]htm", href)
+        if match:
+            url = match.group(0)
+        try:
+            identifier = source_id("120ask", url)
+        except ValueError:
+            continue
+        if identifier in excluded:
+            continue
+        title = link.get("title") or link.get_text(" ", strip=True)
+        if not SPINE.search(title):
+            continue
+        priority = 20 * bool(re.search(r"术后|康复|复查|治疗|恢复|复发|手术", title))
+        priority += min(len(title), 90)
+        if identifier not in found or priority > found[identifier][0]:
+            found[identifier] = (priority, url)
+    return found
+
+
 def discover_120ask(excluded, maximum=36):
-    """Find candidate IDs from public search results; never open topic bodies here."""
+    """Find authorized spine questions from results before claiming their bodies."""
     queries = (
         "site:www.120ask.com/question/ 腰椎 手术 康复",
         "site:www.120ask.com/question/ 颈椎 治疗 复查",
         "site:www.120ask.com/question/ 腰椎间盘突出 术后",
         "site:www.120ask.com/question/ 颈椎病 症状 恢复",
-        "120ask.com/question 腰椎间盘突出",
-        "120ask.com/question 颈椎病",
+        "site:www.120ask.com/question/ 腰突 术后 腿麻",
+        "site:www.120ask.com/question/ 椎管狭窄 术后",
     )
     ranked = {}
-    for query in queries:
-        search_url = "https://www.bing.com/search?" + urlencode({"q": query, "count": 30})
-        try:
-            page = BeautifulSoup(fetch(search_url), "html.parser")
-        except FetchProblem as error:
-            emit("discovery_unavailable", site="120ask", reason=str(error))
-            if error.status in (401, 403, 429):
-                break
+    # The official home page contains a limited set of current direct questions.
+    sources = [("official", "https://www.120ask.com/")]
+    sources += [("search_index", "https://www.bing.com/search?" +
+                 urlencode({"q": query, "count": 30})) for query in queries]
+    denied = set()
+    for kind, url in sources:
+        host = urlsplit(url).netloc
+        if host in denied:
             continue
-        for link in page.select("a[href]"):
-            url = link["href"]
-            match = re.search(r"https?://www\\.120ask\\.com/question/[0-9]{1,20}\\.htm", url)
-            if match:
-                url = match.group(0)
-            try:
-                identifier = source_id("120ask", url)
-            except ValueError:
-                continue
-            if identifier in excluded:
-                continue
-            title = link.get_text(" ", strip=True)
-            priority = (10 * bool(re.search(r"术后|康复|复查|治疗|恢复", title))
-                        + min(len(title), 60))
-            if identifier not in ranked or priority > ranked[identifier][0]:
-                ranked[identifier] = (priority, url)
+        try:
+            candidates = read_120ask_links(fetch(url), url, excluded)
+            for identifier, item in candidates.items():
+                if identifier not in ranked or item[0] > ranked[identifier][0]:
+                    ranked[identifier] = item
+            emit("discovery_page", site="120ask", kind=kind, candidates=len(candidates))
+        except FetchProblem as error:
+            emit("discovery_unavailable", site="120ask", kind=kind, reason=str(error))
+            if error.status in (401, 403, 405, 429):
+                denied.add(host)
         time.sleep(1)
-    selected = sorted(ranked.items(), key=lambda item: item[1][0], reverse=True)[:maximum]
-    emit("discovery_summary", site="120ask", candidates=len(selected))
+    selected = sorted(ranked.items(), key=lambda item: (-item[1][0], item[0]))[:maximum]
+    emit("discovery_summary", site="120ask", unique_candidates=len(ranked),
+         selected=len(selected))
     return {identifier: url for identifier, (_, url) in selected}
 
 
