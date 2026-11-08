@@ -86,3 +86,30 @@ POST /api/collect/claim
 ## 给其他 AI 的启动指令（可复制）
 
 > 开始任何搜索前，先打开 GitHub 仓库 `119shenhao/spine-community` 的 `main/docs/ai-collector-sop.md` 和 `main/docs/collection-api.md`。先向预览服务器分页拉取 exclusions；找到搜索结果 ID 后先本地过滤，再批量 claim；只采集 granted 的公开且获授权内容，保留原语种及楼中楼结构；采集完立即 complete，失败 release。不得绕过接口的认领、正文指纹与数据库约束，不能向生产数据库写入，也不能把没有执行过的请求说成成功。
+
+
+## ChatGPT 统一采集指令（2026-11-08 已确认）
+
+**用户标准指令：`执行采集贴子任务`。** `执行采集帖子任务` 为同义表述，含义一致。用户说这句话，即表示要求**当次立即触发一次已有站点的采集工作流**；不需要逐站报出名字，也不要求用户手动点击 GitHub Actions 的 Run workflow。不等于创建每天自动运行的定时任务；定时调用必须另设定时计划。
+
+- GitHub 私有仓库：`119shenhao/spine-community`，采集代码位于开发分支 `feature/v1-community-build-20261106`，执行入口是 `scripts/spine_collect.py`；工作流 `.github/workflows/spine-collector-on-demand.yml` 监听 `.github/spine-collector-request.json` 的提交。
+- 每次收到该指令，ChatGPT **通过 GitHub 连接器**读取最新程序和登记的来源后，将配置文件写为 `mode:"collect"`、`sites:["all"]`、`candidates:{}`、`limit:10`，并写入**唯一**的 `request_id`（不能重用上一次），提交开发分支。无需也不得因此编辑生产分支的工作流或触碰生产 D1。
+- `sites:["all"]` 由 `read_request()` 在 **GitHub Actions 执行当时**展开成 `scripts/spine_sources.py::SOURCE_URLS` 当前登记的全部站点；**不固定为六个**。未来新增获合法授权且已经完整接入解析、发现、测试及服务端来源校验的网站时，只需注册到站点表，后续统一指令会自动包含它。不承诺未开发/未授权的任意新站可以自动抓取。
+- 默认目标为一次合计**最多新增10篇主帖**，不是每个网站10篇；按注册顺序轮流查找，达到目标后停止，因此不保证每轮都访问完所有已登记网站。若用户指定数量、站点或别的条件，则本轮以用户明确参数为准，不永久改默认值。
+- GitHub Actions 会按需安装 Python 与访问来源所需依赖，采集结果只写开发预览 D1；按既有排除清单、租约、去重、内容校验、长帖暂存和原子入库规则执行。未达到目标应报告真实数量，不能制造或重复帖子来凑数。
+- 提交后应确认该次 GitHub Actions 确实启动，尽可能核验已完成的运行日志，并报告运行链接、各站候选/新增帖子及回复数量、重复、失败、未达标原因。若工作流尚未结束，要明确说明正在运行，**不能提前宣称采集成功，也不能承诺在后台稍后主动送达报告**。
+- **不要在用户只是讨论如何调用、询问可行性、修改采集规则时自动启动采集。** 只有明确的“执行”指令才触发。
+  
+统一配置示例（仅展示，不代表本次执行）：
+
+```json
+{
+  "request_id": "collect-all-unique-id-per-run",
+  "mode": "collect",
+  "sites": ["all"],
+  "candidates": {},
+  "limit": 10
+}
+```
+
+调用之前仍需遵守本文其他授权、去重、隐私、频率和开发/生产隔离约束。
