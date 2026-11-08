@@ -1,6 +1,6 @@
 {
-  "request_id": "verify-120ask-official-category-discovery-20261108-v1",
-  "mode": "discover",
+  "request_id": "verify-120ask-official-category-live-import-20261108",
+  "mode": "collect",
   "sites": [
     "120ask"
   ],
