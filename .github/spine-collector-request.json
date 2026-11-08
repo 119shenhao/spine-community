@@ -1,9 +1,16 @@
 {
-  "request_id": "verify-d1-queue-live-20261108",
+  "request_id": "verify-d1-patientinfo-live-20261108",
   "mode": "collect",
   "sites": [
-    "ask39"
+    "patientinfo"
   ],
-  "candidates": {},
+  "candidates": {
+    "patientinfo": [
+      "https://patient.info/forums/discuss/2weeks-post-op-sciatic-pain-has-returned-451049",
+      "https://patient.info/forums/discuss/has-anyone-had-surgery-for-spinal-stenosis-what-was-your-experience--637746",
+      "https://patient.info/forums/discuss/14-months-post-op-of-l5-si-discectomy-and-womthing-new-going-on--559698",
+      "https://patient.info/forums/discuss/advice-on-fusion-surgery-severe-stenosis-listhesis-451034"
+    ]
+  },
   "limit": 2
 }
