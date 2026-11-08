@@ -9,6 +9,7 @@ from urllib.parse import urlencode, urljoin
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from bs4 import BeautifulSoup
+from spine_discover import PUBLIC_LISTS, discover_candidates
 from spine_sources import (
     ASK39_LISTS, SOURCE_URLS, read_topic, source_id, validate_topic,
 )
@@ -90,7 +91,7 @@ def read_request(path):
     request.setdefault("limit", DEFAULT_TOPIC_LIMIT)
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", request["request_id"]):
         raise ValueError("invalid_request_id")
-    if request["mode"] not in ("inspect", "collect") or type(request["limit"]) is not int:
+    if request["mode"] not in ("inspect", "collect", "discover") or type(request["limit"]) is not int:
         raise ValueError("invalid_request_mode_or_limit")
     sites = request["sites"]
     if (not isinstance(sites, list) or not sites or len(sites) != len(set(sites))
@@ -370,6 +371,7 @@ def main():
     emit("request", request_id=request["request_id"], mode=request["mode"])
     ok = True
     total_new_topics = 0
+    total_discovered = 0
     target = request["limit"]
     for site in request["sites"]:
         if request["mode"] == "collect" and total_new_topics >= target:
@@ -394,7 +396,10 @@ def main():
                 candidates = discover_120ask(excluded)
             if site == "ask39" and request["mode"] == "collect" and not candidates and not args.export_dir:
                 candidates = ask39_directory_candidates(excluded)
-            if request["mode"] == "collect" and not args.export_dir:
+            if site in PUBLIC_LISTS and request["mode"] in ("collect", "discover") and not candidates and not args.export_dir:
+                candidates = discover_candidates(site, excluded, fetch, emit)
+                total_discovered += len(candidates)
+            if request["mode"] in ("collect", "discover") and not args.export_dir:
                 if candidates:
                     rows = list(candidates.items())
                     for start in range(0, len(rows), 30):
@@ -403,15 +408,17 @@ def main():
                         ]})
                 queued = api("/api/collect/queue?"+urlencode({"site":site}))["items"]
                 candidates = {row["source_id"]: row["url"] for row in queued}
-            if request["mode"] == "collect" and not args.export_dir:
+            if request["mode"] in ("collect", "discover") and not args.export_dir:
                 already_done = [key for key in candidates if excluded.get(key) == "completed"]
                 for key in already_done:
                     queue_mark(site, key, "completed")
             eligible = {key: url for key, url in candidates.items() if key not in excluded}
             emit("plan", site=site, existing_exclusions=len(excluded), candidates=len(candidates),
                  excluded=len(candidates) - len(eligible), eligible=len(eligible))
-            if site in SKIP and not args.export_dir:
+            if site in SKIP and request["mode"] == "collect" and not args.export_dir:
                 emit("source_unavailable", site=site, reason=SKIP[site])
+            elif request["mode"] == "discover":
+                emit("discovery_queued", site=site, queued_available=len(eligible))
             elif site == "ask39" and request["mode"] == "inspect":
                 inspect_ask39()
             elif request["mode"] == "collect":
@@ -425,8 +432,10 @@ def main():
     if request["mode"] == "collect" and total_new_topics == 0:
         emit("target_not_met", reason="zero_new_topics", new_topics=0)
         return 1
-    emit("run_summary", new_topics=total_new_topics, requested_target=target,
-         target_met=total_new_topics >= target, partial_success=0 < total_new_topics < target)
+    emit("run_summary", new_topics=total_new_topics, discovered_candidates=total_discovered,
+         requested_target=target if request["mode"] == "collect" else 0,
+         target_met=total_new_topics >= target if request["mode"] == "collect" else None,
+         partial_success=0 < total_new_topics < target if request["mode"] == "collect" else None)
     return 0 if ok else 1
 
 
