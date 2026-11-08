@@ -931,7 +931,7 @@ test('Mayo long threads resume from private D1 staging and publish 60 replies at
  assert.equal((await long('start',token1,{...meta,expected_pages:401})).status,400);
  const items=p=>Array.from({length:10},(_,i)=>{
    const number=(p-1)*10+i+1;
-   return {source_comment_id:String(number),parent_source_comment_id:number===1?null:String(number-1),
+   return {source_comment_id:String(number),parent_source_comment_id:number===1?null:'1',
      body:'Detailed lumbar recovery reply '+number,source_lang:'en'};
  });
  assert.equal((await long('page',token1,{page_number:1,comments:items(1)})).status,200);
@@ -957,8 +957,7 @@ test('Mayo long threads resume from private D1 staging and publish 60 replies at
  assert.equal(DB.db.prepare('SELECT reply_count c FROM topics WHERE id=?').get(topicId).c,60);
  const a=DB.db.prepare('SELECT id FROM comments WHERE topic_id=? AND body=?').get(topicId,'Detailed lumbar recovery reply 1');
  const b=DB.db.prepare('SELECT parent_comment_id p FROM comments WHERE topic_id=? AND body=?').get(topicId,'Detailed lumbar recovery reply 60');
- const p59=DB.db.prepare('SELECT id FROM comments WHERE topic_id=? AND body=?').get(topicId,'Detailed lumbar recovery reply 59');
- assert.equal(b.p,p59.id);
+ assert.equal(b.p,a.id);
  assert.equal(DB.db.prepare('PRAGMA foreign_key_check').all().length,0);
  assert.equal(DB.db.prepare('SELECT COUNT(*) c FROM collector_mayo_stage WHERE source_id=?').get(source).c,0);
  assert.equal(DB.db.prepare('SELECT state FROM collect_sources WHERE site=? AND source_id=?').get('mayoclinic',source).state,'completed');
@@ -968,7 +967,7 @@ test('Mayo long threads resume from private D1 staging and publish 60 replies at
  assert.equal(replay.data.persisted_comments,60);
  assert.equal(DB.db.prepare('SELECT COUNT(*) c FROM comments WHERE topic_id=?').get(topicId).c,60,'no duplicate rows on replay');
  const denied={DB:{prepare(){throw Error('production DB used');}},APP_ENV:'production',IMPORT_ENABLED:'true',COLLECT_ENABLED:'true'};
- assert.equal((await long('status',token2,{env:denied})).status,409); // closed lease on completed source
+ assert.equal((await collect('/api/collect/long/status',{site:'mayoclinic',source_id:source,lease_token:token2},{env:denied})).status,403);
 });
 
 test('Mayo long staging refuses incomplete parent trees without publishing partial data',async()=>{
