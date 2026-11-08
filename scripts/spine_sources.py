@@ -38,6 +38,27 @@ INCOMPLETE = re.compile(
     r"见(?:附件|附图|下图)|图片已隐藏|内容已隐藏|仅医生可见|登录后查看|点击查看全文"
 )
 
+# Conservative ad filter for imported 39健康问答 user-generated title,
+# question and replies only. Sidebar/sitewide advertisements are never copied.
+# Never rewrite a patient's words: reject advertised topics and omit only
+# clearly promotional replies; keep normal treatment discussions untouched.
+ASK39_AD = re.compile(
+    r"(?:加|添加|联系|私聊|扫码|扫描|关注|搜索|咨询|进)(?:我|一下|这个|我们的|官方|客服|专业|医生|团队|的|请|就)?"
+    r"(?:微信|微\s*信|V\s*信|vx|wx|QQ|Q\s*Q|公众号|交流群|群聊|客服)"
+    r"|(?:微信|微\s*信|V\s*信|vx|wx|QQ|Q\s*Q|公众号|交流群|群聊|客服).{0,10}"
+    r"(?:添加|联系|私聊|咨询|扫码|进群|购买|下单|领取)"
+    r"|(?:https?://|www[.])[^\s<>]+"
+    r"|(?:免费领取|限时优惠|限时促销|限时折扣|扫码领取|点击购买|立即下单|优惠券领取|"
+    r"代理加盟|推广合作|广告合作|包治百病|保证治愈|专业引流|私信购买|加群领资料)",
+    re.I
+)
+
+
+def ask39_has_ad(text):
+    """True only for explicit promotions/contact solicitation, not medical terms."""
+    return isinstance(text, str) and bool(ASK39_AD.search(text))
+
+
 
 def source_id(site, url):
     if not isinstance(url, str) or not 1 <= len(url) <= 300:
@@ -156,13 +177,10 @@ def parse_ask39(markup):
     unique_extra = re.sub(r"[\s，。？！、：；,.?!:;]", "", extra)
     if unique_extra and unique_extra not in (unique_title, unique_body):
         body += "\n" + extra
-    personal_context = re.search(
-        r"我|本人|家人|父亲|母亲|[0-9一二三四五六七八九十]+[年月周天岁]|术后|复发|诊断|检查", body
-    )
-    if len(re.sub(r"\s+", "", body)) < 24:
+    if len(re.sub(r"[\s，。？！、：；,.?!:;]", "", body)) < 24:
         raise ValueError("patient_narrative_too_short")
-    if not personal_context:
-        raise ValueError("patient_narrative_unverified")
+    if ask39_has_ad(title_text) or ask39_has_ad(body):
+        raise ValueError("advertising_in_topic")
 
     comments = []
     ids = set()
@@ -181,9 +199,14 @@ def parse_ask39(markup):
         if any(re.fullmatch(r"展开.*|查看全部.*|加载更多.*|追问.*", html_text(link))
                for link in wrapper.select("a, button") if html_text(link)):
             raise ValueError("answer_structure_unverified")
+        # Drop promotional replies, never edit their text or copy advertisements.
+        if ask39_has_ad(body_text):
+            continue
         comments.append({"body": body_text, "source_lang": "zh-CN"})
-    if not comments or len(comments) != len(page.select(".sele_all p.sele_txt")):
-        raise ValueError("answer_count_unverified")
+    # A single complete non-advertising public reply qualifies; the old
+    # equality check included non-answer layout elements on some pages.
+    if not comments:
+        raise ValueError("no_nonadvertising_replies")
     return {"title": title_text, "body": body, "source_lang": "zh-CN", "comments": comments}
 
 
