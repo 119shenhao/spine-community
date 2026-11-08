@@ -1,10 +1,9 @@
 {
-  "request_id": "discover-mayo-health-authorized-20261108-v2",
-  "mode": "discover",
+  "request_id": "healthunlocked-public-direct-test-20261108",
+  "mode": "collect",
   "sites": [
-    "mayoclinic",
     "healthunlocked"
   ],
   "candidates": {},
-  "limit": 5
+  "limit": 1
 }
