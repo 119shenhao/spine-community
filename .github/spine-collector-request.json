@@ -1,8 +1,8 @@
 {
-  "request_id": "healthunlocked-public-direct-test-20261108",
+  "request_id": "mayoclinic-public-direct-test-20261108",
   "mode": "collect",
   "sites": [
-    "healthunlocked"
+    "mayoclinic"
   ],
   "candidates": {},
   "limit": 1
