@@ -48,7 +48,7 @@ async function successful(db:D1Database,sourceId:string,topicId:string,duplicate
 }
 export async function collectLongRoute(req:Request,env:Env,path:string):Promise<Response> {
  if(req.method!=='POST')fail(405,'method_not_allowed');
- if(!['/api/collect/long/start','/api/collect/long/status','/api/collect/long/page','/api/collect/long/finish'].includes(path))
+ if(!['/api/collect/long/start','/api/collect/long/status','/api/collect/long/page','/api/collect/long/finish','/api/collect/long/reset'].includes(path))
   fail(404,'not_found');
  const db=env.IMPORT_DB!;
  await rate(db,'collect:mayo:long',240);
@@ -61,6 +61,14 @@ export async function collectLongRoute(req:Request,env:Env,path:string):Promise<
  if(claim.state==='completed'){
   if(path==='/api/collect/long/finish')return successful(db,sourceId,claim.topic_id,true,false,0);
   fail(409,'already_collected');
+ }
+ if(path==='/api/collect/long/reset'){
+  // Explicit repair only. A reset requires the current six-hour claim and is
+  // never performed implicitly on transient network failures.
+  await db.batch([guard(db,sourceId,tokenHash),
+   stmt(db,'DELETE FROM collector_mayo_stage WHERE source_id=?',sourceId),
+   unguard(db,sourceId)]);
+  return json({status:'stage_reset',source_id:sourceId});
  }
  if(path==='/api/collect/long/start'){
   const expected=raw.expected_pages;
@@ -116,6 +124,7 @@ export async function collectLongRoute(req:Request,env:Env,path:string):Promise<
    ...parsed.map((c,i)=>stmt(db,`INSERT INTO collector_mayo_comments
      (source_id,source_comment_id,comment_id,parent_source_comment_id,page_number,position,body,source_lang,status)
      VALUES(?,?,?,?,?,?,?,?,?)`,sourceId,c.source,c.commentId,c.parent,pageNo,i+1,c.content,'en',c.status)),
+   stmt(db,'UPDATE collector_mayo_stage SET updated_at=unixepoch() WHERE source_id=?',sourceId),
    unguard(db,sourceId)];
   await db.batch(writes);
   return json({status:'page_saved',already_saved:false,page_number:pageNo,saved_comments:parsed.length});
