@@ -1,13 +1,9 @@
 {
-  "request_id": "verify-mayo-11page-full-20261108",
+  "request_id": "collect-all-20261108-e911dfdca6fe9738",
   "mode": "collect",
   "sites": [
-    "mayoclinic"
+    "all"
   ],
-  "candidates": {
-    "mayoclinic": [
-      "https://connect.mayoclinic.org/discussion/laminotomy-recovery/"
-    ]
-  },
-  "limit": 1
+  "candidates": {},
+  "limit": 10
 }
