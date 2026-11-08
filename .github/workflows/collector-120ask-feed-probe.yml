@@ -1,0 +1,51 @@
+name: 120ask public question feed probe
+on:
+  push:
+    branches: [feature/v1-community-build-20261106]
+    paths: [.github/workflows/collector-120ask-feed-probe.yml]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - run: python -m pip -q install beautifulsoup4==4.13.4
+      - name: Inspect question URLs on official public feed pages only
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json,re,time
+          from urllib.parse import urljoin,urlsplit
+          from urllib.request import Request,build_opener,HTTPRedirectHandler
+          from urllib.error import HTTPError,URLError
+          from bs4 import BeautifulSoup
+          class NoRedirect(HTTPRedirectHandler):
+              def redirect_request(self,*a,**k):return None
+          op=build_opener(NoRedirect())
+          pages={
+            "hant_questions":"https://hant.120ask.com/question/list/",
+            "mobile_home":"https://m.120ask.com/",
+            "www_questions":"https://www.120ask.com/question/list/",
+            "www_ask":"https://www.120ask.com/ask/",
+            "spine_disease":"https://www.120ask.com/jibing/yaozhuijianpantuchu/",
+          }
+          for label,url in pages.items():
+              try:
+                  with op.open(Request(url,headers={"User-Agent":"SpineCommunityCollector/1.0"}),timeout=15) as r: html=r.read(1_300_000)
+              except HTTPError as e:
+                  print(json.dumps({"page":label,"status":e.code}),flush=True);time.sleep(1);continue
+              except (URLError,OSError):
+                  print(json.dumps({"page":label,"status":"network_error"}),flush=True);time.sleep(1);continue
+              soup=BeautifulSoup(html,'html.parser')
+              paths=[]
+              similar=[]
+              for a in soup.select("a[href]"):
+                  target=urlsplit(urljoin(url,a["href"]))
+                  if re.search(r"/(?:question|ask)/[0-9]{4,20}(?:[.]htm|[.]html|/)?$",target.path):
+                      paths.append((target.netloc,target.path))
+                      if re.search("腰椎|颈椎|頸椎|坐骨神经|坐骨神經|椎间盘|椎間盤",a.get_text(" ",strip=True)):
+                          similar.append((target.netloc,target.path))
+              print(json.dumps({"page":label,"status":200,"questions":len(paths),"examples":list(dict.fromkeys(paths))[:12],"spine_links":list(dict.fromkeys(similar))[:12],"a_count":len(soup.select('a[href]'))},ensure_ascii=False),flush=True)
+              time.sleep(1)
+          PY
