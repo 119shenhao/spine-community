@@ -463,6 +463,11 @@ def main():
                         api("/api/collect/queue", {"site": site, "action": "enqueue", "items": [
                             {"source_id": key, "url": url} for key, url in rows[start:start+30]
                         ]})
+                if site == "mayoclinic" and explicit_candidates and request["mode"] == "collect":
+                    # Reopen only one-time legacy-size rejections explicitly selected
+                    # for upgrade; never repeat failed modern validation indefinitely.
+                    api("/api/collect/queue", {"site": site, "action": "reconsider",
+                        "items": [{"source_id": key} for key in candidates]})
                 queued = api("/api/collect/queue?"+urlencode({"site":site}))["items"]
                 available = {row["source_id"]: row["url"] for row in queued}
                 if explicit_candidates:
