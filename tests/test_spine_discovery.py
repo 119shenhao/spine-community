@@ -8,6 +8,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from spine_discover import candidate_links, discover_candidates
 from spine_sources import source_id, read_topic, parse_mayoclinic, parse_mayoclinic_pages, parse_healthunlocked
+from spine_collect import read_120ask_links, ask39_listing_candidates
 
 
 class DiscoveryTests(unittest.TestCase):
@@ -108,6 +109,34 @@ class DiscoveryTests(unittest.TestCase):
             parse_mayoclinic(html.replace('<div class="single-comment-body"><p>Thanks for your updates.</p></div>', '<div class="in-reply-to-container"></div><div class="single-comment-body"><p>Thanks for your updates.</p></div>'), "spinal-surgery-recovery")
         with self.assertRaisesRegex(ValueError, "unexpected_source_redirect"):
             parse_mayoclinic(html, "another-spinal-surgery")
+
+    def test_120ask_discovery_prefers_topic_titles_not_doctor_specialties(self):
+        html = """<a href="https://www.120ask.com/question/92345678.htm">颈椎术后一直头晕如何恢复</a>
+          <a href="/question/92345679.htm">腰椎间盘突出后腿麻痛怎么办</a>
+          <a href="https://www.120ask.com/question/92345680.htm">脚踝韧带损伤</a>
+          <a href="https://bing.com/ck?url=https%3A%2F%2Fwww.120ask.com%2Fquestion%2F92345681.htm">腰椎病是否需要复查</a>"""
+        result = read_120ask_links(html,"https://www.120ask.com/",{})
+        self.assertEqual(set(result),{"92345678","92345679","92345681"})
+        self.assertEqual(set(read_120ask_links(html,"https://www.120ask.com/",{"92345678":"completed"})),
+                         {"92345679","92345681"})
+
+    def test_ask39_question_previews_not_doctor_answer_links(self):
+        rich = "我腰椎间盘突出三年，术后还在康复训练，最近坐着的时候大腿麻痛，去年还做过核磁共振检查，想咨询能否进一步康复"
+        shallow = "医生你好腰椎"
+        html = f"""<div class="question-ask">
+          <p class="question-ask-title"><a href="/question/111111.html">腰椎术后持续腿麻怎么办</a></p>
+          <p class="question-ask-content">{rich}</p></div>
+          <div class="question-answer"><p class="question-answer-content">
+            <a href="/question/111111.html">医生回复</a></p></div>
+          <div class="question-ask"><p class="question-ask-title">
+             <a href="/question/222222.html">腰椎疼怎么办</a></p>
+             <p class="question-ask-content">{shallow}</p></div>
+          <div class="question-ask"><p class="question-ask-title">
+             <a href="/question/333333.html">今天眼睛痒怎么办</a></p>
+             <p class="question-ask-content">我最近眼睛很干，非常不舒服，睡眠质量也不是很好，想知道怎么处理，需要做眼科检查吗</p></div>"""
+        result = ask39_listing_candidates("https://ask.39.net/browse/11760-1-1.html",html,{})
+        self.assertEqual(list(result),["111111"])
+        self.assertEqual(ask39_listing_candidates("https://ask.39.net/browse/11760-1-1.html",html,{"111111":"completed"}),{})
 
     def test_mayo_cross_page_reply_parent_is_preserved_and_no_quote_duplication(self):
         head = """<link rel="canonical" href="https://connect.mayoclinic.org/discussion/lumbar-recovery/">
