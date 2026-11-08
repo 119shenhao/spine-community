@@ -124,7 +124,7 @@ class DiscoveryTests(unittest.TestCase):
         rich = "我腰椎间盘突出三年，术后还在康复训练，最近坐着的时候大腿麻痛，去年还做过核磁共振检查，想咨询能否进一步康复"
         shallow = "医生你好腰椎"
         html = f"""<div class="question-ask">
-          <p class="question-ask-title"><a href="/question/111111.html">腰椎术后持续腿麻怎么办</a></p>
+          <p class="question-ask-title"><a href="/question/111111.html">我做腰椎间盘突出手术三个月后仍然腿麻，坐着加重，需要复查吗？</a></p>
           <p class="question-ask-content">{rich}</p></div>
           <div class="question-answer"><p class="question-answer-content">
             <a href="/question/111111.html">医生回复</a></p></div>
