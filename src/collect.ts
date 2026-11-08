@@ -1,6 +1,7 @@
 import {Env,Row,all,body,fail,hash,id,json,lang,now,one,rate,risk,stmt,textField,topicFingerprint} from './core';
 import {terms} from './content';
 import {UNKNOWN_USER_ID,importEnabled} from './import';
+import {collectLongRoute} from './collect-long';
 
 // Dedicated collector endpoints have NO production HTTP write path.
 // Preview-only collection is deliberately anonymous; per-claim lease tokens still
@@ -93,6 +94,7 @@ function finished(row:Row,fp:string,leaseHash:string){
 export async function collectRoute(req:Request,env:Env,path:string):Promise<Response>{
  // Preview-only environment gating happens BEFORE touching either database.
  allowPreviewRequest(req,env);
+ if(path.startsWith('/api/collect/long/'))return collectLongRoute(req,env,path);
  if(!['/api/collect/exclusions','/api/collect/claim','/api/collect/complete','/api/collect/release','/api/collect/queue'].includes(path))fail(404,'not_found');
  const db=env.IMPORT_DB!;
  if(path==='/api/collect/queue'){
