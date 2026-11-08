@@ -8,10 +8,39 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from spine_discover import candidate_links, discover_candidates
 from spine_sources import source_id, read_topic, parse_mayoclinic, parse_mayoclinic_pages, parse_mayoclinic_stage_page, parse_healthunlocked, parse_ask39, ask39_has_ad
-from spine_collect import read_120ask_links, ask39_listing_candidates
+from spine_collect import read_120ask_links, ask39_listing_candidates, read_request
 
 
 class DiscoveryTests(unittest.TestCase):
+    def test_collect_all_expands_registry_and_future_sources(self):
+        import json
+        import tempfile
+        from unittest.mock import patch
+        from spine_collect import SOURCE_URLS
+        def request(sites, candidates=None, mode="collect"):
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "request.json"
+                path.write_text(json.dumps({
+                    "request_id": "unified-collector-001",
+                    "mode": mode, "sites": sites,
+                    "candidates": {} if candidates is None else candidates,
+                    "limit": 10,
+                }), encoding="utf-8")
+                return read_request(path)
+
+        self.assertEqual(request(["all"])["sites"], list(SOURCE_URLS))
+        self.assertEqual(request(["120ask"])["sites"], ["120ask"])
+        with patch.dict(SOURCE_URLS, {"future_approved_site": ("example.test", "/posts/([0-9]+)") }):
+            self.assertIn("future_approved_site", request(["all"])["sites"])
+        for sites in (["all", "120ask"], ["all", "all"], ["not_registered"]):
+            with self.subTest(sites=sites):
+                with self.assertRaisesRegex(ValueError, "invalid_sites_or_limit"):
+                    request(sites)
+        with self.assertRaisesRegex(ValueError, "invalid_all_sites_request"):
+            request(["all"], {"120ask": []})
+        with self.assertRaisesRegex(ValueError, "invalid_all_sites_request"):
+            request(["all"], mode="inspect")
+
     def test_legacy_and_modern_patient_ids(self):
         self.assertEqual(source_id("patientinfo",
             "https://community.patient.info/t/lumbar-spine-fusion/621432"), "621432")
