@@ -93,9 +93,19 @@ def read_request(path):
     if request["mode"] not in ("inspect", "collect", "discover") or type(request["limit"]) is not int:
         raise ValueError("invalid_request_mode_or_limit")
     sites = request["sites"]
-    if (not isinstance(sites, list) or not sites or len(sites) != len(set(sites))
-            or any(site not in SOURCE_URLS for site in sites) or not 1 <= request["limit"] <= DEFAULT_TOPIC_LIMIT):
+    if not isinstance(sites, list) or not sites or any(not isinstance(site, str) for site in sites):
         raise ValueError("invalid_sites_or_limit")
+    # "all" is resolved when the Action RUNS, using the current site registry.
+    # New approved and fully implemented sources automatically join future runs
+    # without changing this request template or the ChatGPT invocation phrase.
+    if sites == ["all"]:
+        if request["mode"] not in ("collect", "discover") or request["candidates"] != {}:
+            raise ValueError("invalid_all_sites_request")
+        sites = list(SOURCE_URLS)
+    if (len(sites) != len(set(sites)) or any(site not in SOURCE_URLS for site in sites)
+            or not 1 <= request["limit"] <= DEFAULT_TOPIC_LIMIT):
+        raise ValueError("invalid_sites_or_limit")
+    request["sites"] = sites
     candidates = request["candidates"]
     if not isinstance(candidates, dict) or set(candidates) - set(sites):
         raise ValueError("invalid_candidate_sites")
