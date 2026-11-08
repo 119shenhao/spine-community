@@ -985,3 +985,25 @@ test('Mayo long staging refuses incomplete parent trees without publishing parti
  assert.equal(DB.db.prepare('SELECT COUNT(*) c FROM topics WHERE title=?').get('Spinal recovery after surgery').c,0);
  assert.equal(DB.db.prepare('SELECT COUNT(*) c FROM collector_mayo_pages WHERE source_id=?').get(source).c,2);
 });
+
+
+test('Mayo only: reopen one legacy size rejection for a new long-thread parser',async()=>{
+ const {collect,DB}=await collectFixture();
+ const source_id='old-very-long-surgery';
+ const url='https://connect.mayoclinic.org/discussion/'+source_id+'/';
+ const enqueue=()=>collect('/api/collect/queue',{site:'mayoclinic',action:'enqueue',items:[{source_id,url}]});
+ const get=()=>collect('/api/collect/queue',undefined,{method:'GET',search:'?site=mayoclinic'});
+ assert.equal((await enqueue()).status,200);
+ DB.db.prepare('UPDATE collector_candidates SET status=?,reason=?,attempts=1 WHERE site=? AND source_id=?')
+  .run('rejected','mayoclinic_multipage_replies','mayoclinic',source_id);
+ assert.equal((await get()).data.items.length,0);
+ const retry=()=>collect('/api/collect/queue',{site:'mayoclinic',action:'reconsider',items:[{source_id}]});
+ assert.equal((await retry()).status,200);
+ assert.deepEqual((await get()).data.items.map(x=>x.source_id),[source_id]);
+ DB.db.prepare('UPDATE collector_candidates SET status=?,reason=?,attempts=2 WHERE site=? AND source_id=?')
+  .run('rejected','mayoclinic_multipage_replies','mayoclinic',source_id);
+ assert.equal((await retry()).status,200);
+ assert.deepEqual((await get()).data.items,[],'do not reopen repeated failures');
+ const other=await collect('/api/collect/queue',{site:'ask39',action:'reconsider',items:[{source_id:'123'}]});
+ assert.equal(other.status,400);
+});
