@@ -1,9 +1,13 @@
 {
-  "request_id": "39-three-rule-verified-20261108",
+  "request_id": "verify-mayo-long-31pages-real-20261108",
   "mode": "collect",
   "sites": [
-    "ask39"
+    "mayoclinic"
   ],
-  "candidates": {},
-  "limit": 2
+  "candidates": {
+    "mayoclinic": [
+      "https://connect.mayoclinic.org/discussion/spinal-fusion-2/"
+    ]
+  },
+  "limit": 1
 }
