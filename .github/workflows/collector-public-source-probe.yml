@@ -1,0 +1,44 @@
+name: Preview public source accessibility probe
+on:
+  push:
+    branches: [feature/v1-community-build-20261106]
+    paths: [.github/workflows/collector-public-source-probe.yml]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check direct public GET access without credentials or bypass
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from urllib.request import Request, build_opener, HTTPRedirectHandler
+          from urllib.error import HTTPError, URLError
+          import re, json
+          class NoRedirect(HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs): return None
+          op=build_opener(NoRedirect())
+          urls={
+           'healthunlocked_home':'https://healthunlocked.com/',
+           'healthunlocked_sciatica':'https://healthunlocked.com/tag/sciatica',
+           'mayoclinic_spine_list':'https://connect.mayoclinic.org/group/spine-health/?index=discussions',
+           'mayoclinic_public_thread':'https://connect.mayoclinic.org/discussion/will-i-ever-recover-from-my-operation-for-spinal-stenoses/',
+          }
+          for name,url in urls.items():
+              try:
+                  with op.open(Request(url,headers={'User-Agent':'SpineCommunityCollector/1.0','Accept':'text/html'}),timeout=15) as r:
+                      data=r.read(1_500_000)
+                      # Report only response metadata and element counts; do not publish patient text.
+                      text=data.decode('utf-8','ignore')
+                      result={'site':name,'http':r.status,'bytes_read':len(data),
+                          'content_type':r.headers.get('Content-Type'),
+                          'discussion_url_count':len(set(re.findall(r'/discussion/[a-z0-9-]+/?',text,re.I))),
+                          'post_url_count':len(set(re.findall(r'/posts/[0-9]+',text,re.I)))}
+              except HTTPError as e:
+                  result={'site':name,'http':e.code,'reason':'source_rejected_or_redirected'}
+              except (URLError,OSError) as e:
+                  result={'site':name,'http':None,'reason':'network_error'}
+              print(json.dumps(result),flush=True)
+          PY
