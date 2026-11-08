@@ -896,7 +896,7 @@ test('collector queue persists candidates, rejects invalid URLs and honors retry
  assert.equal((await mark('rejected','patient_narrative_too_short')).status,200);
  assert.deepEqual((await get()).data.items,[]);
  DB.db.prepare('UPDATE collector_candidates SET retry_at=? WHERE site=? AND source_id=?').run(now()-1,site,source_id);
- assert.deepEqual((await get()).data.items.map(x=>x.source_id),[source_id],'rejected candidates become reviewable after cooldown');
+ assert.deepEqual((await get()).data.items,[],'permanently rejected candidates must never retry automatically');
  const prod={DB:{prepare(){throw Error('production DB touched');}},APP_ENV:'production',IMPORT_ENABLED:'true',COLLECT_ENABLED:'true'};
  assert.equal((await collect('/api/collect/queue',undefined,{method:'GET',search:'?site='+site,env:prod})).status,403);
 });
