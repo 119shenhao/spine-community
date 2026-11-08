@@ -1,8 +1,8 @@
 {
-  "request_id": "verify-39-ranked-discovery-20261108-v1",
+  "request_id": "verify-120ask-official-category-discovery-20261108-v1",
   "mode": "discover",
   "sites": [
-    "ask39"
+    "120ask"
   ],
   "candidates": {},
   "limit": 1
