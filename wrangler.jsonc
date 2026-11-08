@@ -15,7 +15,8 @@
   },
   "vars": {
     "APP_ENV": "production",
-    "GOOGLE_CLIENT_ID": "294338107553-k5bts5abj3tg85lt82moelv40sph3tuh.apps.googleusercontent.com"
+    "GOOGLE_CLIENT_ID": "294338107553-k5bts5abj3tg85lt82moelv40sph3tuh.apps.googleusercontent.com",
+    "PUBLIC_CONTENT_BASE_URL": "https://spine-data.nbn369.com"
   },
   "d1_databases": [
     {
@@ -45,7 +46,8 @@
       "GOOGLE_CLIENT_ID": "294338107553-bht5pr4qa112e9knbst517b0mvb9pus9.apps.googleusercontent.com",
       "TRANSLATION_ENABLED": "false",
       "IMPORT_ENABLED": "true",
-      "COLLECT_ENABLED": "true"
+      "COLLECT_ENABLED": "true",
+      "PUBLIC_CONTENT_BASE_URL": "https://spine-data-dev.nbn369.com"
     },
     "r2_buckets": [
       {
