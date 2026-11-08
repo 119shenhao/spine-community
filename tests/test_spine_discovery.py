@@ -163,10 +163,11 @@ class DiscoveryTests(unittest.TestCase):
             parse_mayoclinic_pages([p1,p2.replace('pg=2','pg=3')], "lumbar-recovery")
         with self.assertRaisesRegex(ValueError,"mayoclinic_page_limit"):
             parse_mayoclinic_pages([p1]*6, "lumbar-recovery")
-        forward = p1.replace('id="comment-111"', 'id="comment-112"')
-        backward = p2.replace('id="comment-112"', 'id="comment-111"').replace('comment/111/', 'comment/112/')
+        # A page-1 reply referring to a page-2 parent is not a valid chronology.
+        forward = p1.replace('<div class="single-comment-body"><p>First reply.</p></div>',
+             '<div class="in-reply-to-container"><a href="https://connect.mayoclinic.org/comment/112/">Parent</a></div><div class="single-comment-body"><p>First reply.</p></div>')
         with self.assertRaisesRegex(ValueError, "mayoclinic_reply_parent_order_unverified"):
-            parse_mayoclinic_pages([forward,backward], "lumbar-recovery")
+            parse_mayoclinic_pages([forward,p2], "lumbar-recovery")
 
     def test_healthunlocked_public_nested_reply_structure(self):
         html = """<link rel="canonical" href="https://healthunlocked.com/painconcern/posts/153318229/spinal-decompression-surgery-on-saturday">
