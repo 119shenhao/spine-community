@@ -1,8 +1,8 @@
 {
-  "request_id": "verify-120ask-official-category-live-import-20261108",
+  "request_id": "verify-39-ranked-preview-live-import-20261108",
   "mode": "collect",
   "sites": [
-    "120ask"
+    "ask39"
   ],
   "candidates": {},
   "limit": 1
