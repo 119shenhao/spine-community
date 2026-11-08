@@ -1,12 +1,9 @@
 {
-  "request_id": "discover-four-public-sources-20261108-v1",
-  "mode": "discover",
+  "request_id": "verify-patientinfo-auto-discovery-20261108-v2",
+  "mode": "collect",
   "sites": [
-    "patientinfo",
-    "healthunlocked",
-    "xywy",
-    "mayoclinic"
+    "patientinfo"
   ],
   "candidates": {},
-  "limit": 5
+  "limit": 2
 }
