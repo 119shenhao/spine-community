@@ -17,7 +17,8 @@ from spine_sources import (
 
 PREVIEW = "https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev"
 JSON_LIMIT = 150000
-DEFAULT_TOPIC_LIMIT = 10
+DEFAULT_SITE_LIMIT = 2
+MAX_SITE_LIMIT = 10
 SKIP = {}
 
 
@@ -87,7 +88,7 @@ def read_request(path):
     required_fields = {"request_id", "mode", "sites", "candidates"}
     if not isinstance(request, dict) or set(request) - {"limit"} != required_fields:
         raise ValueError("invalid_request_fields")
-    request.setdefault("limit", DEFAULT_TOPIC_LIMIT)
+    request.setdefault("limit", DEFAULT_SITE_LIMIT)
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", request["request_id"]):
         raise ValueError("invalid_request_id")
     if request["mode"] not in ("inspect", "collect", "discover") or type(request["limit"]) is not int:
@@ -103,7 +104,7 @@ def read_request(path):
             raise ValueError("invalid_all_sites_request")
         sites = list(SOURCE_URLS)
     if (len(sites) != len(set(sites)) or any(site not in SOURCE_URLS for site in sites)
-            or not 1 <= request["limit"] <= DEFAULT_TOPIC_LIMIT):
+            or not 1 <= request["limit"] <= MAX_SITE_LIMIT):
         raise ValueError("invalid_sites_or_limit")
     request["sites"] = sites
     candidates = request["candidates"]
@@ -436,10 +437,12 @@ def main():
     ok = True
     total_new_topics = 0
     total_discovered = 0
-    target = request["limit"]
+    per_site_limit = request["limit"]
+    requested_total = per_site_limit * len(request["sites"]) if request["mode"] == "collect" else 0
+    site_results = []
     for site in request["sites"]:
-        if request["mode"] == "collect" and total_new_topics >= target:
-            break
+        site_new = 0
+        site_ok = True
         try:
             excluded = exclusions(site)
             candidates = request["candidates"].get(site, {})
@@ -503,20 +506,34 @@ def main():
             elif site == "ask39" and request["mode"] == "inspect":
                 inspect_ask39()
             elif request["mode"] == "collect":
-                site_ok, site_new = collect(site, eligible, target - total_new_topics, args.export_dir)
+                # Each registered site has an independent quota. A previous
+                # site's success must never prevent later sites from running.
+                site_ok, site_new = collect(site, eligible, per_site_limit, args.export_dir)
                 total_new_topics += site_new
                 ok = site_ok and ok
+                emit("site_target", site=site, requested=per_site_limit,
+                     new_topics=site_new, target_met=site_new >= per_site_limit)
+            if request["mode"] == "collect":
+                site_results.append({"site": site, "requested": per_site_limit,
+                                     "new_topics": site_new,
+                                     "target_met": site_new >= per_site_limit,
+                                     "ok": site_ok})
         except (FetchProblem, ValueError, TypeError, KeyError, OSError) as error:
             reason = str(error) if isinstance(error, FetchProblem) else "invalid_request_export_or_preview_response"
             emit("site_error", site=site, reason=reason)
+            if request["mode"] == "collect":
+                site_results.append({"site": site, "requested": per_site_limit,
+                                     "new_topics": site_new, "target_met": False,
+                                     "ok": False, "error": reason})
             ok = False
     if request["mode"] == "collect" and total_new_topics == 0:
         emit("target_not_met", reason="zero_new_topics", new_topics=0)
         return 1
     emit("run_summary", new_topics=total_new_topics, discovered_candidates=total_discovered,
-         requested_target=target if request["mode"] == "collect" else 0,
-         target_met=total_new_topics >= target if request["mode"] == "collect" else None,
-         partial_success=0 < total_new_topics < target if request["mode"] == "collect" else None)
+         per_site_limit=per_site_limit, requested_target=requested_total,
+         target_met=(all(r["target_met"] for r in site_results) if request["mode"] == "collect" else None),
+         partial_success=(0 < total_new_topics < requested_total if request["mode"] == "collect" else None),
+         site_results=site_results if request["mode"] == "collect" else None)
     return 0 if ok else 1
 
 
