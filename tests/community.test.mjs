@@ -287,6 +287,29 @@ async function collectFixture(){
  f.exclude=async(site='tieba',search='')=>f.collect('/api/collect/exclusions',undefined,{method:'GET',search:'?site='+site+search});
  return f;
 }
+test('ask39 candidate precheck excludes old rejected IDs before discovery selection, without mutation',async()=>{
+ const {collect,DB}=await collectFixture();
+ const rows=['111111','222222','333333'].map(source_id=>({source_id,url:'https://ask.39.net/question/'+source_id+'.html'}));
+ assert.equal((await collect('/api/collect/queue',{site:'ask39',action:'enqueue',items:rows})).status,200);
+ assert.equal((await collect('/api/collect/queue',{site:'ask39',action:'mark',items:[
+  {source_id:'111111',status:'rejected',reason:'patient_narrative_too_short'}
+ ]})).status,200);
+ DB.db.prepare("UPDATE collector_candidates SET status='retry',retry_at=unixepoch()+3600 WHERE site='ask39' AND source_id='222222'").run();
+ const input={site:'ask39',action:'check',items:['111111','222222','333333','444444'].map(source_id=>({source_id}))};
+ const result=await collect('/api/collect/queue',input);
+ assert.equal(result.status,200,JSON.stringify(result));
+ assert.equal(result.data.site,'ask39');
+ assert.equal(result.data.status,'checked');
+ assert.deepEqual(result.data.excluded.sort((a,b)=>a.source_id.localeCompare(b.source_id)),[
+  {source_id:'111111',status:'rejected'},{source_id:'222222',status:'retry'}
+ ]);
+ assert.equal(DB.db.prepare("SELECT status FROM collector_candidates WHERE site='ask39' AND source_id='111111'").get().status,'rejected');
+ assert.equal((await collect('/api/collect/queue',{...input,items:[{source_id:'111111'},{source_id:'111111'}]})).status,400);
+ DB.db.prepare("UPDATE collector_candidates SET retry_at=unixepoch()-1 WHERE site='ask39' AND source_id='222222'").run();
+ const refreshed=await collect('/api/collect/queue',input);
+ assert.equal(refreshed.status,200);
+ assert.deepEqual(refreshed.data.excluded,[{source_id:'111111',status:'rejected'}]);
+});
 test('collector is available on preview without credentials and blocked in production before touching DB',async()=>{
  const poison={prepare(){throw Error('A DB was accessed');},batch(){throw Error('A DB was accessed');}};
  const base={DB:poison,IMPORT_DB:poison,APP_ENV:'preview',IMPORT_ENABLED:'true',COLLECT_ENABLED:'true'};
