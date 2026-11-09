@@ -1619,6 +1619,41 @@ test('legacy English medical post is recognized and translated, without trusting
  assert.equal(cached.source_language,'en');
 });
 
+test('import and collector keep unverified source hints separate from Heavy auto labels',async()=>{
+ const {DB,imp,call}=await importFixture();
+ const r=await imp('/api/import/topics',{
+  title:'A long English back pain account',
+  body:'I have had lower back pain for a long time and I am now seeing a physiotherapist after work.',
+  source_lang:'fr'
+ });
+ assert.equal(r.status,201,JSON.stringify(r.data));
+ const topicId=r.data.results[0].id;
+ const saved=DB.db.prepare('SELECT source_lang,source_lang_mode FROM topics WHERE id=?').get(topicId);
+ assert.equal(saved.source_lang,'en','independent detector overrides wrong imported hint');
+ assert.equal(saved.source_lang_mode,'auto');
+ const evidence=DB.db.prepare('SELECT method FROM content_language_verifications WHERE content_type=? AND content_id=?').get('topic',topicId);
+ assert.equal(evidence.method,'tinyld-heavy');
+ const short=await imp('/api/import/topics',{title:'OK',body:'OK',source_lang:'fr'});
+ assert.equal(short.status,201,JSON.stringify(short.data));
+ const shortId=short.data.results[0].id;
+ const unverified=DB.db.prepare('SELECT source_lang,source_lang_mode FROM topics WHERE id=?').get(shortId);
+ assert.equal(unverified.source_lang,'fr');
+ assert.equal(unverified.source_lang_mode,'legacy');
+});
+
+test('language verifications are versioned and deleted content removes old evidence',async()=>{
+ const {DB,call,topic}=await fixture();
+ const id=await topic('Back stiffness','The stiffness has improved after physical therapy.', 'alice',{source_lang_mode:'auto'});
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM content_language_verifications WHERE content_id=?').get(id).n,1);
+ await call('/api/topics/'+id,'PATCH',{title:'Updated history',body:'The recovery process is different now.',source_lang_mode:'manual',source_lang:'fr'});
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM content_language_verifications WHERE content_id=?').get(id).n,0);
+ await call('/api/topics/'+id,'PATCH',{title:'Updated again',body:'The recovery process is different now.',source_lang_mode:'auto'});
+ const before=DB.db.prepare('SELECT count(*) n FROM content_language_verifications WHERE content_id=?').get(id).n;
+ assert(before>=0);
+ await call('/api/topics/'+id,'DELETE',{});
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM content_language_verifications WHERE content_id=?').get(id).n,0);
+});
+
 test('Azure autodetect confirms unknown originals once and reuses D1 for later languages',async t=>{
  const {call,DB,env,topic}=await fixture();
  mockTranslator(env,DB);
