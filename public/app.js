@@ -8,6 +8,7 @@ import {publicContentReader} from './public-content.js';
 import {translationView} from './translation-ui.js';
 import {renderProjectionAdmin,projectionAdminAction} from './projection-admin.js';
 import {renderTranslationAdmin} from './translation-admin.js';
+import {renderLanguageReview} from './language-admin.js';
 const $=(s,root=document)=>root.querySelector(s),$$=(s,root=document)=>[...root.querySelectorAll(s)];
 // Resolve and persist the visitor's language before any Google sign-in redirect.
 // An account's database default ('en') must not reset the UI language on login.
@@ -131,8 +132,12 @@ async function showMe(n,params){if(!state.user){$('#main').innerHTML=empty('logi
  try{const data=await api('/api/me/content?kind='+encodeURIComponent(kind));if(n!==sequence)return;$('#my-content').innerHTML=data.items.length?data.items.map(c=>kind==='comments'?`<article class="topic-card"><a href="#/topic/${esc(c.topic_id)}?comment=${esc(c.id)}">${date(c.created_at)} · ${t('reply')}</a>${statusHtml(c.status)}<p class="prose">${c.status==='deleted'?t('deletedComment'):esc(c.body)}</p>${actions(c,'comment')}</article>`:topicCard(c)).join(''):empty('emptyList','emptyBody');state.feed=data.items;state.meNext=data.next;if(data.next!==null)$('#my-content').insertAdjacentHTML('beforeend',button(t('loadMore'),'load-mine','','load-more'));translateVisible(n);}catch(e){if(n===sequence)$('#my-content').innerHTML=errorPanel(e);}}
 async function showNotifications(n){if(!needUser()){$('#main').innerHTML=empty('login','loginNote',false);return;}const data=await api('/api/notifications');if(n!==sequence)return;state.notificationItems=data.items;state.unread=data.unread;renderChrome();$('#main').innerHTML=`<div class="feed-heading"><h1 class="page-title">${t('notifications')}</h1>${button(t('markAll'),'read-all','','small')}</div><div class="panel">${data.items.length?data.items.map((item,i)=>`<article class="notification ${item.unread?'unread':''}">${icon(item.event_type.endsWith('_like')?'heart':item.event_type==='progress_update'?'follow':'chat')}<div><a data-action="read-notification" data-index="${i}" href="#/topic/${esc(item.topic_id)}${item.comment_id?'?comment='+esc(item.comment_id):''}">${esc(item.count>1?item.count+' '+t('people'):item.actor_name||'Member')} ${t(item.event_type)}</a><small>${date(item.created_at)}</small></div></article>`).join(''):`<p class="subtle">${t('noNotifications')}</p>`}</div>`;}
 async function showAdmin(n,params){if(!state.user||!['admin','moderator'].includes(state.user.role)){ $('#main').innerHTML=errorPanel({status:403});return;}
- const tab=params.get('tab')||'moderation';const tabs=['moderation','reports','users','analytics','logs',...(state.user.role==='admin'?['taxonomy','settings','translationProviders','publicProjection']:[])];
+ const tab=params.get('tab')||'moderation';const tabs=['moderation','reports','users','analytics','logs',...(state.user.role==='admin'?['taxonomy','settings','translationProviders','languageReview','publicProjection']:[])];
  $('#main').innerHTML=`<h1 class="page-title">${t('admin')}</h1><nav class="tabs">${tabs.map(v=>`<a href="#/admin?tab=${v}" class="button ${v===tab?'active':''}">${v==='publicProjection'?(['zh-CN','zh-TW'].includes(locale)?'D1 / R2 一致性':'D1 / R2 consistency'):t(v)}</a>`).join('')}</nav><section class="panel" id="admin-content"><div class="loading"><span class="spinner"></span></div></section>`;
+ if(tab==='languageReview'&&state.user.role==='admin'){
+  await renderLanguageReview($('#admin-content'),api,esc,locale);
+  return;
+ }
  if(tab==='translationProviders'&&state.user.role==='admin'){
   await renderTranslationAdmin($('#admin-content'),api,esc,locale);
   return;
@@ -207,6 +212,12 @@ document.addEventListener('submit',async event=>{const form=event.target;if(!(fo
   if(form.id==='report-form'){await send(form.dataset.kind==='appeal'?'/api/appeals':'/api/reports',{...v,id:form.dataset.id,type:form.dataset.type});closeModal();toast(t('sent'));return;}
   if(form.id==='profile-form'){await send('/api/me',v,'PATCH');await refreshMe();toast(t('success'));renderChrome();return;}
   if(form.id==='privacy-form'){await send('/api/privacy-requests',v);closeModal();toast(t('sent'));await render();return;}
+  if(form.classList.contains('language-review-form')){
+   await send('/api/admin/language-review',{type:form.dataset.type,id:form.dataset.id,source_lang:v.source_lang,reason:v.reason});
+   toast(t('success'));
+   await renderLanguageReview($('#admin-content'),api,esc,locale);
+   return;
+  }
   if(form.id==='translation-provider-form'){
    const daily=Number(v.daily_limit),monthly=Number(v.monthly_limit);
    if(!Number.isSafeInteger(daily)||!Number.isSafeInteger(monthly)||daily<1||monthly<daily){
