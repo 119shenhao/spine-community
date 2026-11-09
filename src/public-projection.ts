@@ -245,16 +245,19 @@ export async function writeProjection(config:NonNullable<ReturnType<typeof proje
   const cacheControl='public, max-age=0, s-maxage=7200, must-revalidate';
   const format=separated?'separate-v1':config.directTranslations?'direct':'encrypted';
   let previousLocales:string[]=[];
-  if(separated&&old?.customMetadata?.translationLocales){
+  if(old?.customMetadata?.translationLocales){
     try{previousLocales=JSON.parse(old.customMetadata.translationLocales);}catch{}
     if(!Array.isArray(previousLocales))previousLocales=[];
   }
   const languages=[...split.locales.keys()].sort();
   // Return every known locale key, including unchanged R2 objects, so a retry
   // after a failed CDN purge still invalidates stale edge copies.
-  const keys:string[]=separated?[...new Set([...previousLocales,...languages])]
-    .map(locale=>localeObjectKey(key,locale)):[];
-  if(separated){
+  const keys:string[]=[...new Set([...previousLocales,...languages])]
+    .map(locale=>localeObjectKey(key,locale));
+  // When rolling back a split projection, tombstone and purge every previously
+  // published locale object rather than leaving an independently readable stale
+  // translation behind after its original is edited, hidden or deleted.
+  if(separated||previousLocales.length){
     // Always write locale data first. Missing translations get invalidation
     // tombstones, so an edited reply cannot reuse an old R2 translation.
     for(const locale of new Set([...previousLocales,...languages])){
