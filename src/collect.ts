@@ -1,3 +1,5 @@
+import {importedSourceLanguage} from './source-language';
+import {verificationWrite} from './language-state';
 import {Env,Row,all,body,fail,hash,id,json,lang,now,one,rate,risk,stmt,textField,topicFingerprint} from './core';
 import {terms} from './content';
 import {UNKNOWN_USER_ID,importEnabled} from './import';
@@ -38,10 +40,11 @@ function allowPreviewRequest(req:Request,env:Env) {
  if((origin&&origin!==new URL(req.url).origin)||req.headers.get('sec-fetch-site')==='cross-site')fail(403,'invalid_origin');
 }
 
-type DraftComment={id:string,parent:string|null,body:string,source_lang:string,status:string};
+type DraftComment={id:string,parent:string|null,body:string,source_lang:string,source_lang_mode:string,score:number|null,status:string};
 async function parseTopic(env:Env,db:D1Database,value:unknown){
  const t=plainObject(value,['title','body','source_lang','terms','symptom_duration_days','comments']);
- const title=textField(t.title,1,200,'title'),content=textField(t.body,1,30000),source_lang=lang(t.source_lang);
+ const title=textField(t.title,1,200,'title'),content=textField(t.body,1,30000),language=importedSourceLanguage(t.source_lang,title,content);
+ const source_lang=language.label;
  const duration=t.symptom_duration_days??null;
  if(duration!==null&&(!Number.isInteger(duration)||duration<0||duration>36500))fail(400,'invalid_duration');
  const tags=await terms({...env,DB:db},t.terms);
@@ -52,11 +55,12 @@ async function parseTopic(env:Env,db:D1Database,value:unknown){
   const c=plainObject(raw,['body','source_lang','replies']);
   const body=textField(c.body,1,12000);
   const commentId=id();
-  comments.push({id:commentId,parent,body,source_lang:lang(c.source_lang),status:risk('',body)});
+  const detected=importedSourceLanguage(c.source_lang,body);
+  comments.push({id:commentId,parent,body,source_lang:detected.label,source_lang_mode:detected.mode,score:detected.score,status:risk('',body)});
   for(const child of list(c.replies))comment(child,commentId,depth+1);
  }
  for(const c of list(t.comments))comment(c,null,1);
- return {title,body:content,source_lang,duration,tags,comments,status:risk(title,content),contentHash:await topicFingerprint(title,content)};
+ return {title,body:content,source_lang,source_lang_mode:language.mode,source_lang_score:language.score,duration,tags,comments,status:risk(title,content),contentHash:await topicFingerprint(title,content)};
 }
 async function exactTopic(db:D1Database,title:string,content:string,fp:string){
  const matches=await all(db,'SELECT id,status FROM topics WHERE content_hash=? OR (title=? AND body=?) LIMIT 2',fp,title,content);
@@ -256,7 +260,7 @@ export async function collectRoute(req:Request,env:Env,path:string):Promise<Resp
  if(row?.state==='completed')return finished(row,draft.contentHash,leaseHash);
  if(!claimValid(row,leaseHash))fail(409,'claim_not_owned_or_expired');
  await ensureAccount(db);
- const {title,body:content,source_lang,duration,tags,comments,status,contentHash:fp}=draft;
+ const {title,body:content,source_lang,source_lang_mode,source_lang_score,duration,tags,comments,status,contentHash:fp}=draft;
  const markExisting=async(existing:Row)=>{
   await finalize(db,site,sourceId,leaseHash,existing.id,fp,true,[],0,0);
   return json({site,source_id:sourceId,status:'completed',duplicate:true,topic_id:existing.id,imported:{topics:0,comments:0}});
@@ -272,12 +276,16 @@ export async function collectRoute(req:Request,env:Env,path:string):Promise<Resp
  }
  const topicId=id();
  const writes:D1PreparedStatement[]=[
-  stmt(db,`INSERT INTO topics(id,author_id,title,body,source_lang,status,symptom_duration_days,content_hash)
-   VALUES(?,?,?,?,?,?,?,?)`,topicId,UNKNOWN_USER_ID,title,content,source_lang,status,duration,fp)
+  stmt(db,`INSERT INTO topics(id,author_id,title,body,source_lang,source_lang_mode,status,symptom_duration_days,content_hash)
+   VALUES(?,?,?,?,?,?,?,?,?)`,topicId,UNKNOWN_USER_ID,title,content,source_lang,source_lang_mode,status,duration,fp)
  ];
+ if(source_lang_mode==='auto'&&status==='published')writes.push(verificationWrite(db,'topic',topicId,1,source_lang,'tinyld-heavy',source_lang_score));
  for(const tag of tags)writes.push(stmt(db,'INSERT INTO topic_terms(topic_id,term_id) VALUES(?,?)',topicId,tag));
- for(const c of comments)writes.push(stmt(db,`INSERT INTO comments(id,topic_id,author_id,parent_comment_id,kind,body,source_lang,status)
-  VALUES(?,?,?,?,'regular',?,?,?)`,c.id,topicId,UNKNOWN_USER_ID,c.parent,c.body,c.source_lang,c.status));
+ for(const c of comments){
+  writes.push(stmt(db,`INSERT INTO comments(id,topic_id,author_id,parent_comment_id,kind,body,source_lang,source_lang_mode,status)
+   VALUES(?,?,?,?,'regular',?,?,?,?)`,c.id,topicId,UNKNOWN_USER_ID,c.parent,c.body,c.source_lang,c.source_lang_mode,c.status));
+  if(c.source_lang_mode==='auto'&&c.status==='published')writes.push(verificationWrite(db,'comment',c.id,1,c.source_lang,'tinyld-heavy',c.score));
+ }
  try{
   await finalize(db,site,sourceId,leaseHash,topicId,fp,false,writes,1,comments.length);
  }catch(e){
