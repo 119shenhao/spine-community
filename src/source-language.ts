@@ -4,6 +4,25 @@ import {Row,fail,lang} from './core';
 const traditional=/[這個與體經驗醫療復頸壓覺後時會裡還過說為讓樣關頭緩謝測試]/u;
 const simplified=/[这个与体经验医疗复颈压觉后时会里还过说为让样关头缓谢测试]/u;
 
+// The compact detector can be inconclusive on short English medical writing.
+// Use a conservative, language-specific fallback only when several distinct
+// English function words support the text (not merely ASCII/Latin characters).
+const englishWords=new Set([
+  'the','and','for','with','that','this','these','those','have','has','had',
+  'would','could','should','will','your','you','they','their','there',
+  'were','was','are','but','not','can','from','after','before','when',
+  'because','been','about','which','what','where','how','does','did',
+  'than','then','into','through','while','during','without','since'
+]);
+function clearlyEnglish(sample:string) {
+  const letters=(sample.match(/\\p{L}/gu)||[]).length;
+  const latin=(sample.match(/\\p{Script=Latin}/gu)||[]).length;
+  const words=sample.toLowerCase().match(/[a-z]+(?:'[a-z]+)?/g)||[];
+  if(letters<45||latin<letters*.98||words.length<9)return false;
+  const strong=words.filter(word=>englishWords.has(word));
+  return strong.length>=4&&new Set(strong).size>=3&&strong.length/words.length>=.2;
+}
+
 function classify(sample:string,compareSection=false) {
   const han=(sample.match(/\p{Script=Han}/gu)||[]).length;
   const latin=(sample.match(/\p{Script=Latin}/gu)||[]).length;
@@ -19,7 +38,8 @@ function classify(sample:string,compareSection=false) {
   if(!first||first.lang==='zh')return 'und';
   const confident=first.accuracy>=.42&&(!second||first.accuracy-second.accuracy>=.2);
   const distinctSection=compareSection&&letters>=26&&first.accuracy>=.02&&second&&first.accuracy>=8*second.accuracy;
-  return confident||distinctSection?first.lang:'und';
+  if(confident||distinctSection)return first.lang;
+  return clearlyEnglish(sample)?'en':'und';
 }
 
 export function detectSourceLanguage(...parts:string[]) {
