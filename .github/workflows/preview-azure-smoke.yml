@@ -90,14 +90,19 @@ jobs:
             assert.equal(response.headers.get('access-control-allow-origin'),preview);
             return {status:200,cache:response.headers.get('cf-cache-status'),payload:await response.json()};
           };
-          async function waitForCdn(accept,label) {
+          async function waitForCdn(accept,label,retry) {
             let observed;
             for(let i=0;i<20;i++){
               observed=await cdnRead();
               if(accept(observed))return observed;
+              if(retry&&i%3===2)await retry();
               await delay(1500);
             }
-            throw Error(label+' did not reach CDN');
+            const tasks=sql("SELECT p.state,p.last_error,p.published_version,d.pending,d.reserved,d.last_error demand_error "+
+              "FROM public_projection p LEFT JOIN public_projection_demand d USING(scope,target) "+
+              "WHERE p.scope='topic' AND p.target='"+topic+"'");
+            const pending=sql("SELECT scope,state,count(*) n FROM public_projection WHERE state<>'done' GROUP BY scope,state");
+            throw Error(label+' did not reach CDN: '+JSON.stringify({status:observed?.status,cache:observed?.cache,tasks,pending}));
           }
           let passed=false,fixtureStarted=false;
           try{
@@ -119,11 +124,16 @@ jobs:
               "UPDATE topics SET status='published' WHERE id='"+topic+"'; "+
               "UPDATE public_projection SET priority=3 WHERE scope='topic' AND target='"+topic+"'");
             assert.equal((await cdnRead()).status,404);
-            const original=await fetch(preview+'/api/topics/'+topic,{
-              headers:{'x-spine-projection-miss':page},redirect:'error',signal:AbortSignal.timeout(12000)
-            });
-            assert.equal(original.status,200,'Preview original fallback failed');
-            const cold=await waitForCdn(result=>result.payload?.data?.topic?.id===topic,'Original projection');
+            const requestOriginal=async()=>{
+              const response=await fetch(preview+'/api/topics/'+topic,{
+                headers:{'x-spine-projection-miss':page},redirect:'error',signal:AbortSignal.timeout(12000)
+              });
+              assert.equal(response.status,200,'Preview original fallback failed');
+              assert.equal((await response.json()).topic.id,topic);
+            };
+            await wakeProjection();
+            await requestOriginal();
+            const cold=await waitForCdn(result=>result.payload?.data?.topic?.id===topic,'Original projection',requestOriginal);
             assert.equal(cold.payload.data.topic.translations?.fr,undefined);
             assert.equal((await read(false)).reason,'translation_cache_miss');
             assert.equal((await read(true,'en')).reason,'same_language');
@@ -134,7 +144,7 @@ jobs:
             const cached=await read(false);
             assert.equal(cached.body,translation.body);
             const warm=await waitForCdn(result=>result.cache==='HIT'&&result.payload?.data?.topic?.translations?.fr,
-              'Encrypted translation cache HIT');
+              'Encrypted translation cache HIT',wakeProjection);
             const encrypted=warm.payload.data.topic.translations.fr;
             assert(encrypted.ciphertext&&encrypted.token);
             assert(!JSON.stringify(warm.payload).includes(translation.body),'CDN must not contain a plaintext translation');
@@ -149,7 +159,7 @@ jobs:
             sql("UPDATE topics SET status='hidden' WHERE id='"+topic+"'");
             assert.equal((await read(false,'fr',encrypted.token)).reason,'not_found');
             await wakeProjection();
-            await waitForCdn(result=>result.payload?.data===null,'CDN withdrawal');
+            await waitForCdn(result=>result.payload?.data===null,'CDN withdrawal',wakeProjection);
             console.log('Old CDN ciphertext cannot be unlocked and the CDN projection is withdrawn.');
             passed=true;
           } finally {
