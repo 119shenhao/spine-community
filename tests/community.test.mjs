@@ -1682,7 +1682,7 @@ test('Azure autodetect refuses low-confidence and mixed-language results',async 
  t.mock.method(globalThis,'fetch',async(url,options)=>{
   const values=JSON.parse(options.body);
   return Response.json(values.map(({Text},i)=>({
-   detectedLanguage:{language:mode==='mixed'&&i===0?'es':'en',score:mode==='low'?.2:.99},
+   detectedLanguage:{language:mode==='mixed'&&i===0?'es':'en',score:mode==='low'?0.2:0.99},
    translations:[{text:'translated '+Text,to:'fr'}]
   })));
  });
