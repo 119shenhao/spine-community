@@ -23,7 +23,7 @@ function fallbackTarget(req:Request,path:string) {
     // A versioned listing may restart from page one while requesting a missing later page.
     return offset===0||offset===(page.index-1)*20?{...page,key}:null;
   }
-  if(path!=='/api/topics/'+page.target||!Number.isSafeInteger((page.index-1)*50)||
+  if(path!=='/api/topics/'+page.target||!Number.isSafeInteger((page.index-1)*page.pageSize)||
     !onlyQueryKeys(query,['before'])||
     (page.index>1? !/^[1-9][0-9]{0,15}$/.test(query.get('before')||''):query.has('before')))return null;
   return {...page,key,before:query.get('before')};
@@ -44,10 +44,11 @@ export async function requestProjection(env:Env,req:Request,path:string) {
   }
   if(scope==='topic'&&!await one(db,"SELECT 1 FROM topics WHERE id=? AND status='published'",target))return;
   const existing=await config.bucket.head(key);
-  if(existing&&existing.customMetadata?.visibility!=='invalidated')return;
+  if(existing&&existing.customMetadata?.visibility!=='invalidated'&&
+     (!config.separateTranslations||existing.customMetadata?.translationFormat==='separate-v1'))return;
   if('before' in page&&page.before){
     const boundary=await one(db,`SELECT rowid FROM comments WHERE topic_id=? AND status IN ('published','deleted')
-      ORDER BY rowid LIMIT 1 OFFSET ?`,target,(index-1)*50-1);
+      ORDER BY rowid LIMIT 1 OFFSET ?`,target,(index-1)*page.pageSize-1);
     if(boundary?.rowid!==Number(page.before))return;
   }
 
@@ -77,7 +78,7 @@ export async function refreshProjectionTranslations(env:Env,items:{type:string;i
       if(!config.directTranslations)continue;
       if(!object||object.customMetadata?.visibility!=='public')continue;
       const checked=Number(object.customMetadata.translationCheckedAt)||0;
-      if(object.customMetadata.translationFormat==='direct'&&
+      if(['direct','separate-v1'].includes(object.customMetadata.translationFormat||'')&&
         checked>item.createdAt)continue;
     }
     const changed=await one(env.DB,`UPDATE public_projection_demand SET pending=1,refresh_translations=1,due_at=unixepoch()
@@ -135,11 +136,11 @@ async function drainDemand(env:Env,config:Config,limit:number) {
           WHERE scope=? AND target=? AND reserved=1 AND object_index>? LIMIT 1`,scope,target,index);
         const publicData=scope==='feed'||Boolean(await one(db,`SELECT 1 FROM topics
           WHERE id=? AND status IN ('published','deleted')`,target));
-        const key=objectKey(scope,target,index);
+        const key=objectKey(scope,target,index,config.pageSize);
         // An empty object fences an older publisher that was interrupted after reserving this key.
-        await writeProjection(config,key,scope,target,version,publicData?{}:null,publicData);
+        const localeKeys=await writeProjection(config,key,scope,target,version,publicData?{}:null,publicData);
         stage='purge_failed';
-        await purgeProjection(env,config,key,task.priority>=2);
+        await purgeProjection(env,config,key,task.priority>=2,localeKeys);
         const done=index>=task.last_object&&!next;
         const updated=await one(db,`UPDATE public_projection SET next_object=?,
           published_version=CASE WHEN ? THEN version ELSE published_version END,state=?,attempts=0,last_error=NULL,due_at=?
@@ -154,7 +155,7 @@ async function drainDemand(env:Env,config:Config,limit:number) {
         if(page.refresh_translations)await stmt(db,`UPDATE public_projection_demand SET refresh_translations=0
           WHERE scope=? AND target=? AND object_index=?`,scope,target,index).run();
         const checkedAt=now();
-        const current=await buildProjection(db,scope,target,index,config.directTranslations);
+        const current=await buildProjection(db,scope,target,index,config.directTranslations,config.pageSize);
         if(current.version!==version)continue;
         const publicTopic=scope==='feed'||Boolean(await one(db,"SELECT 1 FROM topics WHERE id=? AND status='published'",target));
         const hasPage=current.data!==null&&publicTopic;
@@ -165,10 +166,10 @@ async function drainDemand(env:Env,config:Config,limit:number) {
               WHERE p.scope=? AND p.target=? AND p.version=? AND p.lease=? AND p.lease_until>?) RETURNING reserved`,
             scope,target,index,scope,target,version,token,now());
           if(!reserved)continue;
-          const key=objectKey(scope,target,index);
-          await writeProjection(config,key,scope,target,version,current.data,false,checkedAt,Boolean(page.refresh_translations));
+          const key=objectKey(scope,target,index,config.pageSize);
+          const localeKeys=await writeProjection(config,key,scope,target,version,current.data,false,checkedAt,Boolean(page.refresh_translations));
           stage='purge_failed';
-          await purgeProjection(env,config,key);
+          await purgeProjection(env,config,key,false,localeKeys);
         }
         // If a write won the race, leave the request queued for the new version.
         const checkpoint=await db.batch<Row>([
