@@ -1747,3 +1747,32 @@ test('the browser controller keeps original text during a cache miss, queues onl
  await new Promise(resolve=>setImmediate(resolve));
  assert.equal(view.item('topic',cold).result,null);
 });
+
+test('mobile primary navigation shows all four actions across eight languages without sideways scrolling',async()=>{
+ const app=readFileSync('public/app.js','utf8');
+ const style=readFileSync('public/styles.css','utf8');
+ const {languages,dictionaries}=await import('../public/i18n.js');
+ assert(app.includes('<nav class="primary-nav">'));
+ for(const language of languages){
+  for(const action of ['home','search','mySpace','newPost']){
+   assert(dictionaries[language]?.[action]?.trim(),`${language}: missing ${action} label`);
+  }
+ }
+ assert.match(style,/\.sidebar \.primary-nav\s*\{[^}]*grid-template-columns:repeat\(4,minmax\(0,1fr\)\)/);
+ assert.match(style,/\.sidebar \.primary-nav \.nav-link\s*\{[^}]*white-space:normal/);
+ assert.match(style,/\.sidebar \.primary-nav \.nav-link\s*\{[^}]*overflow-wrap:anywhere/);
+ assert.match(style,/\.sidebar \.primary-nav \.nav-compose\s*\{[^}]*width:100%/);
+});
+
+test('post dialog keeps the close action visible when the long form scrolls',()=>{
+ const html=readFileSync('public/index.html','utf8');
+ const style=readFileSync('public/styles.css','utf8');
+ const app=readFileSync('public/app.js','utf8');
+ assert.match(html,/<dialog id="modal"><div class="dialog-header"><button type="button" class="dialog-close"/);
+ assert.match(html,/<\/div><div id="modal-content"><\/div><\/dialog>/);
+ assert.match(style,/dialog\[open\]\s*\{\s*display:flex;\s*flex-direction:column/);
+ assert.match(style,/dialog \.dialog-close\s*\{[^}]*position:static/);
+ assert.match(style,/dialog #modal-content\s*\{[^}]*overflow-y:auto/);
+ assert.match(style,/max-height:calc\(100dvh/);
+ assert(app.includes("content.scrollTop=0"));
+});
