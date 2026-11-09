@@ -213,7 +213,7 @@ document.addEventListener('submit',async event=>{const form=event.target;if(!(fo
     toast(locale.startsWith('zh')?'额度必须为正整数，且每日不能超过每月':'Invalid translation limits');
     return;
    }
-   await send('/api/admin/translation-providers',{provider:'azure',active_provider:'azure',daily_limit:daily,monthly_limit:monthly});
+   await send('/api/admin/translation-providers',{provider:'azure',active_provider:v.active_provider||'azure',daily_limit:daily,monthly_limit:monthly});
    toast(t('success'));
    await renderTranslationAdmin($('#admin-content'),api,esc,locale);
    return;
