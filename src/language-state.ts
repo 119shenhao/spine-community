@@ -2,7 +2,7 @@ import {one,stmt,Row} from './core';
 import {detectSourceLanguageEvidence,LANGUAGE_DETECTOR} from './source-language';
 
 export type ContentType='topic'|'comment';
-export type LanguageEvidence={language:string;method:string;score:number|null};
+export type LanguageEvidence={language:string;method:string;score:number|null;newlyConfirmed?:boolean};
 const permitted=new Set(['tinyld-heavy','azure-auto','admin-manual']);
 
 export function verificationWrite(db:D1Database,type:ContentType,contentId:string,version:number,
@@ -27,12 +27,13 @@ export async function confirmedLanguage(db:D1Database,type:ContentType,row:Row,p
  if(existing)return {language:existing.language,method:existing.method,score:existing.score};
  const evidence=detectSourceLanguageEvidence(...parts);
  if(evidence.language==='und')return {language:'und',method:LANGUAGE_DETECTOR,score:null};
- await verificationWrite(db,type,row.id,row.content_version,evidence.language,
+ const write=await verificationWrite(db,type,row.id,row.content_version,evidence.language,
   LANGUAGE_DETECTOR,evidence.score).run();
  // A conflicting parallel verification should remain authoritative.
  const confirmed=await one(db,`SELECT language,method,score FROM content_language_verifications
   WHERE content_type=? AND content_id=? AND content_version=?`,type,row.id,row.content_version);
- return confirmed?{language:confirmed.language,method:confirmed.method,score:confirmed.score}
+ return confirmed?{language:confirmed.language,method:confirmed.method,score:confirmed.score,
+  newlyConfirmed:Boolean(write.meta.changes)}
   :{language:'und',method:LANGUAGE_DETECTOR,score:null};
 }
 
