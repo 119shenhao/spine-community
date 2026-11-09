@@ -1,6 +1,7 @@
 import {Env,Row,all,one,stmt,now,id,b64,fail,json,body,locales} from './core';
 import {detectSourceLanguage,sameLanguage} from './source-language';
 import {refreshProjectionTranslations} from './projection-demand';
+import {parseObjectKey} from './public-projection';
 
 const AZURE_ENDPOINT='https://api.cognitive.microsofttranslator.com';
 const PRODUCT='azure_ai_translator_text';
@@ -83,7 +84,7 @@ async function readItems(db:D1Database,items:Item[],locale:string) {
       json_extract(value,'$.scope') scope,json_extract(value,'$.version') version,json_extract(value,'$.token') token
     FROM json_each(?)
   ), public_rows AS (
-    SELECT r.*,t.content_version,t.source_lang,t.source_lang_mode,x.provider,
+    SELECT r.*,t.content_version,t.source_lang,t.source_lang_mode,x.provider,x.created_at cache_created_at,x.projection_token cache_token,t.id topic_id,
       CASE WHEN r.token=x.projection_token THEN x.projection_key END projection_key,
       CASE WHEN r.token IS NULL OR r.token IS NOT x.projection_token THEN x.title_text END title_text,
       CASE WHEN r.token IS NULL OR r.token IS NOT x.projection_token THEN x.body_text END body_text
@@ -91,7 +92,7 @@ async function readItems(db:D1Database,items:Item[],locale:string) {
     LEFT JOIN topic_translations x ON x.topic_id=t.id AND x.locale=? AND x.source_version=t.content_version AND x.scope=r.scope
     WHERE r.type='topic'
     UNION ALL
-    SELECT r.*,c.content_version,c.source_lang,c.source_lang_mode,x.provider,
+    SELECT r.*,c.content_version,c.source_lang,c.source_lang_mode,x.provider,x.created_at,x.projection_token,c.topic_id,
       CASE WHEN r.token=x.projection_token THEN x.projection_key END,NULL,
       CASE WHEN r.token IS NULL OR r.token IS NOT x.projection_token THEN x.body_text END
     FROM requested r JOIN comments c ON c.id=r.id AND c.status='published'
@@ -227,7 +228,14 @@ export async function translationRoute(req:Request,env:Env,_user:Row|null,path:s
   const rows=await readItems(env.DB,items,locale);
   const config=legacy||input.generate===true?azureConfiguration(env):null;
   const enabled=config&&rows.some(r=>!r.provider)&&await one(env.DB,"SELECT 1 FROM settings WHERE key='translation_enabled' AND value='true'");
-  const refreshed=new Map<string,Item>();
+  const refreshed=new Map<string,Item & {createdAt?:number}>();
+  function queueRefresh(entry:Item,row:Row,createdAt?:number) {
+    const page=entry.page&&parseObjectKey(entry.page);
+    if(!entry.page||!page||(page.scope==='topic'&&page.target!==row.topic_id))return;
+    const prior=refreshed.get(entry.page);
+    if(!prior||prior.createdAt!==undefined&&(createdAt===undefined||createdAt>prior.createdAt))
+      refreshed.set(entry.page,{...entry,createdAt});
+  }
   const results=await Promise.all(items.map(async (entry,index)=>{
     const row=rows.find(row=>row.idx===index);
     if(!row){if(legacy)fail(404,'not_found');return result('not_found');}
@@ -235,11 +243,15 @@ export async function translationRoute(req:Request,env:Env,_user:Row|null,path:s
     if(row.source_lang_mode!=='legacy'&&sameLanguage(row.source_lang,locale))return result('same_language');
     if(row.source_lang_mode!=='legacy'&&row.source_lang==='und')return result('source_language_uncertain');
     if(row.projection_key)return {translated:true,key:row.projection_key};
-    if(row.provider)return cached(row);
+    if(row.provider){
+      if(ctx&&env.PUBLIC_TRANSLATION_DIRECT==='true'&&!entry.token&&row.cache_token)
+        queueRefresh(entry,row,row.cache_created_at);
+      return cached(row);
+    }
     if(!legacy&&input.generate!==true)return result('translation_cache_miss');
     if(!config||!enabled)return result('translation_not_configured');
     const {generated,...translation}=await generate(env,entry,row,locale,config);
-    if(generated&&entry.page)refreshed.set(entry.page,entry);
+    if(generated)queueRefresh(entry,row);
     return translation;
   }));
   // A cache hit in a mixed batch may have waited behind an external request.

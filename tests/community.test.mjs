@@ -1856,3 +1856,51 @@ test('signed-in CDN overlay falls back for private replies, stale versions and w
  assert.equal(own.topic.status,'hidden');
  assert.equal(own.projectionVersion,undefined);
 });
+
+test('a matching direct CDN translation needs no Worker request and can toggle back to original',async()=>{
+ const {translationView}=await import('../public/translation-ui.js');
+ const row={id:'cached',status:'published',source_lang:'en',source_lang_mode:'manual',content_version:2,
+  body:'Original',translations:{fr:{title:'Titre',body:'Texte',sourceVersion:2,provider:'azure'}}};
+ let requests=0;
+ const view=translationView('fr',{direct:true,configured:true,hasCache:true,request:async()=>{requests++;throw Error('unexpected');}});
+ view.markPage({projectionKey:'topics/cached/detail.json',topic:row});
+ await view.prime([['topic',row]]);
+ assert.equal(view.item('topic',row).result.body,'Texte');
+ assert.equal(view.item('topic',row).finished,true);
+ assert.equal(requests,0);
+ const stale={...row,id:'stale',content_version:3};
+ view.markPage({projectionKey:'topics/stale/detail.json',topic:stale});
+ assert.equal(view.item('topic',stale).result,null);
+ view.close();
+});
+
+test('a CDN miss on a D1 cache hit backfills direct text without calling Azure again',async t=>{
+ const {call,env,topic}=await fixture(),bucket=projectionBucket();
+ const {DB}=env;
+ mockTranslator(env,DB);
+ enableProjection(env,bucket);
+ Object.assign(env,{PUBLIC_CONTENT_ON_DEMAND:'true',PUBLIC_CONTENT_FALLBACK:'true',PUBLIC_TRANSLATION_DIRECT:'true'});
+ const id=await topic('CDN fixture','Fictional source for direct translation.');
+ const page=topicProjectionKey(id),jobs=[];
+ const ctx={waitUntil:promise=>jobs.push(promise)};
+ const flush=async()=>{while(jobs.length)await Promise.all(jobs.splice(0));};
+ let azureCalls=0;
+ t.mock.method(globalThis,'fetch',async(url,options)=>{
+  if(new URL(url).hostname==='api.cloudflare.com')return Response.json({success:true});
+  azureCalls++;return translatedByMock(url,options);
+ });
+ await call('/api/topics/'+id,'GET',undefined,null,{'x-spine-projection-miss':page},ctx);
+ await flush();
+ assert.equal((await (await bucket.get(page)).json()).data.topic.translations,undefined);
+ const initial=await translationBatch(call,[translationItem(id)],{locale:'fr'});
+ assert.equal(initial.data.items[0].translated,true);
+ const cached=await translationBatch(call,[translationItem(id,{page})],{locale:'fr',generate:false,ctx});
+ assert.equal(cached.data.items[0].translated,true);
+ await flush();
+ const projected=(await (await bucket.get(page)).json()).data.topic.translations.fr;
+ assert.deepEqual(projected,{title:cached.data.items[0].title,body:cached.data.items[0].body,provider:'azure',sourceVersion:1});
+ assert.equal(azureCalls,1);
+ await call('/api/admin/content','POST',{type:'topic',id,action:'hide',reason:'Mock withdrawal'},'admin',{},ctx);
+ await flush();
+ assert.equal((await (await bucket.get(page)).json()).data,null);
+});

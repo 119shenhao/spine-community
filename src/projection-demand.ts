@@ -64,7 +64,7 @@ export async function requestProjection(env:Env,req:Request,path:string) {
 
 // A freshly cached translation can enrich a page that has already been read.
 // Keep the original projection version and its existing reservation and purge lifecycle.
-export async function refreshProjectionTranslations(env:Env,items:{type:string;id:string;scope:string;page:string|null}[]) {
+export async function refreshProjectionTranslations(env:Env,items:{type:string;id:string;scope:string;page:string|null;createdAt?:number}[]) {
   const config=projectionConfig(env);
   if(!config?.onDemand||!config.enabled||!config.purgeReady||env.PUBLIC_CONTENT_READS!=='true')return;
   let queued=0;
@@ -72,6 +72,14 @@ export async function refreshProjectionTranslations(env:Env,items:{type:string;i
     const page=item.page&&parseObjectKey(item.page);
     if(!page||(page.scope==='feed'&&(item.type!=='topic'||item.scope!=='summary'))||
       (page.scope==='topic'&&item.type==='topic'&&(item.scope!=='full'||page.target!==item.id||page.index!==1)))continue;
+    if(item.createdAt!==undefined){
+      if(!config.directTranslations)continue;
+      const object=await config.bucket.head(item.page!);
+      if(!object||object.customMetadata?.visibility!=='public')continue;
+      const checked=Number(object.customMetadata.translationCheckedAt)||0;
+      if(object.customMetadata.translationFormat==='direct'&&
+        checked>item.createdAt)continue;
+    }
     const changed=await one(env.DB,`UPDATE public_projection_demand SET pending=1,refresh_translations=1,due_at=unixepoch()
       WHERE scope=? AND target=? AND object_index=? AND (reserved=1 OR pending=1) AND last_error IS NULL
       AND refresh_translations=0 RETURNING reserved`,
@@ -139,7 +147,8 @@ async function drainDemand(env:Env,config:Config,limit:number) {
         const index=page.object_index;
         if(page.refresh_translations)await stmt(db,`UPDATE public_projection_demand SET refresh_translations=0
           WHERE scope=? AND target=? AND object_index=?`,scope,target,index).run();
-        const current=await buildProjection(db,scope,target,index);
+        const checkedAt=now();
+        const current=await buildProjection(db,scope,target,index,config.directTranslations);
         if(current.version!==version)continue;
         const publicTopic=scope==='feed'||Boolean(await one(db,"SELECT 1 FROM topics WHERE id=? AND status='published'",target));
         const hasPage=current.data!==null&&publicTopic;
@@ -151,7 +160,7 @@ async function drainDemand(env:Env,config:Config,limit:number) {
             scope,target,index,scope,target,version,token,now());
           if(!reserved)continue;
           const key=objectKey(scope,target,index);
-          await writeProjection(config,key,scope,target,version,current.data);
+          await writeProjection(config,key,scope,target,version,current.data,false,checkedAt,Boolean(page.refresh_translations));
           stage='purge_failed';
           await purgeProjection(env,config,key);
         }

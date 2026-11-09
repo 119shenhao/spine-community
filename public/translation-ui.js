@@ -19,7 +19,7 @@ export async function unpackTranslation(result,entry) {
  return typeof value.body==='string'?value:null;
 }
 
-export function translationView(locale,{request,configured,hasCache,render,onStale}) {
+export function translationView(locale,{request,configured,hasCache,direct,render,onStale}) {
  const entries=new Map(),views=new WeakMap(),pages=new WeakMap(),queue=new Set();
  let closed=false,stale=false,timer,observer;
  function item(type,row,scope='full') {
@@ -27,14 +27,20 @@ export function translationView(locale,{request,configured,hasCache,render,onSta
    !Number.isSafeInteger(row.content_version))return null;
   const source=row.source_lang||'und';
   if(row.source_lang_mode&&row.source_lang_mode!=='legacy'&&(source==='und'||normalized(source)===normalized(locale)))return null;
-  const entry={type,id:row.id,version:row.content_version,scope,page:pages.get(row)||null,
-   token:row.translations?.[locale]?.token,ciphertext:row.translations?.[locale]?.ciphertext};
+  const page=pages.get(row)||null, projected=page&&row.translations?.[locale];
+  const ready=direct&&projected?.sourceVersion===row.content_version&&typeof projected.body==='string'&&
+   typeof projected.title==='string'&&typeof projected.provider==='string';
+  const entry={type,id:row.id,version:row.content_version,scope,page,
+   token:direct?undefined:projected?.token,ciphertext:direct?undefined:projected?.ciphertext};
   const key=keyOf(entry);
   let state=entries.get(key);
   if(!state){
-   state={entry,key,result:null,original:false,attempts:0,checked:false,finished:false,nodes:new Set()};
+   state={entry,key,result:ready?projected:null,original:false,attempts:0,checked:Boolean(ready),finished:Boolean(ready),nodes:new Set()};
    entries.set(key,state);
-  }else if(!state.entry.page&&entry.page)state.entry=entry;
+  }else if(!state.entry.page&&entry.page){
+   state.entry=entry;
+   if(ready){state.result=projected;state.checked=true;state.finished=true;}
+  }
   return state;
  }
  async function load(states,generate,signal) {

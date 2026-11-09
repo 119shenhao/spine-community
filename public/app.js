@@ -151,6 +151,7 @@ async function showAdmin(n,params){if(!state.user||!['admin','moderator'].includ
 }
 async function render(force=false){const n=++sequence;observer?.disconnect();translations?.close();
  translations=translationView(locale,{configured:state.health?.translationConfigured,hasCache:state.health?.translationCacheAvailable,
+  direct:state.health?.publicContent?.directTranslations,
   request:(payload,signal)=>api('/api/translate',{method:'POST',body:JSON.stringify(payload),signal}),render:renderTranslation,
   onStale:()=>{if(n===sequence)void render(true);}});
  state.topic=null;renderChrome();const {path,params}=route();try{

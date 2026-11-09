@@ -120,10 +120,10 @@ async function compareItem(env:Env,config:Config,scan:Row,item:Row) {
   let result='check_failed';
   try{
     if(item.expected_version===null){
-      const current=await buildProjection(env.DB,item.scope,item.target,item.object_index);
+      const current=await buildProjection(env.DB,item.scope,item.target,item.object_index,config.directTranslations);
       result=current.data?'changed_during_scan':scan.include_orphans?'orphan':'ignored';
     }else{
-      const current=await buildProjection(env.DB,item.scope,item.target,item.object_index);
+      const current=await buildProjection(env.DB,item.scope,item.target,item.object_index,config.directTranslations);
       if(current.version!==item.expected_version)result='changed_during_scan';
       else{
         expectedHash=await payloadHash(current.data);

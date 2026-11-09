@@ -3,15 +3,15 @@ import {Row,all} from './core';
 const PAGE_BYTES=384*1024;
 const encoder=new TextEncoder();
 
-export async function projectTranslations(db:D1Database,topics:Row[],comments:Row[],progress:Row[],scope:'full'|'summary') {
+export async function projectTranslations(db:D1Database,topics:Row[],comments:Row[],progress:Row[],scope:'full'|'summary',direct=false) {
   if(!topics.length&&!comments.length&&!progress.length)return;
   const refs=(rows:Row[])=>JSON.stringify(rows.map(r=>[r.id,r.content_version]));
-  const rows=await all(db,`SELECT 'topic' type,topic_id id,scope,locale,title_text,body_text,provider,projection_token,projection_key
+  const rows=await all(db,`SELECT 'topic' type,topic_id id,scope,locale,source_version,title_text,body_text,provider,projection_token,projection_key
     FROM topic_translations x JOIN json_each(?) r
       ON x.topic_id=json_extract(r.value,'$[0]') AND x.source_version=json_extract(r.value,'$[1]')
     WHERE scope=? AND projection_token IS NOT NULL AND projection_key IS NOT NULL
     UNION ALL
-    SELECT 'comment',comment_id,x.scope,locale,'',body_text,provider,projection_token,projection_key
+    SELECT 'comment',comment_id,x.scope,locale,source_version,'',body_text,provider,projection_token,projection_key
     FROM comment_translations x JOIN (
       SELECT value,'full' scope FROM json_each(?) UNION ALL SELECT value,'preview' FROM json_each(?)
     ) r ON x.comment_id=json_extract(r.value,'$[0]') AND x.source_version=json_extract(r.value,'$[1]') AND x.scope=r.scope
@@ -27,9 +27,15 @@ export async function projectTranslations(db:D1Database,topics:Row[],comments:Ro
   }
   let size=0;
   for(const r of rows){
-    const text=encoder.encode(JSON.stringify({title:r.title_text,body:r.body_text,provider:r.provider}));
+    const translation={title:r.title_text,body:r.body_text,provider:r.provider};
+    const text=encoder.encode(JSON.stringify(translation));
     if(text.length>96*1024||size+text.length+64>PAGE_BYTES)continue;
     size+=text.length+64;
+    const targets=index.get(r.type+':'+r.scope+':'+r.id)||[];
+    if(direct){
+      for(const row of targets)(row.translations??={})[r.locale]={...translation,sourceVersion:r.source_version};
+      continue;
+    }
     // The per-row key and a keyed IV give deterministic rebuilds without
     // reusing an IV for different content if a future migration modifies a row.
     const bytes=Uint8Array.from(atob(r.projection_key.replace(/-/g,'+').replace(/_/g,'/')),s=>s.charCodeAt(0));
@@ -42,6 +48,6 @@ export async function projectTranslations(db:D1Database,topics:Row[],comments:Ro
     const ciphertext=Array.from({length:Math.ceil(encrypted.length/16384)},(_,i)=>
       String.fromCharCode(...encrypted.subarray(i*16384,(i+1)*16384))).join('');
     const data={token:r.projection_token,ciphertext:btoa(ciphertext)};
-    for(const row of index.get(r.type+':'+r.scope+':'+r.id)||[]) (row.translations??={})[r.locale]=data;
+    for(const row of targets) (row.translations??={})[r.locale]=data;
   }
 }

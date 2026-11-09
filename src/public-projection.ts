@@ -17,6 +17,7 @@ export function projectionConfig(env:Env) {
   return {
     base, origin:preview?PREVIEW_ORIGIN:PRODUCTION_ORIGIN, bucket:env.PUBLIC_CONTENT_R2,
     enabled:env.PUBLIC_CONTENT_ENABLED==='true',
+    directTranslations:env.PUBLIC_TRANSLATION_DIRECT==='true',
     onDemand:env.PUBLIC_CONTENT_ON_DEMAND==='true',
     zoneConfigured,tokenConfigured,purgeReady:zoneConfigured&&tokenConfigured
   };
@@ -73,7 +74,7 @@ const commentsFor=(db:D1Database,target:string,index:number)=>stmt(db,`
  AND EXISTS(SELECT 1 FROM topics WHERE id=? AND status IN ('published','deleted'))
  ORDER BY c.rowid LIMIT 51 OFFSET ?`,target,target,(index-1)*50);
 
-export async function buildProjection(db:D1Database,scope:string,target:string,index:number) {
+export async function buildProjection(db:D1Database,scope:string,target:string,index:number,directTranslations=false) {
   const version=versionOf(db,scope,target);
   if(scope==='feed'){
     if(index>FEED_LIMIT)return {version:(await version.first<Row>())?.version||0,data:null,more:false};
@@ -88,7 +89,7 @@ export async function buildProjection(db:D1Database,scope:string,target:string,i
     const [v,raw,tags]=result.map(r=>r.results);
     const more=raw.length===21&&index<FEED_LIMIT;
     const topics=raw.slice(0,20).map(t=>({...t,terms:tags.filter(tag=>tag.topic_id===t.id)}));
-    await projectTranslations(db,topics,[],[],'summary');
+    await projectTranslations(db,topics,[],[],'summary',directTranslations);
     return {version:v[0]?.version||0,data:index===1||topics.length?{topics,next:more?index*20:null,similar:false,highlights:[]}:null,more};
   }
 
@@ -103,7 +104,7 @@ export async function buildProjection(db:D1Database,scope:string,target:string,i
   const comments=page.map(({cursor,...comment})=>comment);
   const replyData={comments,next:more?page.at(-1)!.cursor:null};
   if(topic)await projectTranslations(db,topic.status==='published'&&index===1?[topic]:[],
-    comments.filter(c=>c.status==='published'),progress||[],'full');
+    comments.filter(c=>c.status==='published'),progress||[],'full',directTranslations);
   const data=topic&&(index===1||comments.length)
     ?index===1?{topic:{...topic,terms:topic.status==='published'?tags:[]},progress,...replyData}:replyData
     :null;
@@ -153,7 +154,8 @@ export async function drainProjection(env:Env,limit=2) {
     const release=()=>stmt(db,'UPDATE public_projection SET lease=NULL,lease_until=0 WHERE scope=? AND target=? AND lease=?',scope,target,token).run();
     let error='projection_read_failed';
     try{
-      const current=await buildProjection(db,scope,target,index);
+      const checkedAt=now();
+      const current=await buildProjection(db,scope,target,index,config.directTranslations);
       if(current.version!==version)continue;
       const key=objectKey(scope,target,index);
       // Reserve a key before the first PUT so interrupted builds can scrub it.
@@ -161,7 +163,7 @@ export async function drainProjection(env:Env,limit=2) {
         WHERE scope=? AND target=? AND lease=? AND lease_until>? AND version=? RETURNING last_object`,index,scope,target,token,now(),version);
       if(!reserved)continue;
       error='r2_publish_failed';
-      await writeProjection(config,key,scope,target,version,current.data);
+      await writeProjection(config,key,scope,target,version,current.data,false,checkedAt);
       error='purge_failed';
       await purgeProjection(env,config,key);
       error='projection_checkpoint_failed';
@@ -186,20 +188,24 @@ export async function drainProjection(env:Env,limit=2) {
 }
 
 export async function writeProjection(config:NonNullable<ReturnType<typeof projectionConfig>>,key:string,
-  scope:string,target:string,version:number,data:unknown,invalidated=false) {
+  scope:string,target:string,version:number,data:unknown,invalidated=false,checkedAt=0,refresh=false) {
   const digest=await payloadHash(data);
   const visibility=invalidated?'invalidated':data===null?'withdrawn':'public';
   const old=await config.bucket.head(key);
   const oldVersion=Number(old?.customMetadata?.projectionVersion)||0;
   if(oldVersion>version)throw Error('r2_version_ahead');
-  if(oldVersion===version&&old?.customMetadata?.payloadHash===digest&&old.customMetadata.visibility===visibility)return;
+  const cacheControl='public, max-age=0, s-maxage=60, must-revalidate';
+  const format=config.directTranslations?'direct':'encrypted';
+  if(oldVersion===version&&old?.customMetadata?.payloadHash===digest&&old.customMetadata.visibility===visibility&&
+    old.customMetadata.translationFormat===format&&old.customMetadata.cachePolicy==='edge-60'&&
+    (!refresh||Number(old.customMetadata.translationCheckedAt)>=checkedAt))return;
   const result=await config.bucket.put(key,JSON.stringify({
     schemaVersion:1,contentVersion:version,generatedAt:new Date().toISOString(),
     ...(scope==='topic'?{topicId:target}:{}),...(invalidated?{invalidated:true}:{}),data
   }),{
     onlyIf:old?{etagMatches:old.etag}:{etagDoesNotMatch:'*'},
-    httpMetadata:{contentType:'application/json',cacheControl:'public, max-age=0, must-revalidate'},
-    customMetadata:{projectionVersion:String(version),payloadHash:digest,visibility}
+    httpMetadata:{contentType:'application/json',cacheControl},
+    customMetadata:{projectionVersion:String(version),payloadHash:digest,visibility,translationFormat:format,translationCheckedAt:String(checkedAt),cachePolicy:'edge-60'}
   });
   if(!result)throw Error('r2_conditional_write_conflict');
 }
