@@ -20,7 +20,7 @@ function wakeProjection(env:Env,ctx:ExecutionContext|undefined) {
 
 function changesProjection(path:string,method:string) {
  if(method==='PATCH'&&path==='/api/me')return true;
- if(method==='POST'&&['/api/admin/content','/api/admin/privacy','/api/admin/taxonomy','/api/admin/public-projection/repair','/api/admin/public-projection/retry'].includes(path))return true;
+ if(method==='POST'&&['/api/admin/content','/api/admin/privacy','/api/admin/taxonomy','/api/admin/public-projection/repair','/api/admin/public-projection/retry','/api/admin/language-review'].includes(path))return true;
  if(path.endsWith('/like'))return false; // Count updates are debounced in D1 and drained with the queue.
  return ['POST','PATCH','PUT','DELETE'].includes(method)&&
   (/^\/api\/topics(?:\/[^/]+(?:\/(?:comments|like))?)?$/.test(path)||/^\/api\/comments\/[^/]+(?:\/like)?$/.test(path));
@@ -72,7 +72,7 @@ export default {
      ready:projectionReady,enabled:Boolean(config?.enabled),purgeConfigured:Boolean(config?.purgeReady),
      zoneConfigured:Boolean(config?.zoneConfigured),tokenConfigured:Boolean(config?.tokenConfigured)
     };
-    return json({environment:env.APP_ENV==='preview'?'preview':'production',status:ready?'ok':'setup_required',stage:'v1-development',version:'0.4.0-translation-provider-controls.1',publicContent,databaseConfigured:Boolean(env.DB),databaseReady:ready,imageUploadsEnabled:false,importEnabled:importEnabled(req,env),googleConfigured:Boolean(env.GOOGLE_CLIENT_ID&&env.GOOGLE_CLIENT_SECRET),translationReady,translationCacheAvailable,...(env.APP_ENV==='preview'?{translationSetup:{...translationSetup(env),databaseEnabled:translationEnabled}}:{}),translationConfigured:translationReady&&translationEnabled&&translationConfigured(env),analyticsConfigured:Boolean(env.ANALYTICS_SALT)},ready?200:503);
+    return json({environment:env.APP_ENV==='preview'?'preview':'production',status:ready?'ok':'setup_required',stage:'v1-development',version:'0.5.0-language-detection-upgrade.1',publicContent,databaseConfigured:Boolean(env.DB),databaseReady:ready,imageUploadsEnabled:false,importEnabled:importEnabled(req,env),googleConfigured:Boolean(env.GOOGLE_CLIENT_ID&&env.GOOGLE_CLIENT_SECRET),translationReady,translationCacheAvailable,...(env.APP_ENV==='preview'?{translationSetup:{...translationSetup(env),databaseEnabled:translationEnabled}}:{}),translationConfigured:translationReady&&translationEnabled&&translationConfigured(env),analyticsConfigured:Boolean(env.ANALYTICS_SALT)},ready?200:503);
    }
    if(!env.DB)fail(503,'database_not_configured');
    if(!['GET','HEAD'].includes(req.method))sameOrigin(req);
