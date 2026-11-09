@@ -60,6 +60,75 @@ test('translation quota diagnostics are read-only and owner-only',async()=>{
  assert.equal(DB.db.prepare('SELECT day_chars FROM translation_budget WHERE id=1').get().day_chars,100);
 });
 
+test('administrator can set Azure budgets without resetting usage or enabling unintegrated providers',async t=>{
+ const {call,env,DB,topic}=await fixture();
+ mockTranslator(env,DB);
+ const before=await call('/api/admin/translation-providers','GET',undefined,'admin');
+ assert.equal(before.status,200,JSON.stringify(before));
+ assert.equal(before.data.activeProvider,'azure');
+ const azure=before.data.providers.find(p=>p.id==='azure'),ali=before.data.providers.find(p=>p.id==='aliyun');
+ assert.equal(azure.daily.limit,200000);
+ assert.equal(azure.monthly.limit,1800000);
+ assert.equal(azure.freeMonthly,2000000);
+ assert.equal(ali.implemented,false);
+ assert.equal(ali.selectable,false);
+ assert.equal((await call('/api/admin/translation-providers','GET',undefined,null)).status,401);
+ assert.equal((await call('/api/admin/translation-providers','GET',undefined,'mod')).status,403);
+ const save=async(daily,monthly,provider='azure')=>call('/api/admin/translation-providers','POST',
+  {provider,active_provider:provider,daily_limit:daily,monthly_limit:monthly},'admin');
+ assert.equal((await save(200000,2000000)).status,400);
+ assert.equal((await save(300,200)).status,400);
+ assert.equal((await save(200,500,'aliyun')).status,400);
+ assert.equal((await call('/api/admin/translation-providers','POST',{
+  provider:'azure',active_provider:'azure',daily_limit:200,monthly_limit:500},'mod')).status,403);
+ const day=new Date().toISOString().slice(0,10),month=day.slice(0,7);
+ DB.db.prepare("UPDATE translation_budget SET day_utc=?,month_utc=?,day_chars=150,month_chars=150 WHERE id=1").run(day,month);
+ const changed=await save(200,500);
+ assert.equal(changed.status,200,JSON.stringify(changed));
+ assert.equal(changed.data.providers.find(p=>p.id==='azure').daily.remaining,50);
+ assert.equal(DB.db.prepare('SELECT day_chars FROM translation_budget WHERE id=1').get().day_chars,150);
+ assert.equal(DB.db.prepare("SELECT value FROM settings WHERE key='translation_azure_daily_limit'").get().value,'200');
+ const tid=await topic('Test Azure quota','Text longer than fifty characters that cannot fit the remaining daily budget.');
+ let requestCount=0;
+ t.mock.method(globalThis,'fetch',async(url,options)=>{
+  requestCount++;
+  return translatedByMock(url,options);
+ });
+ const denied=await translationBatch(call,[translationItem(tid)],{locale:'zh-CN'});
+ assert.equal(denied.data.items[0].reason,'translation_quota_reached',JSON.stringify(denied.data));
+ assert.equal(requestCount,0);
+ const allowed=await save(300,500);
+ assert.equal(allowed.status,200);
+ const success=await translationBatch(call,[translationItem(tid)],{locale:'zh-CN'});
+ assert.equal(success.data.items[0].translated,true,JSON.stringify(success.data));
+ assert.equal(requestCount,1);
+ assert.equal((await call('/api/admin/translation-providers','GET',undefined,'admin')).data.providers[0].daily.limit,300);
+ assert.equal(DB.db.prepare("SELECT count(*) n FROM moderation_actions WHERE target_id='translation_azure_budget'").get().n,2);
+});
+
+test('translation provider editor renders independent Azure budget and unavailable Aliyun',async()=>{
+ const app=readFileSync('public/app.js','utf8'),view=readFileSync('public/translation-admin.js','utf8');
+ assert.match(app,/translationProviders/);
+ assert.match(app,/id==='translation-provider-form'/);
+ assert.match(view,/name="daily_limit"/);
+ assert.match(view,/name="monthly_limit"/);
+ assert.match(view,/not_integrated/);
+ const {renderTranslationAdmin}=await import('../public/translation-admin.js');
+ const target={innerHTML:''};
+ await renderTranslationAdmin(target,async()=>({activeProvider:'azure',capMonthly:1900000,providers:[
+  {id:'azure',name:'Azure',active:true,implemented:true,freeMonthly:2000000,
+   status:'ready',daily:{limit:200000,reserved:9982,remaining:190018},
+   monthly:{limit:1800000,reserved:9982,remaining:1790018},
+   rolling31Day:{limit:1800000,recorded:9982,remaining:1790018}},
+  {id:'aliyun',name:'Alibaba',active:false,implemented:false,status:'not_integrated'}
+ ]}),x=>String(x),'zh-CN');
+ assert.match(target.innerHTML,/value="200000"/);
+ assert.match(target.innerHTML,/value="1800000"/);
+ assert.match(target.innerHTML,/max="1900000"/);
+ assert.match(target.innerHTML,/Alibaba/);
+ assert.match(target.innerHTML,/不能启用/);
+});
+
 test('translation reservation hard limit and race with deletion',async()=>{const {call,topic,env,DB}=await fixture();const id=await topic('A title','A longer body for translating');Object.assign(env,{TRANSLATION_ENABLED:'true',TRANSLATOR_KEY:'test',TRANSLATOR_F0_VERIFIED_AT:new Date(Date.now()-60000).toISOString(),TRANSLATION_DAILY_LIMIT:'60',TRANSLATION_MONTHLY_LIMIT:'60'});DB.db.exec("UPDATE settings SET value='true' WHERE key='translation_enabled'");const original=globalThis.fetch;let requests=0;globalThis.fetch=async()=>{requests++;await call('/api/topics/'+id,'DELETE',{},'alice');return Response.json([{translations:[{text:'标题'}]},{translations:[{text:'正文'}]}]);};try{const r=await call('/api/translate','POST',{type:'topic',id,locale:'zh-CN'});assert.equal(r.data.translated,false);assert.equal(DB.db.prepare('SELECT count(*) n FROM topic_translations').get().n,0);const id2=await topic('Another title','Enough text to hit monthly limit');const result=await call('/api/translate','POST',{type:'topic',id:id2,locale:'zh-CN'});assert.equal(result.data.reason,'translation_quota_reached');assert.equal(requests,1);}finally{globalThis.fetch=original;}});
 test('pageview metrics exclude ordinary API requests; privacy export and requests',async()=>{const {call,topic,DB}=await fixture();await topic();await call('/api/topics');assert.equal(DB.db.prepare('SELECT count(*) n FROM daily_traffic_metrics').get().n,0);await call('/api/pageview','POST',{path:'/'});assert.equal(DB.db.prepare('SELECT pv FROM daily_traffic_metrics').get().pv,1);assert.equal(DB.db.prepare('SELECT uv_estimate FROM daily_traffic_metrics').get().uv_estimate,1);assert.equal((await call('/api/me/export')).data.profile.id,'alice');assert.equal((await call('/api/privacy-requests','POST',{type:'account_delete'})).status,201);assert.equal((await call('/api/privacy-requests')).data.items.length,1);});
 test('notification focus can reach comments after page one and progress-only pagination works',async()=>{const {call,topic,DB}=await fixture();const id=await topic();for(let i=0;i<55;i++)DB.db.prepare("INSERT INTO comments(id,topic_id,author_id,body,status) VALUES(?,?,'bob',?,'published')").run('c'+i,id,'Reply '+i);const r=await call('/api/topics/'+id+'?focus=c54');assert.equal(r.status,200);assert(r.data.comments.some(c=>c.id==='c54'));});
