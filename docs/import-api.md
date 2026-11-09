@@ -14,8 +14,8 @@
 
 ## 账号
 
-- 固定内部 ID：`system-unknown-import`；昵称／前台作者名：**未知用户**。
-- 数据库迁移 `migrations/v1/0003_import.sql` 创建唯一的系统账号（`is_system=1`）。不计入正常注册人数。
+- 固定内部 ID：`system-unknown-import`（不变）；昵称／前台作者名：**Anonymous**（原为“未知用户”；2026-11-09 确认更名）。
+- 数据库迁移 `migrations/v1/0003_import.sql` 创建唯一的系统账号（`is_system=1`），后续迁移 `migrations/v1/0099_import_author_english_name.sql` 仅将旧昵称更新为 `Anonymous`；历史迁移仍保留原始内容，不计入正常注册人数。开发分支已提交，预览数据库应用情况仍需验证；生产需按发布审批迁移。
 - 无 Google 身份、密码或登录入口。数据库约束禁止给系统账号创建身份、会话、管理角色；Worker 也拒绝其登录与会话。
 - 所有导入内容的作者由服务端固定，不能指定其他用户；不保存原站作者、原站帖子编号、来源链接。
 
@@ -112,7 +112,7 @@ curl --request POST \
 - 远程健康检查：`version=0.2.0-preview.2`、`databaseReady=true`、`importEnabled=true`。
 - 实际无密钥／无 Cookie 导入：批量1帖＋2条嵌套回复返回201；原请求重放返回200及原ID；单独追加1条回复、单帖接口均返回201。
 - 两个相同请求并发提交实际得到201和200，内容ID相同；跨帖上级返回400 `cross_topic_reply`，伪造作者返回400 `unknown_import_field`，无效批次返回400 `invalid_title`。
-- 浏览器确认导入帖子及3条回复作者均显示“未知用户”，楼中楼链接正常，无楼主进展。测试后预览库保留3篇明确标为 Development test 的虚构帖子和3条回复，便于复查。
+- 2026-11-06 历史验收：浏览器确认导入帖子及3条回复作者均显示旧称“未知用户”，楼中楼链接正常，无楼主进展。测试后预览库保留3篇明确标为 Development test 的虚构帖子和3条回复，便于复查。
 - [查看实际测试讨论](https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev/#/topic/a2a118dc-a057-474d-9c05-a79c384d3bf6)。
 - 生产关闭由隔离Worker测试确认403且零数据库访问；**未向正式站发送写入测试、未提交main、未迁移生产D1**。现有正式站未发布本次代码。
 
