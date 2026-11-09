@@ -198,7 +198,7 @@ export async function translationProvidersStatus(env:Env) {
     activeProvider:selected.activeProvider,
     providers:TRANSLATION_PROVIDER_CATALOG.map(provider=>({
       id:provider.id,name:provider.name,implemented:provider.implemented,
-      selectable:provider.id==='azure'&&translationConfigured(env),
+      selectable:provider.id==='azure',
       active:provider.id===selected.activeProvider,
       freeMonthly:provider.freeMonthly,
       status:provider.id==='azure'
