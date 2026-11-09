@@ -1,5 +1,5 @@
 import {Env,Row,all,one,stmt,body,json,requireRole,fail,now,id,rate} from './core';
-import {buildProjection,FEED_LIMIT,objectKey,parseObjectKey,payloadHash,projectionConfig} from './public-projection';
+import {buildProjection,FEED_LIMIT,objectKey,parseObjectKey,payloadHash,splitLocaleData,projectionConfig} from './public-projection';
 import {drainPublicContent} from './projection-demand';
 
 const ROOT='/api/admin/public-projection';
@@ -48,7 +48,7 @@ async function startScan(env:Env,config:Config,user:Row,input:Row) {
         CASE WHEN ? THEN p.last_object ELSE max(1,p.last_object,
           CASE WHEN p.scope='feed' THEN min(?,(SELECT (count(*)+19)/20 FROM topics WHERE status='published'))
           WHEN EXISTS(SELECT 1 FROM topics t WHERE t.id=p.target AND t.status IN ('published','deleted'))
-          THEN (SELECT (count(*)+49)/50 FROM comments c WHERE c.topic_id=p.target AND c.status IN ('published','deleted'))
+          THEN (SELECT (count(*)+?-1)/? FROM comments c WHERE c.topic_id=p.target AND c.status IN ('published','deleted'))
           ELSE 1 END) END objects
       FROM public_projection p WHERE (? IS NULL OR (p.scope='topic' AND p.target=?))
     ),
@@ -64,8 +64,8 @@ async function startScan(env:Env,config:Config,user:Row,input:Row) {
     INSERT INTO public_projection_scan_item(scan_id,object_key,scope,target,object_index,expected_version)
     SELECT ?,CASE WHEN scope='feed' THEN 'feeds/latest/page-'||n||'.json'
       WHEN n=1 THEN 'topics/'||target||'/detail.json'
-      ELSE 'topics/'||target||'/comments/page-'||n||'.json' END,scope,target,n,version FROM expected LIMIT ?`,
-    Number(config.onDemand),FEED_LIMIT,target,target,SCAN_BUDGET+1,Number(config.onDemand),scanId,SCAN_BUDGET+1);
+      ELSE 'topics/'||target||'/comments/'||?||'page-'||n||'.json' END,scope,target,n,version FROM expected LIMIT ?`,
+    Number(config.onDemand),FEED_LIMIT,config.pageSize,config.pageSize,target,target,SCAN_BUDGET+1,Number(config.onDemand),scanId,config.pageSize===20?'v2/':'',SCAN_BUDGET+1);
   if(await one(env.DB,"SELECT id FROM public_projection_scan WHERE environment=? AND phase IN ('listing','comparing')",env.APP_ENV))fail(409,'scan_already_active');
   try{
     await env.DB.batch([
@@ -120,18 +120,18 @@ async function compareItem(env:Env,config:Config,scan:Row,item:Row) {
   let result='check_failed';
   try{
     if(item.expected_version===null){
-      const current=await buildProjection(env.DB,item.scope,item.target,item.object_index,config.directTranslations);
+      const current=await buildProjection(env.DB,item.scope,item.target,item.object_index,config.directTranslations,config.pageSize);
       result=current.data?'changed_during_scan':scan.include_orphans?'orphan':'ignored';
     }else{
-      const current=await buildProjection(env.DB,item.scope,item.target,item.object_index,config.directTranslations);
+      const current=await buildProjection(env.DB,item.scope,item.target,item.object_index,config.directTranslations,config.pageSize);
       if(current.version!==item.expected_version)result='changed_during_scan';
       else{
-        expectedHash=await payloadHash(current.data);
+        expectedHash=await payloadHash(config.separateTranslations?splitLocaleData(current.data).source:current.data);
         result=item.r2_version===null?'missing'
           :item.r2_version<current.version?'outdated'
           :item.r2_version!==current.version?'mismatch'
           :item.r2_hash===expectedHash?'ok'
-          :config.onDemand&&item.r2_hash===await payloadHash({})?'ignored':'mismatch';
+          :config.onDemand&&item.r2_hash===await payloadHash(config.separateTranslations?splitLocaleData({}).source:{})?'ignored':'mismatch';
         if(result==='ok'&&scan.deep){
           const object=await config.bucket.get(item.object_key);
           if(!object)result='missing';
@@ -245,7 +245,7 @@ export async function projectionAdminRoute(req:Request,env:Env,user:Row|null,pat
         WHERE ? AND d.last_error IS NOT NULL)
       ORDER BY priority DESC,updated_at LIMIT 25`,Number(config.onDemand));
     return json({scan:scan?await scanReport(env,scan,url.searchParams.get('after')||''):null,
-      queue,failed:failed.map(row=>({...row,key:objectKey(row.scope,row.target,row.object_index)})),purge_ready:config.purgeReady,enabled:config.enabled,preview:env.APP_ENV==='preview'});
+      queue,failed:failed.map(row=>({...row,key:objectKey(row.scope,row.target,row.object_index,config.pageSize)})),purge_ready:config.purgeReady,enabled:config.enabled,preview:env.APP_ENV==='preview'});
   }
   if(req.method!=='POST')fail(405,'method_not_allowed');
   await rate(env.DB,'projection-admin:'+owner.id,30,60);
