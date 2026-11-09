@@ -194,7 +194,7 @@ export async function writeProjection(config:NonNullable<ReturnType<typeof proje
   const old=await config.bucket.head(key);
   const oldVersion=Number(old?.customMetadata?.projectionVersion)||0;
   if(oldVersion>version)throw Error('r2_version_ahead');
-  const cacheControl='public, max-age=0, s-maxage=60, must-revalidate';
+  const cacheControl='public, max-age=0, s-maxage=7200, must-revalidate';
   const format=config.directTranslations?'direct':'encrypted';
   if(oldVersion===version&&old?.customMetadata?.payloadHash===digest&&old.customMetadata.visibility===visibility&&
     old.customMetadata.translationFormat===format&&old.customMetadata.cachePolicy==='edge-60'&&
