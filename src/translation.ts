@@ -1,6 +1,7 @@
 import {Env,Row,all,one,stmt,now,id,b64,fail,json,body,locales} from './core';
-import {detectSourceLanguage,sameLanguage} from './source-language';
-import {refreshProjectionTranslations} from './projection-demand';
+import {detectSourceLanguageEvidence,sameLanguage} from './source-language';
+import {confirmedLanguage,confirmAzureLanguage} from './language-state';
+import {refreshProjectionTranslations,drainPublicContent} from './projection-demand';
 import {parseObjectKey} from './public-projection';
 
 const AZURE_ENDPOINT='https://api.cognitive.microsofttranslator.com';
@@ -84,20 +85,26 @@ async function readItems(db:D1Database,items:Item[],locale:string) {
       json_extract(value,'$.scope') scope,json_extract(value,'$.version') version,json_extract(value,'$.token') token
     FROM json_each(?)
   ), public_rows AS (
-    SELECT r.*,t.content_version,t.source_lang,t.source_lang_mode,x.provider,x.created_at cache_created_at,t.id topic_id,
+    SELECT r.*,t.content_version,COALESCE(v.language,t.source_lang) source_lang,
+      CASE WHEN v.language IS NOT NULL THEN 'auto' ELSE t.source_lang_mode END source_lang_mode,
+      x.provider,x.created_at cache_created_at,t.id topic_id,
       CASE WHEN r.token=x.projection_token THEN x.projection_key END projection_key,
       CASE WHEN r.token IS NULL OR r.token IS NOT x.projection_token THEN x.title_text END title_text,
       CASE WHEN r.token IS NULL OR r.token IS NOT x.projection_token THEN x.body_text END body_text
     FROM requested r JOIN topics t ON t.id=r.id AND t.status='published'
     LEFT JOIN topic_translations x ON x.topic_id=t.id AND x.locale=? AND x.source_version=t.content_version AND x.scope=r.scope
+    LEFT JOIN content_language_verifications v ON v.content_type='topic' AND v.content_id=t.id AND v.content_version=t.content_version
     WHERE r.type='topic'
     UNION ALL
-    SELECT r.*,c.content_version,c.source_lang,c.source_lang_mode,x.provider,x.created_at,c.topic_id,
+    SELECT r.*,c.content_version,COALESCE(v.language,c.source_lang) source_lang,
+      CASE WHEN v.language IS NOT NULL THEN 'auto' ELSE c.source_lang_mode END source_lang_mode,
+      x.provider,x.created_at,c.topic_id,
       CASE WHEN r.token=x.projection_token THEN x.projection_key END,NULL,
       CASE WHEN r.token IS NULL OR r.token IS NOT x.projection_token THEN x.body_text END
     FROM requested r JOIN comments c ON c.id=r.id AND c.status='published'
     JOIN topics root ON root.id=c.topic_id AND ${allowedComment}
     LEFT JOIN comment_translations x ON x.comment_id=c.id AND x.locale=? AND x.source_version=c.content_version AND x.scope=r.scope
+    LEFT JOIN content_language_verifications v ON v.content_type='comment' AND v.content_id=c.id AND v.content_version=c.content_version
     WHERE r.type='comment' AND (r.scope<>'preview' OR c.kind='progress')
   ) SELECT * FROM public_rows`,JSON.stringify(items),locale,locale);
 }
@@ -222,8 +229,9 @@ async function generate(env:Env,entry:Item,row:Row,locale:string,config:Settings
       ${entry.scope==='preview'?"AND c.kind='progress'":''}`;
   const c=await one(db,currentSql,entry.id,version);
   if(!c)return result('content_changed');
-  const source=c.source_lang_mode==='legacy'?detectSourceLanguage(...(topic?[c.title,c.body]:[c.body])):c.source_lang;
-  if(source==='und')return result('source_language_uncertain');
+  const evidence=await confirmedLanguage(db,entry.type,c,topic?[c.title,c.body]:[c.body]);
+  let source=evidence.language;
+  const needsAutoDetection=source==='und';
   if(sameLanguage(source,locale))return result('same_language');
   const token=id(),lease=[entry.type,c.id,locale,version,token];
   const lock=await one(db,`INSERT INTO translation_jobs(content_type,content_id,locale,source_version,lease_token,expires_at)
@@ -257,7 +265,7 @@ async function generate(env:Env,entry:Item,row:Row,locale:string,config:Settings
     if(payload.some(text=>/[\w.+-]+@[\w.-]+\.[a-z]{2,}|\b(?:bearer\s+ya29\.|(?:access|refresh|id)_token=)|(?:phone|tel[eé]fono|t[eé]l[eé]phone|telefon|whatsapp|电话|電話|微信)[:：\s]+\+?[\d(). -]{7,}/iu.test(text)))
       return result('source_contains_contact_details');
 
-    let data:{translations:{text:string,to?:string}[]}[]=[];
+    let data:{translations:{text:string,to?:string}[];detectedLanguage?:{language:string;score:number}}[]=[];
     if(chars){
       const day=new Date().toISOString().slice(0,10),month=day.slice(0,7);
       const selected=await translationProviderSettings(env);
@@ -275,7 +283,7 @@ async function generate(env:Env,entry:Item,row:Row,locale:string,config:Settings
         day,day,config.verifiedAt,day,chars,daily,month,chars,monthly,day,chars,monthly,...lease,c.id,version);
       if(!reservation)return result('translation_quota_reached');
       const url=new URL(config.url);
-      url.searchParams.set('from',azureSourceLocale(source));
+      if(!needsAutoDetection)url.searchParams.set('from',azureSourceLocale(source));
       url.searchParams.set('to',translatorTargetLocale(locale));
       const response=await fetch(url,{method:'POST',redirect:'manual',headers:config.headers,
         body:JSON.stringify(payload.map(Text=>({Text}))),signal:AbortSignal.timeout(10000)});
@@ -301,6 +309,32 @@ async function generate(env:Env,entry:Item,row:Row,locale:string,config:Settings
         retryAfter=120;return result('translation_unavailable');
       }
     }
+    if(needsAutoDetection){
+      const parsed=data as unknown as Array<{detectedLanguage?:{language?:unknown;score?:unknown}}>;
+      const detected=parsed.at(-1)?.detectedLanguage;
+      const raw=detected?.language,score=detected?.score;
+      const primary=typeof raw==='string'?raw.trim():null;
+      // Azure sometimes reports generic Chinese. Only accept a specific script
+      // after our own text has enough evidence to distinguish Han variants.
+      const normalized=primary?.toLowerCase()==='zh'
+        ?detectSourceLanguageEvidence(...(topic?[c.title,c.body]:[c.body])).language
+        :primary;
+      const detectedScore=typeof score==='number'?score:NaN;
+      const reliable=typeof normalized==='string'&&/^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})?$/.test(normalized)&&
+        normalized!=='und'&&Number.isFinite(detectedScore)&&detectedScore>=.65&&detectedScore<=1;
+      if(!reliable)return result('source_language_uncertain');
+      // A strongly detected title in another language is not safe to represent
+      // as the same original-language record as the body.
+      const conflicting=parsed.slice(0,-1).some(part=>{
+        const candidate=part.detectedLanguage;
+        return typeof candidate?.language==='string'&&typeof candidate.score==='number'&&
+          candidate.score>=.65&&!sameLanguage(candidate.language,normalized);
+      });
+      if(conflicting)return result('source_language_uncertain');
+      if(!await confirmAzureLanguage(db,entry.type,c,normalized,detectedScore))return result('content_changed');
+      source=normalized;
+      if(sameLanguage(source,locale))return {translated:false,reason:'same_language',languageConfirmed:true};
+    }
     const translatedTitle=title?data[0].translations[0].text:other?.title_text||'';
     const translatedBody=bodyFromOther||data.at(-1)!.translations[0].text;
     const key=b64(crypto.getRandomValues(new Uint8Array(32)));
@@ -313,7 +347,7 @@ async function generate(env:Env,entry:Item,row:Row,locale:string,config:Settings
       WHERE ${validLease} AND EXISTS(${currentSql}) RETURNING provider`,
       ...parameters,source,PRODUCT,token,key,...lease,c.id,version);
     if(!inserted)return result('content_changed');
-    return {translated:true,title:translatedTitle,body:translatedBody,provider:'azure',generated:true};
+    return {translated:true,title:translatedTitle,body:translatedBody,provider:'azure',generated:true,languageConfirmed:needsAutoDetection};
   }catch{
     retryAfter=120;
     return result('translation_unavailable');
@@ -351,7 +385,8 @@ export async function translationRoute(req:Request,env:Env,_user:Row|null,path:s
     if(!row){if(legacy)fail(404,'not_found');return result('not_found');}
     if(entry.version!==null&&entry.version!==row.content_version)return result('content_changed');
     if(row.source_lang_mode!=='legacy'&&sameLanguage(row.source_lang,locale))return result('same_language');
-    if(row.source_lang_mode!=='legacy'&&row.source_lang==='und')return result('source_language_uncertain');
+    // An unknown source is eligible for one budget-checked Azure auto-detect
+    // request, rather than being permanently blocked at the browser.
     if(row.projection_key)return {translated:true,key:row.projection_key};
     if(row.provider){
       if(ctx&&env.PUBLIC_TRANSLATION_DIRECT==='true'&&!entry.token)
@@ -376,6 +411,8 @@ export async function translationRoute(req:Request,env:Env,_user:Row|null,path:s
       }else results[i]=current.projection_key?{translated:true,key:current.projection_key}:cached(current);
     }
   }
+  if(ctx&&results.some(item=>(item as Row).languageConfirmed))ctx.waitUntil(drainPublicContent(env,2)
+    .catch(()=>console.warn('language_projection_refresh_failed')));
   if(ctx&&refreshed.size)ctx.waitUntil(refreshProjectionTranslations(env,[...refreshed.values()])
     .catch(()=>console.warn('public_projection_translation_refresh_failed')));
   return json(legacy?results[0]:{items:results});
