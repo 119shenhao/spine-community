@@ -107,6 +107,56 @@ function limit(raw:string|undefined,fallback:number,max:number) {
   return /^\d+$/.test(raw)?Math.min(Number(raw),max):0;
 }
 
+// Read-only diagnostics for the site owner. This deliberately uses the same
+// budget windows and thresholds as generate(), including the conservative
+// rolling 31-day guard. Do not relax financial safety limits automatically.
+export async function translationBudgetStatus(env:Env) {
+  const day=new Date().toISOString().slice(0,10),month=day.slice(0,7),time=now();
+  const daily=limit(env.TRANSLATION_DAILY_LIMIT,10000,100000);
+  const monthly=limit(env.TRANSLATION_MONTHLY_LIMIT,200000,1000000);
+  const budget=await one(env.DB,`SELECT day_utc,month_utc,day_chars,month_chars,
+    cooldown_until,provider_blocked_at FROM translation_budget WHERE id=1`);
+  const rolling=await one(env.DB,`SELECT COALESCE(sum(characters),0) AS chars
+    FROM translation_usage_daily WHERE provider='azure' AND day_utc>=date(?,'-31 day')`,day);
+  const dayUsed=budget?.day_utc===day?Number(budget.day_chars)||0:0;
+  const monthUsed=budget?.month_utc===month?Number(budget.month_chars)||0:0;
+  const rollingUsed=Number(rolling?.chars)||0;
+  const verifiedAt=verifiedFreeTierAt(env);
+  const cooldownUntil=Number(budget?.cooldown_until)||0;
+  const blockedAt=Number(budget?.provider_blocked_at)||0;
+  const disabled=await one(env.DB,`SELECT value FROM settings WHERE key='translation_enabled'`);
+  const checks={
+    translationEnabled:disabled?.value==='true',
+    freeTierVerified:verifiedAt!==null,
+    providerNotBlocked:verifiedAt!==null&&blockedAt<verifiedAt,
+    cooldownElapsed:cooldownUntil<=time,
+    dailyRemaining:daily-dayUsed,
+    monthlyRemaining:monthly-monthUsed,
+    rollingRemaining:monthly-rollingUsed
+  };
+  const blockers=[
+    ...(!checks.translationEnabled?['translation_disabled']:[]),
+    ...(!checks.freeTierVerified?['free_tier_not_verified']:[]),
+    ...(!checks.providerNotBlocked?['provider_blocked']:[]),
+    ...(!checks.cooldownElapsed?['provider_cooldown']:[]),
+    ...(checks.dailyRemaining<=0?['daily_limit_reached']:[]),
+    ...(checks.monthlyRemaining<=0?['monthly_limit_reached']:[]),
+    ...(checks.rollingRemaining<=0?['rolling_31_day_limit_reached']:[])
+  ];
+  return {
+    dayUTC:day,monthUTC:month,
+    daily:{limit:daily,reserved:dayUsed,remaining:Math.max(0,daily-dayUsed)},
+    monthly:{limit:monthly,reserved:monthUsed,remaining:Math.max(0,monthly-monthUsed)},
+    rolling31Day:{limit:monthly,recorded:rollingUsed,remaining:Math.max(0,monthly-rollingUsed)},
+    provider:{freeTierVerified:verifiedAt!==null,
+      blockedSinceVerification:verifiedAt!==null&&blockedAt>=verifiedAt,
+      cooldownActive:cooldownUntil>time,cooldownUntilUTC:cooldownUntil>time?
+        new Date(cooldownUntil*1000).toISOString():null},
+    translationEnabled:checks.translationEnabled,
+    blockers
+  };
+}
+
 async function generate(env:Env,entry:Item,row:Row,locale:string,config:Settings) {
   const db=env.DB,topic=entry.type==='topic',table=topic?'topics':'comments';
   const version=row.content_version;
