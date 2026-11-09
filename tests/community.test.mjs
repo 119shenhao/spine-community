@@ -1786,7 +1786,7 @@ test('signed-in public CDN reads attach interaction state without sending creden
  await call('/api/topics/'+id+'/bookmark','PUT',{},'bob');
  await call('/api/topics/'+id+'/follow','PUT',{},'bob');
  await call('/api/comments/'+replyId+'/like','PUT',{},'bob');
- const health={environment:'preview',publicContent:{baseUrl:'https://spine-data-dev.nbn369.com',fallback:true,onDemand:true}};
+ const health={environment:'preview',publicContent:{signedIn:true,baseUrl:'https://spine-data-dev.nbn369.com',fallback:true,onDemand:true}};
  const feed=await buildProjection(DB,'feed','latest',1),detail=await buildProjection(DB,'topic',id,1);
  const requests=[];
  const fetcher=async(url,options)=>{
@@ -1834,7 +1834,7 @@ test('signed-in CDN overlay falls back for private replies, stale versions and w
  const privateReply=await call('/api/topics/'+id+'/comments','POST',{body:'A promo code awaits review.',source_lang:'en'},'bob');
  assert.equal(privateReply.data.status,'pending_review');
  let snapshot=await buildProjection(DB,'topic',id,1),withdrawn=false;
- const health={environment:'preview',publicContent:{baseUrl:'https://spine-data-dev.nbn369.com',fallback:true}};
+ const health={environment:'preview',publicContent:{signedIn:true,baseUrl:'https://spine-data-dev.nbn369.com',fallback:true}};
  const reader=user=>publicContentReader(health,{id:user},async(path,opts)=>{
   const response=await call(path,opts?.method||'GET',opts?.body?JSON.parse(opts.body):undefined,user);
   if(response.status!==200)throw Object.assign(Error(response.data.error),{status:response.status});

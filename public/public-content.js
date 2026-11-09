@@ -10,7 +10,7 @@ function contentError(status) {
 
 export function publicContentReader(health,user,api,fetcher=fetch) {
  const base=health?.publicContent?.baseUrl;
- const eligible=base===HOSTS[health?.environment]&&Boolean(base);
+ const eligible=base===HOSTS[health?.environment]&&Boolean(base)&&(!user||health.publicContent.signedIn===true);
  async function applyViewer(data,key,version) {
   const topics=data.topics||(data.topic?[data.topic]:[]);
   const comments=[...(data.comments||[]),...(data.progress||[])];
