@@ -41,3 +41,19 @@ jobs:
           console.error('Preview deployment not confirmed:',JSON.stringify(last));
           process.exit(1);
           JS
+      - name: Validate public frontend modules (read-only)
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          const base='https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev';
+          for(const [path,needle] of [
+            ['/','/app.js'],['/app.js','renderLanguageReview'],
+            ['/language-admin.js','language-review-form'],['/translation-admin.js','translation-provider-form']
+          ]){
+            const response=await fetch(base+path,{redirect:'error',signal:AbortSignal.timeout(12000)});
+            assert.equal(response.status,200,path+' is unavailable');
+            const content=await response.text();
+            assert(content.includes(needle),path+' is missing its expected module code');
+            console.log('Frontend asset available:',path,'length',content.length);
+          }
+          JS
