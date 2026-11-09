@@ -1926,6 +1926,8 @@ test('separate locale CDN pages keep 19 cached translations when replies grow 19
  }
  const first=await publish();
  assert.deepEqual(first.paths,[localeKey]);
+ // A retry following a failed CDN purge must still include unchanged locale keys.
+ assert.deepEqual((await publish()).paths,[localeKey]);
  const original=(await (await bucket.get(originalKey)).json()).data;
  assert.equal(original.topic.body,'Long English original for the split CDN test.');
  assert.equal(original.comments.length,19);
@@ -1942,6 +1944,16 @@ test('separate locale CDN pages keep 19 cached translations when replies grow 19
   separateTranslations:true,pageSize:20}},null,async()=>{throw Error('unnecessary_worker_request')},fetcher,'zh-CN');
  const read=await reader.topic(id,new URLSearchParams());
  assert.equal(read.comments[0].translations['zh-CN'].body,'已有中文译文 1');
+ const {translationView}=await import('../public/translation-ui.js');
+ let translateRequests=0;
+ const view=translationView('zh-CN',{direct:true,configured:true,hasCache:true,
+  request:async()=>{translateRequests++;throw Error('unnecessary_worker_translate')},
+  render:()=>{}});
+ view.markPage(read);
+ await view.prime([['comment',read.comments[0]]]);
+ assert.equal(view.item('comment',read.comments[0]).result.body,'已有中文译文 1');
+ assert.equal(translateRequests,0);
+ view.close();
  insert.run('split-reply-20',id,'Fictional original 20');
  insert.run('split-reply-21',id,'Fictional original 21');
  const full=await publish();
