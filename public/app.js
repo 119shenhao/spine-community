@@ -24,7 +24,7 @@ const statusHtml=s=>s&&!['published','deleted'].includes(s)?`<span class="status
 function errorText(e){const c=e.code;if(e.status===401)return t('loginNote');if(e.status===404)return t('notFound');if(e.status===429)return t('rateLimit');if(['account_muted','account_banned'].includes(c))return t('muted');if(e.status===403)return t('forbidden');if(c?.startsWith('invalid_'))return t('required');return t('errorTitle');}
 async function api(path,options={}){const r=await fetch(path,{credentials:'same-origin',...options,headers:{...(options.body?{'content-type':'application/json'}:{}),...options.headers}});let v;try{v=await r.json();}catch{v={};}if(!r.ok){const e=new Error(v.error||'request_failed');e.code=v.error;e.status=r.status;throw e;}return v;}
 const send=(path,body,method='POST')=>api(path,{method,body:JSON.stringify(body)});
-const publicReads=()=>publicContentReader(state.health,state.user,api);
+const publicReads=()=>publicContentReader(state.health,state.user,api,fetch,locale);
 function toast(message){clearTimeout(toastTimer);$('#toast').textContent=message;$('#toast').hidden=false;toastTimer=setTimeout(()=>$('#toast').hidden=true,4500);}
 function modal(html){const content=$('#modal-content');content.innerHTML=html;content.scrollTop=0;if(!$('#modal').open)$('#modal').showModal();}
 function closeModal(){$('#modal').close();}
