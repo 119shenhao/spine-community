@@ -1594,6 +1594,31 @@ const translationBatch=(call,items,{locale='en',generate=true,ctx}={})=>
  call('/api/translate','POST',{locale,items,generate},null,{},ctx);
 const translationItem=(id,options={})=>({id,type:'topic',scope:'full',version:1,...options});
 
+test('legacy English medical post is recognized and translated, without trusting its old language label blindly',async t=>{
+ const {DB,env,call}=await fixture();
+ mockTranslator(env,DB);
+ const title='Is it possible to get pre authorization for injections in back for degenerative disc disease?';
+ const body='Medicare denied the claim I had done last July.';
+ const {detectSourceLanguage}=await import('../.test-build/source-language.js');
+ assert.equal(detectSourceLanguage(title,body),'en','screenshot English should not be und');
+ assert.equal(detectSourceLanguage('OK'),'und');
+ assert.equal(detectSourceLanguage('I have persistent back pain after standing. Me duele mucho la espalda desde hace dos meses.'),'und');
+ DB.db.prepare("INSERT INTO topics(id,author_id,title,body,source_lang,status) VALUES('english-legacy','bob',?,?,'en','published')").run(title,body);
+ let calls=0,from;
+ t.mock.method(globalThis,'fetch',async(url,options)=>{
+  calls++;
+  from=new URL(url).searchParams.get('from');
+  return translatedByMock(url,options);
+ });
+ const response=await translationBatch(call,[translationItem('english-legacy')],{locale:'zh-CN'});
+ assert.equal(response.status,200,JSON.stringify(response.data));
+ assert.equal(response.data.items[0].translated,true,JSON.stringify(response.data));
+ assert.equal(from,'en');
+ assert.equal(calls,1);
+ const cached=DB.db.prepare("SELECT source_language FROM topic_translations WHERE topic_id='english-legacy' AND locale='zh-CN'").get();
+ assert.equal(cached.source_language,'en');
+});
+
 test('automatic source detection overrides the suggested locale, and authors can correct it',async t=>{
  const {call,DB,env}=await fixture();
  mockTranslator(env,DB);
