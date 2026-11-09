@@ -207,7 +207,13 @@ jobs:
               "WHERE topic_id='"+topic+"' AND scope='full'")[0];
             assert.deepEqual(provenance,{provider:'azure',product_id:'azure_ai_translator_text',engine_type:'nmt',
               source_language:'en',locale:'fr',source_version:1});
-            sql("UPDATE topics SET body='"+edited+"' WHERE id='"+topic+"'");
+            const editResponse=await fetch(preview+'/api/topics/'+topic,{
+              method:'PATCH',headers:{origin:preview,cookie:'sc_session='+session,'content-type':'application/json'},
+              redirect:'error',signal:AbortSignal.timeout(15000),
+              body:JSON.stringify({title:'Fictional translation check',body:edited,source_lang_mode:'manual',source_lang:'en'})
+            });
+            assert.equal(editResponse.status,200,'Fixture edit failed');
+            assert.equal((await editResponse.json()).status,'published');
             await wakeProjection();
             const invalidated=result=>result.payload?.invalidated===true&&result.payload?.data?.topic===undefined;
             await waitForCdn(invalidated,'Edit invalidation of canonical URL',wakeProjection);
@@ -218,7 +224,8 @@ jobs:
             assert.equal(editedProjection.payload.data.topic.translations?.fr,undefined);
             assert.equal((await waitForCdn(editedHit,'Edited query URL',requestOriginal,query))
               .payload.data.topic.translations?.fr,undefined);
-            item.version++;
+            assert.equal(editedProjection.payload.data.topic.content_version,2);
+            item.version=2;
             const editedTranslation=await read(true,'fr',undefined,!direct);
             assert.equal(editedTranslation.translated,true,'The edited fixture must have a new Azure translation');
             await waitForCdn(result=>result.cache==='HIT'&&result.payload?.data?.topic?.translations?.fr,
