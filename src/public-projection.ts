@@ -55,7 +55,7 @@ const versionOf=(db:D1Database,scope:string,target:string)=>stmt(db,
 const feedRows=(db:D1Database,index:number)=>stmt(db,`
  SELECT t.id,t.title,substr(t.body,1,260) summary,
         COALESCE(v.language,t.source_lang) source_lang,
-        CASE WHEN v.language IS NOT NULL THEN 'auto' ELSE t.source_lang_mode END source_lang_mode,
+        CASE WHEN v.method='admin-manual' THEN 'manual' WHEN v.language IS NOT NULL THEN 'auto' ELSE t.source_lang_mode END source_lang_mode,
         t.content_version,t.status,
         t.created_at,t.reply_count,t.like_count,u.nickname,u.public_region
  FROM topics t JOIN users u ON u.id=t.author_id
@@ -67,7 +67,7 @@ const topicRow=(db:D1Database,target:string)=>stmt(db,`
         CASE WHEN t.status='published' THEN t.title END title,
         CASE WHEN t.status='published' THEN t.body END body,
         CASE WHEN t.status='published' THEN COALESCE(v.language,t.source_lang) ELSE 'und' END source_lang,
-        CASE WHEN v.language IS NOT NULL THEN 'auto' ELSE t.source_lang_mode END source_lang_mode,
+        CASE WHEN v.method='admin-manual' THEN 'manual' WHEN v.language IS NOT NULL THEN 'auto' ELSE t.source_lang_mode END source_lang_mode,
         CASE WHEN t.status='published' THEN u.nickname ELSE '' END nickname,
         CASE WHEN t.status='published' THEN u.public_region END public_region,
         CASE WHEN t.status='published' THEN t.like_count ELSE 0 END like_count
@@ -80,7 +80,7 @@ const commentsFor=(db:D1Database,target:string,index:number,pageSize:number)=>st
         c.kind,c.progress_seq,c.status,c.content_version,c.created_at,
         CASE WHEN c.status='published' THEN c.body END body,
         CASE WHEN c.status='published' THEN COALESCE(v.language,c.source_lang) ELSE 'und' END source_lang,
-        CASE WHEN v.language IS NOT NULL THEN 'auto' ELSE c.source_lang_mode END source_lang_mode,
+        CASE WHEN v.method='admin-manual' THEN 'manual' WHEN v.language IS NOT NULL THEN 'auto' ELSE c.source_lang_mode END source_lang_mode,
         CASE WHEN c.status='published' THEN u.nickname ELSE '' END nickname,
         CASE WHEN c.status='published' THEN c.like_count ELSE 0 END like_count
  FROM comments c JOIN users u ON u.id=c.author_id
@@ -112,7 +112,7 @@ export async function buildProjection(db:D1Database,scope:string,target:string,i
   const statements=[version,topicRow(db,target),commentsFor(db,target,index,pageSize)];
   if(index===1)statements.push(termsFor(db,[target]),stmt(db,`
     SELECT c.id,c.body,COALESCE(v.language,c.source_lang) source_lang,
-      CASE WHEN v.language IS NOT NULL THEN 'auto' ELSE c.source_lang_mode END source_lang_mode,
+      CASE WHEN v.method='admin-manual' THEN 'manual' WHEN v.language IS NOT NULL THEN 'auto' ELSE c.source_lang_mode END source_lang_mode,
       c.content_version,c.progress_seq,c.created_at FROM comments c
     LEFT JOIN content_language_verifications v ON v.content_type='comment' AND v.content_id=c.id AND v.content_version=c.content_version
     WHERE c.topic_id=? AND c.status='published' AND c.kind='progress' ORDER BY progress_seq DESC,id DESC LIMIT 2`,target));
