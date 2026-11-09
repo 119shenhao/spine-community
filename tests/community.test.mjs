@@ -1674,6 +1674,24 @@ test('Azure unknown language that matches target is confirmed but not translated
  assert.equal(count,1);
 });
 
+test('Azure generic Chinese source is stored without guessing simplified/traditional',async t=>{
+ const {call,env,DB,topic}=await fixture();
+ mockTranslator(env,DB);
+ const tid=await topic('OK','OK','alice',{source_lang_mode:'auto'});
+ t.mock.method(globalThis,'fetch',async(url,options)=>{
+  assert.equal(new URL(url).searchParams.get('from'),null);
+  return Response.json(JSON.parse(options.body).map(({Text})=>({
+    detectedLanguage:{language:'zh',score:.99},translations:[{text:'内容 '+Text,to:'zh-Hans'}]
+  })));
+ });
+ const r=await translationBatch(call,[translationItem(tid)],{locale:'zh-CN'});
+ assert.equal(r.data.items[0].translated,true,JSON.stringify(r.data));
+ const saved=DB.db.prepare('SELECT language FROM content_language_verifications WHERE content_type=? AND content_id=?').get('topic',tid);
+ assert.equal(saved.language,'zh');
+ const {buildProjection}=await import('../.test-build/public-projection.js');
+ assert.equal((await buildProjection(DB,'topic',tid,1,false)).data.topic.source_lang,'zh');
+});
+
 test('Azure autodetect refuses low-confidence and mixed-language results',async t=>{
  const {call,env,DB,topic}=await fixture();
  mockTranslator(env,DB);
