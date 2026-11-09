@@ -1,6 +1,8 @@
 import {Row,all} from './core';
 
-const PAGE_BYTES=384*1024;
+// A locale is fetched independently: enforce a per-locale budget, not a
+// combined budget that starves later languages as a page gets translated.
+const LOCALE_PAGE_BYTES=2*1024*1024;
 const encoder=new TextEncoder();
 
 export async function projectTranslations(db:D1Database,topics:Row[],comments:Row[],progress:Row[],scope:'full'|'summary',direct=false) {
@@ -16,7 +18,7 @@ export async function projectTranslations(db:D1Database,topics:Row[],comments:Ro
       SELECT value,'full' scope FROM json_each(?) UNION ALL SELECT value,'preview' FROM json_each(?)
     ) r ON x.comment_id=json_extract(r.value,'$[0]') AND x.source_version=json_extract(r.value,'$[1]') AND x.scope=r.scope
     WHERE (?=1 OR (projection_token IS NOT NULL AND projection_key IS NOT NULL))
-    ORDER BY type,id,scope,locale LIMIT 64`,refs(topics),scope,Number(direct),refs(comments),refs(progress),Number(direct));
+    ORDER BY locale,type,id,scope LIMIT 1024`,refs(topics),scope,Number(direct),refs(comments),refs(progress),Number(direct));
   const index=new Map<string,Row[]>();
   for(const [type,part,group] of [['topic',scope,topics],['comment','full',comments],['comment','preview',progress]] as const){
     for(const row of group){
@@ -25,12 +27,13 @@ export async function projectTranslations(db:D1Database,topics:Row[],comments:Ro
       if(matches)matches.push(row);else index.set(key,[row]);
     }
   }
-  let size=0;
+  const sizes=new Map<string,number>();
   for(const r of rows){
     const translation={title:r.title_text,body:r.body_text,provider:r.provider};
     const text=encoder.encode(JSON.stringify(translation));
-    if(text.length>96*1024||size+text.length+64>PAGE_BYTES)continue;
-    size+=text.length+64;
+    const size=sizes.get(r.locale)||0;
+    if(size+text.length+64>LOCALE_PAGE_BYTES)continue;
+    sizes.set(r.locale,size+text.length+64);
     const targets=index.get(r.type+':'+r.scope+':'+r.id)||[];
     if(direct){
       for(const row of targets)(row.translations??={})[r.locale]={...translation,sourceVersion:r.source_version};
