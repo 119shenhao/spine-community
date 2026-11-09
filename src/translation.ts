@@ -232,7 +232,7 @@ async function generate(env:Env,entry:Item,row:Row,locale:string,config:Settings
   const evidence=await confirmedLanguage(db,entry.type,c,topic?[c.title,c.body]:[c.body]);
   let source=evidence.language;
   const needsAutoDetection=source==='und';
-  if(sameLanguage(source,locale))return result('same_language');
+  if(sameLanguage(source,locale))return {translated:false,reason:'same_language',languageConfirmed:Boolean(evidence.newlyConfirmed)};
   const token=id(),lease=[entry.type,c.id,locale,version,token];
   const lock=await one(db,`INSERT INTO translation_jobs(content_type,content_id,locale,source_version,lease_token,expires_at)
     VALUES(?,?,?,?,?,unixepoch()+35) ON CONFLICT(content_type,content_id,locale) DO UPDATE SET
@@ -347,7 +347,7 @@ async function generate(env:Env,entry:Item,row:Row,locale:string,config:Settings
       WHERE ${validLease} AND EXISTS(${currentSql}) RETURNING provider`,
       ...parameters,source,PRODUCT,token,key,...lease,c.id,version);
     if(!inserted)return result('content_changed');
-    return {translated:true,title:translatedTitle,body:translatedBody,provider:'azure',generated:true,languageConfirmed:needsAutoDetection};
+    return {translated:true,title:translatedTitle,body:translatedBody,provider:'azure',generated:true,languageConfirmed:needsAutoDetection||Boolean(evidence.newlyConfirmed)};
   }catch{
     retryAfter=120;
     return result('translation_unavailable');
