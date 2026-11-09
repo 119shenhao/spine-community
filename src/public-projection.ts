@@ -33,7 +33,10 @@ export function objectKey(scope:string,target:string,index:number,pageSize=50) {
     `topics/${target}/comments/${pageSize===20?'v2/':''}page-${index}.json`;
 }
 
-export function parseObjectKey(key:string) {
+export function parseObjectKey(key:string):
+  |{scope:'feed';target:'latest';index:number}
+  |{scope:'topic';target:string;index:number;pageSize:number}
+  |null {
   const feed=key.match(/^feeds\/latest\/page-([1-9][0-9]*)\.json$/);
   if(feed&&Number(feed[1])<=FEED_LIMIT)return {scope:'feed',target:'latest',index:Number(feed[1])};
   const topic=key.match(/^topics\/([A-Za-z0-9_-]{1,128})\/(?:detail\.json|comments\/(v2\/)?page-([1-9][0-9]*)\.json)$/);
