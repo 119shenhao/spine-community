@@ -1619,6 +1619,104 @@ test('legacy English medical post is recognized and translated, without trusting
  assert.equal(cached.source_language,'en');
 });
 
+test('Azure autodetect confirms unknown originals once and reuses D1 for later languages',async t=>{
+ const {call,DB,env,topic}=await fixture();
+ mockTranslator(env,DB);
+ const id=await topic('OK','OK','alice',{source_lang_mode:'auto'});
+ const original=(await call('/api/topics/'+id)).data.topic;
+ assert.equal(original.source_lang,'und');
+ let count=0,from;
+ t.mock.method(globalThis,'fetch',async(url,options)=>{
+  count++;from=new URL(url).searchParams.get('from');
+  const data=JSON.parse(options.body);
+  return Response.json(data.map(({Text})=>({
+   detectedLanguage:{language:'en',score:.98},
+   translations:[{text:'translated '+Text,to:'zh-Hans'}]
+  })));
+ });
+ const first=await translationBatch(call,[translationItem(id)],{locale:'zh-CN'});
+ assert.equal(first.status,200,JSON.stringify(first.data));
+ assert.equal(first.data.items[0].translated,true,JSON.stringify(first.data));
+ assert.equal(from,null,'Azure receives no from= when source is not known');
+ assert.equal(count,1);
+ assert.deepEqual(DB.db.prepare('SELECT language,method FROM content_language_verifications WHERE content_type=? AND content_id=?').get('topic',id),{
+  language:'en',method:'azure-auto'
+ });
+ const cached=await translationBatch(call,[translationItem(id)],{locale:'zh-CN'});
+ assert.equal(cached.data.items[0].translated,true);
+ assert.equal(count,1,'cached translation must not contact Azure');
+ const same=await translationBatch(call,[translationItem(id)],{locale:'en'});
+ assert.equal(same.data.items[0].reason,'same_language');
+ assert.equal(count,1,'verified language lets subsequent matching visitors skip translation');
+ const {buildProjection}=await import('../.test-build/public-projection.js');
+ const projected=await buildProjection(DB,'topic',id,1,false);
+ assert.equal(projected.data.topic.source_lang,'en');
+ assert.equal(projected.data.topic.source_lang_mode,'auto');
+});
+
+test('Azure unknown language that matches target is confirmed but not translated twice',async t=>{
+ const {call,env,DB,topic}=await fixture();
+ mockTranslator(env,DB);
+ const id=await topic('OK','OK','alice',{source_lang_mode:'auto'});
+ let count=0;
+ t.mock.method(globalThis,'fetch',async(url,options)=>{
+  count++;assert.equal(new URL(url).searchParams.get('from'),null);
+  return Response.json(JSON.parse(options.body).map(({Text})=>({
+   detectedLanguage:{language:'en',score:.99},
+   translations:[{text:Text,to:'en'}]
+  })));
+ });
+ const first=await translationBatch(call,[translationItem(id)],{locale:'en'});
+ assert.equal(first.data.items[0].reason,'same_language',JSON.stringify(first.data));
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM topic_translations WHERE topic_id=?').get(id).n,0);
+ const again=await translationBatch(call,[translationItem(id)],{locale:'en'});
+ assert.equal(again.data.items[0].reason,'same_language');
+ assert.equal(count,1);
+});
+
+test('Azure autodetect refuses low-confidence and mixed-language results',async t=>{
+ const {call,env,DB,topic}=await fixture();
+ mockTranslator(env,DB);
+ const id=await topic('OK','OK','alice',{source_lang_mode:'auto'});
+ let mode='low';
+ t.mock.method(globalThis,'fetch',async(url,options)=>{
+  const values=JSON.parse(options.body);
+  return Response.json(values.map(({Text},i)=>({
+   detectedLanguage:{language:mode==='mixed'&&i===0?'es':'en',score:mode==='low'?.2:.99},
+   translations:[{text:'translated '+Text,to:'fr'}]
+  })));
+ });
+ const low=await translationBatch(call,[translationItem(id)],{locale:'fr'});
+ assert.equal(low.data.items[0].reason,'source_language_uncertain');
+ mode='mixed';
+ const mixed=await translationBatch(call,[translationItem(id)],{locale:'fr'});
+ assert.equal(mixed.data.items[0].reason,'source_language_uncertain');
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM content_language_verifications WHERE content_id=?').get(id).n,0);
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM topic_translations WHERE topic_id=?').get(id).n,0);
+});
+
+test('owner language review is protected and invalidates cached translations on correction',async()=>{
+ const {call,env,DB,topic}=await fixture();
+ const id=await topic('OK','OK','alice',{source_lang_mode:'auto'});
+ const all=await call('/api/admin/language-review','GET',undefined,'admin');
+ assert.equal(all.status,200,JSON.stringify(all));
+ assert(all.data.items.some(x=>x.id===id));
+ assert.equal((await call('/api/admin/language-review','GET',undefined,'bob')).status,403);
+ assert.equal((await call('/api/admin/language-review','GET',undefined,'mod')).status,403);
+ assert.equal((await call('/api/admin/language-review','POST',{type:'topic',id,source_lang:'es',reason:'verified'},'mod')).status,403);
+ assert.equal((await call('/api/admin/language-review','POST',{type:'topic',id,source_lang:'bad!',reason:'verified'},'admin')).status,400);
+ DB.db.prepare("INSERT INTO topic_translations(topic_id,locale,source_version,title_text,body_text,provider) VALUES(?,'zh-CN',1,'cached','cached','test')").run(id);
+ const saved=await call('/api/admin/language-review','POST',{type:'topic',id,source_lang:'es',reason:'original is Spanish'},'admin');
+ assert.equal(saved.status,200,JSON.stringify(saved));
+ assert.equal(saved.data.version,2);
+ const topicAfter=(await call('/api/topics/'+id)).data.topic;
+ assert.equal(topicAfter.source_lang,'es');
+ assert.equal(topicAfter.source_lang_mode,'manual');
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM topic_translations WHERE topic_id=?').get(id).n,0);
+ assert.equal(DB.db.prepare("SELECT count(*) n FROM moderation_actions WHERE target_id=? AND target_type='language'").get(id).n,1);
+ assert(!(await call('/api/admin/language-review','GET',undefined,'admin')).data.items.some(x=>x.id===id));
+});
+
 test('automatic source detection overrides the suggested locale, and authors can correct it',async t=>{
  const {call,DB,env}=await fixture();
  mockTranslator(env,DB);
