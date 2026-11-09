@@ -1908,6 +1908,49 @@ test('a CDN miss on a D1 cache hit backfills direct text without calling Azure a
 });
 
 
+test('preview rollback rejects split-format CDN originals and uses the live Worker fallback',async()=>{
+ const {publicContentReader}=await import('../public/public-content.js');
+ const original={topic:{id:'demo',status:'published',body:'English body',content_version:1},
+   comments:[],progress:[],translationLayout:'separate-v1',translationLocales:['zh-CN']};
+ const requests=[];
+ const reader=publicContentReader({environment:'preview',publicContent:{
+   baseUrl:'https://spine-data-dev.nbn369.com',fallback:true,onDemand:true,
+   separateTranslations:false,pageSize:50}},null,
+   async (path,options)=>{
+     requests.push({path,options});
+     return {topic:{id:'demo',status:'published',body:'English body',content_version:1},
+       comments:[],progress:[]};
+   },
+   async()=>Response.json({schemaVersion:1,contentVersion:1,topicId:'demo',data:original}),
+   'zh-CN');
+ const data=await reader.topic('demo',new URLSearchParams());
+ assert.equal(data.topic.body,'English body');
+ assert.equal(requests.length,1);
+ assert.equal(requests[0].options.headers['x-spine-projection-miss'],'topics/demo/detail.json');
+});
+
+test('rolling back split CDN format tombstones previously published locale files',async()=>{
+ const {env}=await fixture(),bucket=projectionBucket();
+ enableProjection(env,bucket);
+ const {projectionConfig,writeProjection,localeObjectKey}=await import('../.test-build/public-projection.js');
+ const key='topics/fictional/detail.json',localeKey=localeObjectKey(key,'zh-CN');
+ env.PUBLIC_TRANSLATION_SEPARATE='true';
+ const original={topic:{id:'fictional',status:'published',body:'English original',
+   content_version:1,translations:{'zh-CN':{title:'中文标题',body:'中文译文',
+   sourceVersion:1,provider:'azure'}}},comments:[],progress:[]};
+ await writeProjection(projectionConfig(env),key,'topic','fictional',1,original);
+ assert.equal((await (await bucket.get(localeKey)).json()).items.length,1);
+ env.PUBLIC_TRANSLATION_SEPARATE='false';
+ const current={topic:{id:'fictional',status:'published',body:'English original',
+   content_version:1},comments:[],progress:[]};
+ const purgeKeys=await writeProjection(projectionConfig(env),key,'topic','fictional',1,current);
+ assert.deepEqual(purgeKeys,[localeKey]);
+ const retired=await (await bucket.get(localeKey)).json();
+ assert.equal(retired.invalidated,true);
+ assert.deepEqual(retired.items,[]);
+ assert.equal((await bucket.head(key)).customMetadata.translationFormat,'encrypted');
+});
+
 test('20-reply CDN paths use size-20 while legacy 50-reply paths remain parseable',async()=>{
  const {objectKey,parseObjectKey,localeObjectKey}=await import('../.test-build/public-projection.js');
  const key='topics/example/comments/size-20/page-2.json';
