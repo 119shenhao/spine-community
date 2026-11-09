@@ -1,5 +1,6 @@
 import {Env,Row,all,one,stmt,now,id,fail,json,body,textField,requireUser,writable,rate,risk,metric,topicFingerprint} from './core';
 import {sourceLanguage} from './source-language';
+import {verificationWrite} from './language-state';
 export async function getContent(env:Env,type:string,contentId:string,u:Row|null,placeholder=false):Promise<Row>{
   const table=type==='topic'?'topics':'comments';
   const row=await one(env.DB,`SELECT c.*,u.nickname,u.public_region FROM ${table} c JOIN users u ON u.id=c.author_id WHERE c.id=?`,contentId);
@@ -49,7 +50,7 @@ export async function contentRoute(req:Request,env:Env,u:Row|null,path:string):P
     const contentHash=await topicFingerprint(title,text);
     const duplicate=await one(env.DB,'SELECT id FROM topics WHERE content_hash=? OR (title=? AND body=?) LIMIT 1',contentHash,title,text);if(duplicate)fail(409,'duplicate_content');
     const topicId=id(),status=risk(title,text),language=sourceLanguage(b,[title,text]);
-    await env.DB.batch([stmt(env.DB,'INSERT INTO topics(id,author_id,title,body,source_lang,source_lang_mode,status,symptom_duration_days,content_hash) VALUES(?,?,?,?,?,?,?,?,?)',topicId,user.id,title,text,language.label,language.mode,status,duration,contentHash),...tags.map(t=>stmt(env.DB,'INSERT INTO topic_terms VALUES(?,?)',topicId,t)),metric(env.DB,'new_topics')]);
+    await env.DB.batch([stmt(env.DB,'INSERT INTO topics(id,author_id,title,body,source_lang,source_lang_mode,status,symptom_duration_days,content_hash) VALUES(?,?,?,?,?,?,?,?,?)',topicId,user.id,title,text,language.label,language.mode,status,duration,contentHash),...tags.map(t=>stmt(env.DB,'INSERT INTO topic_terms VALUES(?,?)',topicId,t)),...(language.mode==='auto'&&language.label!=='und'&&status==='published'?[verificationWrite(env.DB,'topic',topicId,1,language.label,'tinyld-heavy',language.score)]:[]),metric(env.DB,'new_topics')]);
     return json({id:topicId,status},201);
   }
   const topicMatch=path.match(/^\/api\/topics\/([^/]+)$/);
@@ -74,7 +75,7 @@ export async function contentRoute(req:Request,env:Env,u:Row|null,path:string):P
       const b=await body(req),title=textField(b.title,1,200,'title'),text=textField(b.body,1,30000),tags=await terms(env,b.terms);
       const contentHash=await topicFingerprint(title,text);
       const duplicate=await one(env.DB,'SELECT id FROM topics WHERE id<>? AND (content_hash=? OR (title=? AND body=?)) LIMIT 1',topicId,contentHash,title,text);if(duplicate)fail(409,'duplicate_content');
-      const status=topic.status==='hidden'?'pending_review':risk(title,text),language=sourceLanguage(b,[title,text],topic);const duration=b.symptom_duration_days==null||b.symptom_duration_days===''?null:Number(b.symptom_duration_days);if(duration!==null&&(!Number.isInteger(duration)||duration<0||duration>36500))fail(400,'invalid_duration');const writes=[stmt(env.DB,'UPDATE topics SET title=?,body=?,status=?,source_lang=?,source_lang_mode=?,symptom_duration_days=?,content_hash=?,content_version=content_version+1,updated_at=? WHERE id=?',title,text,status,language.label,language.mode,duration,contentHash,now(),topicId)];
+      const status=topic.status==='hidden'?'pending_review':risk(title,text),language=sourceLanguage(b,[title,text],topic);const duration=b.symptom_duration_days==null||b.symptom_duration_days===''?null:Number(b.symptom_duration_days);if(duration!==null&&(!Number.isInteger(duration)||duration<0||duration>36500))fail(400,'invalid_duration');const writes=[stmt(env.DB,'UPDATE topics SET title=?,body=?,status=?,source_lang=?,source_lang_mode=?,symptom_duration_days=?,content_hash=?,content_version=content_version+1,updated_at=? WHERE id=?',title,text,status,language.label,language.mode,duration,contentHash,now(),topicId),...(language.mode==='auto'&&language.label!=='und'&&status==='published'?[verificationWrite(env.DB,'topic',topicId,topic.content_version+1,language.label,'tinyld-heavy',language.score)]:[])];
       if(b.terms!==undefined){writes.push(stmt(env.DB,'DELETE FROM topic_terms WHERE topic_id=?',topicId),...tags.map(t=>stmt(env.DB,'INSERT INTO topic_terms VALUES(?,?)',topicId,t)));}
       await env.DB.batch(writes);return json({ok:true,status});
     }
@@ -88,6 +89,7 @@ export async function contentRoute(req:Request,env:Env,u:Row|null,path:string):P
     let parentRow:Row|null=null;if(parent){parentRow=await getContent(env,'comment',parent,user,true);if(parentRow.topic_id!==topic.id)fail(400,'cross_topic_reply');}
     const commentId=id(),status=risk('',text),language=sourceLanguage(b,[text]),writes=[];
     writes.push(stmt(env.DB,`INSERT INTO comments(id,topic_id,author_id,parent_comment_id,kind,progress_seq,body,source_lang,source_lang_mode,status) VALUES(?,?,?,?,?,${kind==='progress'?'(SELECT COALESCE(MAX(progress_seq),0)+1 FROM comments WHERE topic_id=?)':'NULL'},?,?,?,?)`,commentId,topic.id,user.id,parent,kind,...(kind==='progress'?[topic.id]:[]),text,language.label,language.mode,status));
+    if(language.mode==='auto'&&language.label!=='und'&&status==='published')writes.push(verificationWrite(env.DB,'comment',commentId,1,language.label,'tinyld-heavy',language.score));
     writes.push(metric(env.DB,'new_comments'));
     if(status==='published'){
       writes.push(notify(env.DB,topic.author_id,user.id,'topic_reply',topic.id,commentId,'reply:'+commentId));
@@ -101,7 +103,7 @@ export async function contentRoute(req:Request,env:Env,u:Row|null,path:string):P
     const user=await writable(env.DB,u),c=await getContent(env,'comment',commentMatch[1],user);if(c.author_id!==user.id)fail(403,'forbidden');
     if(c.kind==='progress'){const t=await one(env.DB,'SELECT author_id FROM topics WHERE id=?',c.topic_id);if(t?.author_id!==user.id)fail(403,'progress_author_required');}
     if(method==='DELETE')await env.DB.batch(purge(env.DB,'comment',c.id));
-    else{const b=await body(req),text=textField(b.body,1,12000),status=c.status==='hidden'?'pending_review':risk('',text),language=sourceLanguage(b,[text],c);await stmt(env.DB,'UPDATE comments SET body=?,status=?,source_lang=?,source_lang_mode=?,content_version=content_version+1,updated_at=? WHERE id=?',text,status,language.label,language.mode,now(),c.id).run();}
+    else{const b=await body(req),text=textField(b.body,1,12000),status=c.status==='hidden'?'pending_review':risk('',text),language=sourceLanguage(b,[text],c);await env.DB.batch([stmt(env.DB,'UPDATE comments SET body=?,status=?,source_lang=?,source_lang_mode=?,content_version=content_version+1,updated_at=? WHERE id=?',text,status,language.label,language.mode,now(),c.id),...(language.mode==='auto'&&language.label!=='und'&&status==='published'?[verificationWrite(env.DB,'comment',c.id,c.content_version+1,language.label,'tinyld-heavy',language.score)]:[])]);}
     if(method==='PATCH'){const changed=await getContent(env,'comment',c.id,user);await decorate(env,[changed],user,'comment');const counts=await one(env.DB,'SELECT reply_count FROM topics WHERE id=?',c.topic_id);return json({ok:true,status:changed.status,comment:changed,reply_count:counts?.reply_count});}
     return json({ok:true});
   }
