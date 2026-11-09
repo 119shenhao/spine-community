@@ -250,7 +250,10 @@ export async function writeProjection(config:NonNullable<ReturnType<typeof proje
     if(!Array.isArray(previousLocales))previousLocales=[];
   }
   const languages=[...split.locales.keys()].sort();
-  const keys:string[]=[];
+  // Return every known locale key, including unchanged R2 objects, so a retry
+  // after a failed CDN purge still invalidates stale edge copies.
+  const keys:string[]=separated?[...new Set([...previousLocales,...languages])]
+    .map(locale=>localeObjectKey(key,locale)):[];
   if(separated){
     // Always write locale data first. Missing translations get invalidation
     // tombstones, so an edited reply cannot reuse an old R2 translation.
@@ -275,7 +278,6 @@ export async function writeProjection(config:NonNullable<ReturnType<typeof proje
           visibility:visible?'public':'invalidated',translationFormat:'separate-v1'}
       });
       if(!result)throw Error('r2_conditional_write_conflict');
-      keys.push(localeKey);
     }
   }
   if(oldVersion===version&&old?.customMetadata?.payloadHash===digest&&old.customMetadata.visibility===visibility&&
