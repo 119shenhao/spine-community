@@ -1,5 +1,6 @@
 import {Env,Row,all,one,stmt,now,id,fail,json,body,textField,requireRole,locales} from './core';
 import {purge,notify} from './content';
+import {translationBudgetStatus} from './translation';
 const audit=(env:Env,u:Row,type:string,target:string,action:string,reason:string)=>stmt(env.DB,'INSERT INTO moderation_actions(id,actor_id,target_type,target_id,action,reason) VALUES(?,?,?,?,?,?)',id(),u.id,type,target,action,reason);
 export async function adminRoute(req:Request,env:Env,user:Row|null,path:string):Promise<Response|null>{
   if(!path.startsWith('/api/admin/'))return null;
@@ -15,6 +16,10 @@ export async function adminRoute(req:Request,env:Env,user:Row|null,path:string):
       privacy:u.role==='admin'?await all(env.DB,"SELECT p.*,u.nickname FROM privacy_requests p JOIN users u ON u.id=p.user_id WHERE p.status IN ('open','processing') ORDER BY p.requested_at LIMIT 100"):[],
       metrics:await all(env.DB,`WITH RECURSIVE days(d,n) AS(SELECT date('now'),1 UNION ALL SELECT date(d,'-1 day'),n+1 FROM days WHERE n<?) SELECT d day_utc,COALESCE(c.new_users,0) new_users,COALESCE(c.new_topics,0) new_topics,COALESCE(c.new_comments,0) new_comments,COALESCE(c.new_reports,0) new_reports,COALESCE(t.uv_estimate,0) uv_estimate,COALESCE(t.pv,0) pv,COALESCE(t.peak_active_5m_estimate,0) peak_active_5m_estimate,t.peak_hour_utc,COALESCE(t.peak_hour_pv,0) peak_hour_pv FROM days LEFT JOIN daily_community_metrics c ON c.day_utc=d LEFT JOIN daily_traffic_metrics t ON t.day_utc=d ORDER BY d DESC`,days),
       settings:u.role==='admin'?await all(env.DB,'SELECT key,value FROM settings'):[],analyticsConfigured:Boolean(env.ANALYTICS_SALT)});
+  }
+  if(path==='/api/admin/translation-budget'&&req.method==='GET'){
+    requireRole(u,true);
+    return json(await translationBudgetStatus(env));
   }
   if(req.method!=='POST')fail(405,'method_not_allowed');
   const b=await body(req),reason=textField(b.reason,1,2000,'reason');
