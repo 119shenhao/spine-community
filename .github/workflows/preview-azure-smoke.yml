@@ -27,12 +27,14 @@ jobs:
         run: |
           node --input-type=module <<'JS'
           import assert from 'node:assert/strict';
-          import {randomUUID} from 'node:crypto';
+          import {randomUUID,createHash} from 'node:crypto';
           import {readFileSync,appendFileSync} from 'node:fs';
           import {execFileSync} from 'node:child_process';
           import {setTimeout as delay} from 'node:timers/promises';
+          import {unpackTranslation} from './public/translation-ui.js';
 
           const preview='https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev';
+          const cdn='https://spine-data-dev.nbn369.com';
           const config='wrangler.preview-migrations.jsonc';
           const [db,...others]=JSON.parse(readFileSync(config,'utf8')).d1_databases;
           assert.equal(others.length,0);
@@ -54,19 +56,49 @@ jobs:
           const initial=await health();
           assert.equal(initial?.environment,'preview');
           assert.equal(initial?.translationReady,true);
+          assert.equal(initial?.publicContent?.baseUrl,cdn);
+          assert.equal(initial?.publicContent?.onDemand,true);
 
           const setting=sql("SELECT value FROM settings WHERE key='translation_enabled'")[0]?.value;
           assert(['false','true'].includes(setting),'Preview translation setting is missing');
           const actor=randomUUID(),topic=randomUUID();
-          const item={type:'topic',id:topic,scope:'full',version:1};
-          const read=async(generate,locale='fr')=>{
+          const page='topics/'+topic+'/detail.json';
+          const item={type:'topic',id:topic,scope:'full',version:1,page};
+          const read=async(generate,locale='fr',token)=>{
             const response=await fetch(preview+'/api/translate',{
               method:'POST',headers:{origin:preview,'content-type':'application/json'},redirect:'error',
-              signal:AbortSignal.timeout(20000),body:JSON.stringify({locale,generate,items:[item]})
+              signal:AbortSignal.timeout(20000),body:JSON.stringify({locale,generate,items:[{...item,token}]})
             });
             assert.equal(response.status,200,'Unexpected Preview API status');
             return (await response.json()).items[0];
           };
+          const session=randomUUID()+randomUUID();
+          const sessionHash=createHash('sha256').update(session).digest('hex');
+          const wakeProjection=async()=>{
+            const response=await fetch(preview+'/api/me',{
+              method:'PATCH',headers:{origin:preview,cookie:'sc_session='+session,'content-type':'application/json'},
+              redirect:'error',signal:AbortSignal.timeout(15000),body:JSON.stringify({nickname:'Azure smoke fixture',preferred_locale:'en'})
+            });
+            assert(response.ok,'Preview projection wake failed');
+          };
+          const cdnRead=async()=>{
+            const response=await fetch(cdn+'/'+page,{
+              headers:{origin:preview},redirect:'error',signal:AbortSignal.timeout(12000)
+            });
+            if(response.status===404)return {status:404};
+            assert.equal(response.status,200,'Unexpected CDN status');
+            assert.equal(response.headers.get('access-control-allow-origin'),preview);
+            return {status:200,cache:response.headers.get('cf-cache-status'),payload:await response.json()};
+          };
+          async function waitForCdn(accept,label) {
+            let observed;
+            for(let i=0;i<20;i++){
+              observed=await cdnRead();
+              if(accept(observed))return observed;
+              await delay(1500);
+            }
+            throw Error(label+' did not reach CDN');
+          }
           let passed=false,fixtureStarted=false;
           try{
             if(setting==='false')sql("UPDATE settings SET value='true' WHERE key='translation_enabled' AND value='false'");
@@ -79,11 +111,20 @@ jobs:
             assert.equal(live?.translationConfigured,true,'Preview Worker switch, key, region, endpoint or F0 verification timestamp is missing or invalid');
             fixtureStarted=true;
             sql("INSERT INTO users(id,nickname) VALUES('"+actor+"','Azure smoke fixture'); "+
+              "INSERT INTO user_sessions(id,user_id,token_hash,expires_at) VALUES('"+actor+"','"+actor+"','"+sessionHash+"',unixepoch()+600); "+
               "INSERT INTO topics(id,author_id,title,body,source_lang,source_lang_mode,status) "+
               "VALUES('"+topic+"','"+actor+"','Fictional translation check','This fictional fixture has a blue chair and no personal information.','en','manual','pending_review'); "+
               "INSERT INTO topic_sync_receipts(source_topic_id,production_topic_id,content_hash) "+
               "VALUES('"+topic+"','preview-only-azure-smoke','"+"0".repeat(64)+"'); "+
-              "UPDATE topics SET status='published' WHERE id='"+topic+"'");
+              "UPDATE topics SET status='published' WHERE id='"+topic+"'; "+
+              "UPDATE public_projection SET priority=3 WHERE scope='topic' AND target='"+topic+"'");
+            assert.equal((await cdnRead()).status,404);
+            const original=await fetch(preview+'/api/topics/'+topic,{
+              headers:{'x-spine-projection-miss':page},redirect:'error',signal:AbortSignal.timeout(12000)
+            });
+            assert.equal(original.status,200,'Preview original fallback failed');
+            const cold=await waitForCdn(result=>result.payload?.data?.topic?.id===topic,'Original projection');
+            assert.equal(cold.payload.data.topic.translations?.fr,undefined);
             assert.equal((await read(false)).reason,'translation_cache_miss');
             assert.equal((await read(true,'en')).reason,'same_language');
             const translation=await read(true);
@@ -92,16 +133,28 @@ jobs:
             assert(translation.body&&translation.body!=='This fictional fixture has a blue chair and no personal information.');
             const cached=await read(false);
             assert.equal(cached.body,translation.body);
+            const warm=await waitForCdn(result=>result.cache==='HIT'&&result.payload?.data?.topic?.translations?.fr,
+              'Encrypted translation cache HIT');
+            const encrypted=warm.payload.data.topic.translations.fr;
+            assert(encrypted.ciphertext&&encrypted.token);
+            assert(!JSON.stringify(warm.payload).includes(translation.body),'CDN must not contain a plaintext translation');
+            const unlock=await read(false,'fr',encrypted.token);
+            assert.equal(unlock.body,undefined,'Worker should return only a key for the CDN version');
+            assert.equal((await unpackTranslation(unlock,encrypted)).body,translation.body);
+            console.log('Real Azure translation returned from Preview CDN as HIT and decrypted after a key-only Worker response.');
             const provenance=sql("SELECT provider,product_id,engine_type,source_language,locale,source_version FROM topic_translations "+
               "WHERE topic_id='"+topic+"' AND scope='full'")[0];
             assert.deepEqual(provenance,{provider:'azure',product_id:'azure_ai_translator_text',engine_type:'nmt',
               source_language:'en',locale:'fr',source_version:1});
             sql("UPDATE topics SET status='hidden' WHERE id='"+topic+"'");
-            assert.equal((await read(false)).reason,'not_found');
+            assert.equal((await read(false,'fr',encrypted.token)).reason,'not_found');
+            await wakeProjection();
+            await waitForCdn(result=>result.payload?.data===null,'CDN withdrawal');
+            console.log('Old CDN ciphertext cannot be unlocked and the CDN projection is withdrawn.');
             passed=true;
           } finally {
             try {
-              if(fixtureStarted)sql("DELETE FROM topics WHERE id='"+topic+"'; DELETE FROM users WHERE id='"+actor+"'");
+              if(fixtureStarted)sql("DELETE FROM topics WHERE id='"+topic+"'; DELETE FROM user_sessions WHERE id='"+actor+"'; DELETE FROM users WHERE id='"+actor+"'");
             } catch(error) {
               passed=false;
               throw error;
@@ -110,5 +163,5 @@ jobs:
             }
           }
           appendFileSync(process.env.GITHUB_STEP_SUMMARY,
-            'Preview only: real Azure NMT, cold read, same-language skip, D1 cache and provenance, withdrawal and fixture cleanup passed. Translation remains enabled.\n');
+            'Preview only: real Azure NMT, cold read, same-language skip, D1 cache and provenance, R2/CDN encrypted HIT, key-only Worker response, withdrawal and fixture cleanup passed. Translation remains enabled.\n');
           JS
