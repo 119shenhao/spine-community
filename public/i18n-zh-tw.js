@@ -10,6 +10,7 @@ export const traditionalChinese = {
   "mySpace": "個人中心",
   "newPost": "發帖",
   "admin": "社群管理",
+  "translationProviders": "翻譯服務管理",
   "login": "登入",
   "logout": "登出",
   "google": "使用 Google 登入",
