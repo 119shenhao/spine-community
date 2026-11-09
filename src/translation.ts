@@ -102,9 +102,38 @@ async function readItems(db:D1Database,items:Item[],locale:string) {
   ) SELECT * FROM public_rows`,JSON.stringify(items),locale,locale);
 }
 
+// This is a website-side safety budget, not the Azure account's live metering.
+// Azure F0 is advertised at 2 million characters/month; leave 10% headroom.
+export const AZURE_F0_MONTHLY_CHARS=2000000;
+export const AZURE_SITE_MAX_MONTHLY=1900000;
+export const AZURE_DEFAULT_DAILY=200000;
+export const AZURE_DEFAULT_MONTHLY=1800000;
+export const TRANSLATION_PROVIDER_CATALOG=[
+  {id:'azure',name:'Microsoft Azure Translator',implemented:true,freeMonthly:AZURE_F0_MONTHLY_CHARS},
+  {id:'aliyun',name:'Alibaba Cloud Machine Translation',implemented:false,freeMonthly:null}
+] as const;
+
 function limit(raw:string|undefined,fallback:number,max:number) {
   if(raw===undefined)return fallback;
-  return /^\d+$/.test(raw)?Math.min(Number(raw),max):0;
+  if(!/^\d+$/.test(raw))return 0;
+  return Math.min(Number(raw),max);
+}
+
+export async function translationProviderSettings(env:Env) {
+  const rows=await all(env.DB,`SELECT key,value FROM settings WHERE key IN
+    ('translation_active_provider','translation_azure_daily_limit','translation_azure_monthly_limit')`);
+  const settings=Object.fromEntries(rows.map(r=>[r.key,r.value])) as Record<string,string>;
+  const monthly=limit(settings.translation_azure_monthly_limit??env.TRANSLATION_MONTHLY_LIMIT,
+    AZURE_DEFAULT_MONTHLY,AZURE_SITE_MAX_MONTHLY);
+  const daily=limit(settings.translation_azure_daily_limit??env.TRANSLATION_DAILY_LIMIT,
+    AZURE_DEFAULT_DAILY,AZURE_SITE_MAX_MONTHLY);
+  return {
+    activeProvider:settings.translation_active_provider||'azure',
+    azure:{daily:Math.min(daily,monthly),monthly},
+    // Cloudflare variables are still a fallback for existing test/deployment configurations.
+    source:settings.translation_azure_daily_limit!==undefined||
+      settings.translation_azure_monthly_limit!==undefined?'database':'default_or_worker'
+  };
 }
 
 // Read-only diagnostics for the site owner. This deliberately uses the same
@@ -112,8 +141,9 @@ function limit(raw:string|undefined,fallback:number,max:number) {
 // rolling 31-day guard. Do not relax financial safety limits automatically.
 export async function translationBudgetStatus(env:Env) {
   const day=new Date().toISOString().slice(0,10),month=day.slice(0,7),time=now();
-  const daily=limit(env.TRANSLATION_DAILY_LIMIT,10000,100000);
-  const monthly=limit(env.TRANSLATION_MONTHLY_LIMIT,200000,1000000);
+  const selected=await translationProviderSettings(env);
+  const daily=selected.azure.daily;
+  const monthly=selected.azure.monthly;
   const budget=await one(env.DB,`SELECT day_utc,month_utc,day_chars,month_chars,
     cooldown_until,provider_blocked_at FROM translation_budget WHERE id=1`);
   const rolling=await one(env.DB,`SELECT COALESCE(sum(characters),0) AS chars
@@ -126,7 +156,7 @@ export async function translationBudgetStatus(env:Env) {
   const blockedAt=Number(budget?.provider_blocked_at)||0;
   const disabled=await one(env.DB,`SELECT value FROM settings WHERE key='translation_enabled'`);
   const checks={
-    translationEnabled:disabled?.value==='true',
+    translationEnabled:disabled?.value==='true'&&selected.activeProvider==='azure',
     freeTierVerified:verifiedAt!==null,
     providerNotBlocked:verifiedAt!==null&&blockedAt<verifiedAt,
     cooldownElapsed:cooldownUntil<=time,
@@ -144,6 +174,7 @@ export async function translationBudgetStatus(env:Env) {
     ...(checks.rollingRemaining<=0?['rolling_31_day_limit_reached']:[])
   ];
   return {
+    activeProvider:selected.activeProvider,limitsSource:selected.source,
     dayUTC:day,monthUTC:month,
     daily:{limit:daily,reserved:dayUsed,remaining:Math.max(0,daily-dayUsed)},
     monthly:{limit:monthly,reserved:monthUsed,remaining:Math.max(0,monthly-monthUsed)},
@@ -154,6 +185,32 @@ export async function translationBudgetStatus(env:Env) {
         new Date(cooldownUntil*1000).toISOString():null},
     translationEnabled:checks.translationEnabled,
     blockers
+  };
+}
+
+// The provider registry keeps future integrations explicit: a listed provider
+// is not selectable until an actual translation adapter and billing guard exist.
+export async function translationProvidersStatus(env:Env) {
+  const budget=await translationBudgetStatus(env);
+  const selected=await translationProviderSettings(env);
+  const azureReady=translationConfigured(env)&&budget.translationEnabled;
+  return {
+    activeProvider:selected.activeProvider,
+    providers:TRANSLATION_PROVIDER_CATALOG.map(provider=>({
+      id:provider.id,name:provider.name,implemented:provider.implemented,
+      selectable:provider.id==='azure'&&translationConfigured(env),
+      active:provider.id===selected.activeProvider,
+      freeMonthly:provider.freeMonthly,
+      status:provider.id==='azure'
+        ?(azureReady?'ready':translationConfigured(env)?'disabled':'not_configured')
+        :'not_integrated',
+      ...(provider.id==='azure'?{
+        daily:budget.daily,monthly:budget.monthly,rolling31Day:budget.rolling31Day,
+        providerStatus:budget.provider,blockers:budget.blockers
+      }:{})
+    })),
+    capMonthly:AZURE_SITE_MAX_MONTHLY,
+    dayUTC:budget.dayUTC,monthUTC:budget.monthUTC
   };
 }
 
@@ -203,8 +260,9 @@ async function generate(env:Env,entry:Item,row:Row,locale:string,config:Settings
     let data:{translations:{text:string,to?:string}[]}[]=[];
     if(chars){
       const day=new Date().toISOString().slice(0,10),month=day.slice(0,7);
-      const daily=limit(env.TRANSLATION_DAILY_LIMIT,10000,100000);
-      const monthly=limit(env.TRANSLATION_MONTHLY_LIMIT,200000,1000000);
+      const selected=await translationProviderSettings(env);
+      if(selected.activeProvider!=='azure')return result('translation_not_configured');
+      const daily=selected.azure.daily,monthly=selected.azure.monthly;
       const reservation=await one(db,`UPDATE translation_budget SET day_utc=?,month_utc=?,
         day_chars=(CASE WHEN day_utc=? THEN day_chars ELSE 0 END)+?,
         month_chars=(CASE WHEN month_utc=? THEN month_chars ELSE 0 END)+?,reservation_chars=?
@@ -276,7 +334,9 @@ export async function translationRoute(req:Request,env:Env,_user:Row|null,path:s
   if(!Array.isArray(inputItems)||!inputItems.length||inputItems.length>(input.generate===true?MAX_GENERATION_BATCH:MAX_BATCH))fail(400,'invalid_translation_request');
   const items=inputItems.map(x=>parseItem(x,legacy));
   const rows=await readItems(env.DB,items,locale);
-  const config=legacy||input.generate===true?azureConfiguration(env):null;
+  const selected=legacy||input.generate===true?await translationProviderSettings(env):null;
+  const config=(legacy||input.generate===true)&&selected?.activeProvider==='azure'
+    ?azureConfiguration(env):null;
   const enabled=config&&rows.some(r=>!r.provider)&&await one(env.DB,"SELECT 1 FROM settings WHERE key='translation_enabled' AND value='true'");
   const refreshed=new Map<string,Item & {createdAt?:number}>();
   function queueRefresh(entry:Item,row:Row,createdAt?:number) {
