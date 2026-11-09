@@ -391,7 +391,7 @@ export async function translationRoute(req:Request,env:Env,_user:Row|null,path:s
     // request, rather than being permanently blocked at the browser.
     if(row.projection_key)return {translated:true,key:row.projection_key};
     if(row.provider){
-      if(ctx&&env.PUBLIC_TRANSLATION_DIRECT==='true'&&!entry.token)
+      if(ctx&&(env.PUBLIC_TRANSLATION_DIRECT==='true'||env.PUBLIC_TRANSLATION_SEPARATE==='true')&&!entry.token)
         queueRefresh(entry,row,row.cache_created_at);
       return cached(row);
     }
