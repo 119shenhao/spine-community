@@ -69,7 +69,7 @@ test('imports fail closed before any DB access for production, missing config an
 });
 test('unknown user is seeded once and cannot obtain identity, session, role or login',async()=>{
  const {DB,imp,env}=await importFixture();
- for(let i=0;i<2;i++)assert.deepEqual((await imp('/api/import/account',undefined,{method:'GET'})).data.account,{id:'system-unknown-import',nickname:'未知用户',canLogin:false});
+ for(let i=0;i<2;i++)assert.deepEqual((await imp('/api/import/account',undefined,{method:'GET'})).data.account,{id:'system-unknown-import',nickname:'Anonymous',canLogin:false});
  const uid='system-unknown-import';
  assert.equal(DB.db.prepare('SELECT count(*) n FROM users WHERE is_system=1').get().n,1);
  assert.throws(()=>DB.db.prepare("INSERT INTO auth_identities(id,user_id,provider,provider_subject) VALUES('fake',?,'google','fake')").run(uid));
@@ -92,9 +92,9 @@ test('anonymous batch imports all content as unknown user with nesting, search, 
  assert.equal(r.data.imported.topics,2);assert.equal(r.data.imported.comments,2);
  const tid=r.data.results[0].id;
  const detail=await call('/api/topics/'+tid,'GET',undefined,null);
- assert.equal(detail.data.topic.nickname,'未知用户');assert.equal(detail.data.topic.reply_count,2);
+ assert.equal(detail.data.topic.nickname,'Anonymous');assert.equal(detail.data.topic.reply_count,2);
  assert.equal(detail.data.comments[1].parent_comment_id,detail.data.comments[0].id);
- assert(detail.data.comments.every(c=>c.author_id==='system-unknown-import'&&c.nickname==='未知用户'&&c.kind==='regular'&&c.progress_seq===null));
+ assert(detail.data.comments.every(c=>c.author_id==='system-unknown-import'&&c.nickname==='Anonymous'&&c.kind==='regular'&&c.progress_seq===null));
  assert.equal(detail.data.progress.length,0);assert.equal(DB.db.prepare('SELECT count(*) n FROM notifications').get().n,0);
  assert((await call('/api/topics?q=Import')).data.topics.some(t=>t.id===tid));
  assert.equal(DB.db.prepare('PRAGMA foreign_key_check').all().length,0);
