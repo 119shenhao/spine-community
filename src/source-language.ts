@@ -15,8 +15,8 @@ const englishWords=new Set([
   'than','then','into','through','while','during','without','since'
 ]);
 function clearlyEnglish(sample:string) {
-  const letters=(sample.match(/\\p{L}/gu)||[]).length;
-  const latin=(sample.match(/\\p{Script=Latin}/gu)||[]).length;
+  const letters=(sample.match(/\p{L}/gu)||[]).length;
+  const latin=(sample.match(/\p{Script=Latin}/gu)||[]).length;
   const words=sample.toLowerCase().match(/[a-z]+(?:'[a-z]+)?/g)||[];
   if(letters<45||latin<letters*.98||words.length<9)return false;
   const strong=words.filter(word=>englishWords.has(word));
