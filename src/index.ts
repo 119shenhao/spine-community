@@ -66,7 +66,7 @@ export default {
     const projectionEnabled=Boolean(projectionReady&&config?.enabled&&config.purgeReady);
     const publicContent={
      baseUrl:projectionEnabled&&env.PUBLIC_CONTENT_READS==='true'?config!.base:null,
-     ...(projectionEnabled&&env.PUBLIC_CONTENT_READS==='true'?{signedIn:true,directTranslations:config!.directTranslations}:{}),
+     ...(projectionEnabled&&env.PUBLIC_CONTENT_READS==='true'?{signedIn:true,directTranslations:config!.directTranslations,separateTranslations:config!.separateTranslations,pageSize:config!.pageSize}:{}),
      onDemand:projectionEnabled&&Boolean(config?.onDemand),
      fallback:env.PUBLIC_CONTENT_FALLBACK==='true',
      ready:projectionReady,enabled:Boolean(config?.enabled),purgeConfigured:Boolean(config?.purgeReady),
