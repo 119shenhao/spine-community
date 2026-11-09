@@ -20,7 +20,7 @@ export async function unpackTranslation(result,entry) {
 }
 
 export function translationView(locale,{request,configured,hasCache,direct,render,onStale}) {
- const entries=new Map(),views=new WeakMap(),pages=new WeakMap(),queue=new Set();
+ const entries=new Map(),views=new WeakMap(),pages=new WeakMap(),queue=new Set(),cacheChecks=new WeakMap();
  let closed=false,stale=false,timer,observer;
  function item(type,row,scope='full') {
   if(!(configured||hasCache||row.translations?.[locale])||(!row.body&&!row.summary)||(row.status&&row.status!=='published')||
@@ -89,8 +89,15 @@ export function translationView(locale,{request,configured,hasCache,direct,rende
   queue.clear();
   for(let i=0;i<states.length&&!closed;i+=4){
    const batch=states.slice(i,i+4);
-   batch.forEach(state=>state.attempts++);
-   await load(batch,configured);
+   // A public CDN object can still be in the old format during migration.
+   // Finish its cache-only D1 check before requesting a new Azure translation.
+   const checks=[...new Set(batch.map(state=>cacheChecks.get(state)).filter(Boolean))];
+   if(checks.length)await Promise.allSettled(checks);
+   if(closed)break;
+   const unresolved=batch.filter(state=>!state.finished);
+   if(!unresolved.length)continue;
+   unresolved.forEach(state=>state.attempts++);
+   await load(unresolved,configured);
   }
  }
  return {
@@ -101,7 +108,15 @@ export function translationView(locale,{request,configured,hasCache,direct,rende
   },
   async prime(candidates){
    const states=[...new Set(candidates.map(([type,row,scope])=>item(type,row,scope)).filter(state=>state&&!state.checked))].slice(0,8);
-   if(!direct&&states.length&&(hasCache||states.some(state=>state.entry.token)))await load(states,false,AbortSignal.timeout(450));
+   if(!states.length||!(hasCache||states.some(state=>state.entry.token)))return;
+   if(direct){
+    // Do not block first paint. Missing/stale locale objects may still have
+    // a valid D1 translation from before the CDN format migration.
+    const checking=load(states,false,AbortSignal.timeout(1200));
+    for(const state of states)cacheChecks.set(state,checking);
+    return;
+   }
+   await load(states,false,AbortSignal.timeout(450));
   },
   item,
   observe(nodes){
