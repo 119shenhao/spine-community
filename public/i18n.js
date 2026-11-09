@@ -11,6 +11,7 @@ stories:['Personal experiences','个人经历','Experiencias personales','Experi
 mySpace:['My space','个人中心','Mi espacio','Meu espaço','Mein Bereich','Mon espace','マイページ'],
 newPost:['New post','发帖','Nueva publicación','Nova publicação','Neuen Beitrag','Nouvelle publication','新規投稿'],
 admin:['Community management','社区管理','Administración','Administração','Verwaltung','Administration','コミュニティ管理'],
+translationProviders:['Translation providers','翻译服务管理','Proveedores de traducción','Serviços de tradução','Übersetzungsdienste','Services de traduction','翻訳サービス管理'],
 login:['Sign in','登录','Iniciar sesión','Entrar','Anmelden','Se connecter','ログイン'],
 logout:['Sign out','退出登录','Cerrar sesión','Sair','Abmelden','Se déconnecter','ログアウト'],
 google:['Continue with Google','使用 Google 登录','Continuar con Google','Continuar com Google','Mit Google fortfahren','Continuer avec Google','Google で続行'],
