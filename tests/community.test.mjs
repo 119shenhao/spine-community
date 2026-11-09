@@ -1906,3 +1906,63 @@ test('a CDN miss on a D1 cache hit backfills direct text without calling Azure a
  await flush();
  assert.equal((await (await bucket.get(page)).json()).data,null);
 });
+
+
+test('separate locale CDN pages keep 19 cached translations when replies grow 19 -> 21 and one comment is edited',async()=>{
+ const {DB,env,call,topic}=await fixture(),bucket=projectionBucket();
+ enableProjection(env,bucket);
+ Object.assign(env,{PUBLIC_TRANSLATION_SEPARATE:'true',PUBLIC_CONTENT_PAGE_SIZE:'20'});
+ const {buildProjection,projectionConfig,writeProjection,localeObjectKey}=await import('../.test-build/public-projection.js');
+ const id=await topic('Original English topic','Long English original for the split CDN test.');
+ const insert=DB.db.prepare("INSERT INTO comments(id,topic_id,author_id,body,status,source_lang) VALUES(?,?,'bob',?,'published','en')");
+ const translated=DB.db.prepare("INSERT INTO comment_translations(comment_id,locale,source_version,body_text,provider) VALUES(?,'zh-CN',? ,?,'azure')");
+ for(let i=1;i<=19;i++){insert.run('split-reply-'+i,id,'Fictional original '+i);translated.run('split-reply-'+i,1,'已有中文译文 '+i);}
+ const config=projectionConfig(env),originalKey=topicProjectionKey(id),localeKey=localeObjectKey(originalKey,'zh-CN');
+ async function publish(index=1){
+  const projected=await buildProjection(DB,'topic',id,index,true,20);
+  const key=index===1?originalKey:`topics/${id}/comments/v2/page-${index}.json`;
+  const paths=await writeProjection(config,key,'topic',id,projected.version,projected.data);
+  return {projected,paths,key};
+ }
+ const first=await publish();
+ assert.deepEqual(first.paths,[localeKey]);
+ const original=(await (await bucket.get(originalKey)).json()).data;
+ assert.equal(original.topic.body,'Long English original for the split CDN test.');
+ assert.equal(original.comments.length,19);
+ assert(!JSON.stringify(original).includes('已有中文译文'));
+ assert.deepEqual(original.translationLocales,['zh-CN']);
+ let localized=await (await bucket.get(localeKey)).json();
+ assert.equal(localized.items.length,19);
+ const {publicContentReader}=await import('../public/public-content.js');
+ const fetcher=async url=>{
+  const key=new URL(url).pathname.slice(1),entry=await bucket.get(key);
+  return entry?Response.json(await entry.json()):new Response('',{status:404});
+ };
+ const reader=publicContentReader({environment:'preview',publicContent:{baseUrl:config.base,
+  separateTranslations:true,pageSize:20}},null,async()=>{throw Error('unnecessary_worker_request')},fetcher,'zh-CN');
+ const read=await reader.topic(id,new URLSearchParams());
+ assert.equal(read.comments[0].translations['zh-CN'].body,'已有中文译文 1');
+ insert.run('split-reply-20',id,'Fictional original 20');
+ insert.run('split-reply-21',id,'Fictional original 21');
+ const full=await publish();
+ assert.equal(full.projected.data.comments.length,20);
+ assert.equal(full.projected.data.more,undefined);
+ localized=await (await bucket.get(localeKey)).json();
+ assert.equal(localized.items.length,19);
+ assert.equal(localized.items.find(x=>x.id==='split-reply-20'),undefined);
+ const second=await publish(2);
+ assert.equal(second.projected.data.comments.length,1);
+ assert.equal(second.projected.data.comments[0].id,'split-reply-21');
+ const result=await call('/api/comments/split-reply-8','PATCH',{body:'Edited original eight',source_lang:'en'},'bob');
+ assert.equal(result.status,200);
+ await publish();
+ localized=await (await bucket.get(localeKey)).json();
+ assert.equal(localized.items.length,18);
+ assert(!localized.items.some(x=>x.id==='split-reply-8'));
+ assert(localized.items.some(x=>x.id==='split-reply-19'));
+ translated.run('split-reply-8',2,'已修改的中文译文 8');
+ await publish();
+ localized=await (await bucket.get(localeKey)).json();
+ assert.equal(localized.items.find(x=>x.id==='split-reply-8').body,'已修改的中文译文 8');
+ assert.equal(localized.items.length,19);
+});
