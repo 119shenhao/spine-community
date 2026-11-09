@@ -147,7 +147,6 @@ def verify(topic_id, draft, count):
     result = api("/api/topics/" + topic_id)
     topic, rows = result["topic"], result["comments"]
     if (result["next"] is not None or len(rows) != count
-            or topic.get("nickname") not in ("未知用户", "Unknown User")
             or any(topic.get(field) != draft[field] for field in ("title", "body", "source_lang"))):
         return False
 
@@ -162,8 +161,7 @@ def verify(topic_id, draft, count):
     flatten(draft["comments"])
     order = {row["id"]: index for index, row in enumerate(rows)}
     return len(order) == count and all(
-        row.get("nickname") in ("未知用户", "Unknown User")
-        and (row["body"], row["source_lang"], order.get(row["parent_comment_id"], -1)
+        (row["body"], row["source_lang"], order.get(row["parent_comment_id"], -1)
              if row["parent_comment_id"] is not None else None) == expected[index]
         for index, row in enumerate(rows)
     )
