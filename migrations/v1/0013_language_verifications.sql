@@ -12,3 +12,27 @@ CREATE TABLE content_language_verifications (
  PRIMARY KEY(content_type,content_id,content_version)
 );
 CREATE INDEX idx_content_language_verifications_lookup ON content_language_verifications(language,method);
+
+-- The public R2 original carries the effective source language. Any newly
+-- verified source triggers the existing on-demand CDN invalidation system.
+CREATE TRIGGER language_verification_topic_publish AFTER INSERT ON content_language_verifications
+WHEN NEW.content_type='topic' AND EXISTS(
+ SELECT 1 FROM topics WHERE id=NEW.content_id AND content_version=NEW.content_version AND status='published'
+) BEGIN
+ INSERT INTO public_projection_invalidate SELECT 'topic',NEW.content_id,1 WHERE 1;
+ INSERT INTO public_projection_invalidate SELECT 'feed','latest',1 WHERE 1;
+END;
+CREATE TRIGGER language_verification_comment_publish AFTER INSERT ON content_language_verifications
+WHEN NEW.content_type='comment' AND EXISTS(
+ SELECT 1 FROM comments WHERE id=NEW.content_id AND content_version=NEW.content_version AND status='published'
+) BEGIN
+ INSERT INTO public_projection_invalidate
+ SELECT 'topic',topic_id,1 FROM comments WHERE id=NEW.content_id;
+END;
+-- Ensure deleted user content does not leave unnecessary inference metadata.
+CREATE TRIGGER language_verification_topic_delete AFTER DELETE ON topics BEGIN
+ DELETE FROM content_language_verifications WHERE content_type='topic' AND content_id=OLD.id;
+END;
+CREATE TRIGGER language_verification_comment_delete AFTER DELETE ON comments BEGIN
+ DELETE FROM content_language_verifications WHERE content_type='comment' AND content_id=OLD.id;
+END;
