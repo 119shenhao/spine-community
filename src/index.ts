@@ -52,16 +52,18 @@ export default {
    }
    if(path==='/api/uploads'||path.startsWith('/api/uploads/'))fail(403,'image_feature_disabled');
    if(path==='/api/health'){
-    let ready=false,projectionReady=false,translationReady=false,translationEnabled=false,translationCacheAvailable=false;
+    let ready=false,projectionReady=false,translationReady=false,translationEnabled=false,translationCacheAvailable=false,languageSchemaReady=false;
     const config=projectionConfig(env);
     try{
      const row=env.DB&&await one(env.DB,`SELECT value,EXISTS(SELECT 1 FROM sqlite_master WHERE type='table'
        AND name='public_projection_scan_count') projection,EXISTS(SELECT 1 FROM sqlite_master WHERE type='table'
        AND name='public_projection_demand') demand,
+       EXISTS(SELECT 1 FROM sqlite_master WHERE type='table'
+       AND name='content_language_verifications') languageSchema,
        EXISTS(SELECT 1 FROM pragma_table_info('topic_translations') WHERE name='projection_key') translation,
        (SELECT value FROM settings WHERE key='translation_enabled') translationEnabled,
        EXISTS(SELECT 1 FROM topic_translations) OR EXISTS(SELECT 1 FROM comment_translations) cachedTranslations FROM settings WHERE key='schema_version' AND value='1'`);
-     ready=Boolean(row);translationReady=Boolean(row?.translation);translationEnabled=row?.translationEnabled==='true';translationCacheAvailable=Boolean(row?.cachedTranslations);projectionReady=Boolean(row?.projection&&(!config?.onDemand||row?.demand));
+     languageSchemaReady=Boolean(row?.languageSchema);ready=Boolean(row&&languageSchemaReady);translationReady=Boolean(row?.translation&&languageSchemaReady);translationEnabled=row?.translationEnabled==='true';translationCacheAvailable=Boolean(row?.cachedTranslations);projectionReady=Boolean(row?.projection&&(!config?.onDemand||row?.demand));
     }catch{}
     const projectionEnabled=Boolean(projectionReady&&config?.enabled&&config.purgeReady);
     const publicContent={
@@ -72,7 +74,7 @@ export default {
      ready:projectionReady,enabled:Boolean(config?.enabled),purgeConfigured:Boolean(config?.purgeReady),
      zoneConfigured:Boolean(config?.zoneConfigured),tokenConfigured:Boolean(config?.tokenConfigured)
     };
-    return json({environment:env.APP_ENV==='preview'?'preview':'production',status:ready?'ok':'setup_required',stage:'v1-development',version:'0.5.0-language-detection-upgrade.1',publicContent,databaseConfigured:Boolean(env.DB),databaseReady:ready,imageUploadsEnabled:false,importEnabled:importEnabled(req,env),googleConfigured:Boolean(env.GOOGLE_CLIENT_ID&&env.GOOGLE_CLIENT_SECRET),translationReady,translationCacheAvailable,...(env.APP_ENV==='preview'?{translationSetup:{...translationSetup(env),databaseEnabled:translationEnabled}}:{}),translationConfigured:translationReady&&translationEnabled&&translationConfigured(env),analyticsConfigured:Boolean(env.ANALYTICS_SALT)},ready?200:503);
+    return json({environment:env.APP_ENV==='preview'?'preview':'production',status:ready?'ok':'setup_required',stage:'v1-development',version:'0.5.0-language-detection-upgrade.1',publicContent,databaseConfigured:Boolean(env.DB),databaseReady:ready,imageUploadsEnabled:false,importEnabled:importEnabled(req,env),googleConfigured:Boolean(env.GOOGLE_CLIENT_ID&&env.GOOGLE_CLIENT_SECRET),translationReady,translationCacheAvailable,...(env.APP_ENV==='preview'?{translationSetup:{...translationSetup(env),databaseEnabled:translationEnabled},languageDetection:{engine:'tinyld-heavy',schemaReady:languageSchemaReady}}:{}),translationConfigured:translationReady&&translationEnabled&&translationConfigured(env),analyticsConfigured:Boolean(env.ANALYTICS_SALT)},ready?200:503);
    }
    if(!env.DB)fail(503,'database_not_configured');
    if(!['GET','HEAD'].includes(req.method))sameOrigin(req);
