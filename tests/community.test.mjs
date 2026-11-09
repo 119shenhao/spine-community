@@ -2253,6 +2253,78 @@ test('a CDN miss on a D1 cache hit backfills direct text without calling Azure a
 });
 
 
+test('preview uses separate CDN translations while production remains on its existing policy',()=>{
+ const config=JSON.parse(readFileSync('wrangler.jsonc','utf8'));
+ assert.equal(config.previews.vars.PUBLIC_TRANSLATION_SEPARATE,'true');
+ assert.equal(config.previews.vars.PUBLIC_TRANSLATION_DIRECT,'false');
+ assert.notEqual(config.vars?.PUBLIC_TRANSLATION_SEPARATE,'true');
+});
+
+test('previously D1-cached English topic becomes a separate Chinese CDN JSON, then revisits never request translate',async t=>{
+ const {call,env,DB,topic}=await fixture(),bucket=projectionBucket();
+ enableProjection(env,bucket);
+ Object.assign(env,{PUBLIC_CONTENT_ON_DEMAND:'true',PUBLIC_CONTENT_FALLBACK:'true',
+  PUBLIC_TRANSLATION_SEPARATE:'false',PUBLIC_TRANSLATION_DIRECT:'false'});
+ const id=await topic('An earlier English surgery story',
+  'I had surgery on my back and described my recovery after several weeks.');
+ const page=topicProjectionKey(id),localeKey='i18n/zh-CN/'+page;
+ DB.db.prepare("INSERT INTO topic_translations(topic_id,locale,scope,source_version,title_text,body_text,provider) VALUES(?,'zh-CN','full',1,'中文标题','已翻译并缓存的中文正文','azure')").run(id);
+ const {projectionConfig,writeProjection,buildProjection}=await import('../.test-build/public-projection.js');
+ const old=await buildProjection(DB,'topic',id,1,false);
+ await writeProjection(projectionConfig(env),page,'topic',id,old.version,old.data);
+ assert.equal((await bucket.head(page)).customMetadata.translationFormat,'encrypted');
+ // First visit after a configuration change: an incompatible old CDN format
+ // uses a normal D1 fallback and queues one *on-demand* projection rebuild.
+ env.PUBLIC_TRANSLATION_SEPARATE='true';
+ const {publicContentReader}=await import('../public/public-content.js');
+ const tasks=[]; const ctx={waitUntil(promise){tasks.push(promise)}};
+ let d1Fallbacks=0,azureCalls=0;
+ t.mock.method(globalThis,'fetch',async url=>{
+   if(new URL(url).hostname==='api.cloudflare.com')return Response.json({success:true});
+   azureCalls++;throw Error('Unexpected Azure translation call');
+ });
+ const cdnFetch=async url=>{
+   const key=new URL(url).pathname.slice(1),obj=await bucket.get(key);
+   return obj?Response.json(await obj.json()):new Response('',{status:404});
+ };
+ const publicConfig={environment:'preview',publicContent:{baseUrl:projectionConfig(env).base,
+   onDemand:true,fallback:true,separateTranslations:true,directTranslations:true,pageSize:50}};
+ const first=publicContentReader(publicConfig,null,async(path,options)=>{
+   d1Fallbacks++;
+   return (await call(path,'GET',undefined,null,options?.headers||{},ctx)).data;
+ },cdnFetch,'zh-CN');
+ await first.topic(id,new URLSearchParams());
+ while(tasks.length)await Promise.all(tasks.splice(0));
+ assert.equal(d1Fallbacks,1);
+ assert.equal(azureCalls,0);
+ const original=(await (await bucket.get(page)).json()).data;
+ assert.equal(original.translationLayout,'separate-v1');
+ assert.deepEqual(original.translationLocales,['zh-CN']);
+ assert.equal(original.topic.translations,undefined,'source JSON contains no embedded translation');
+ const locale=(await (await bucket.get(localeKey)).json());
+ assert.equal(locale.items.length,1);
+ assert.equal(locale.items[0].body,'已翻译并缓存的中文正文');
+ // Subsequent visits are CDN-only (anonymous): no D1 fallback and no
+ // /api/translate because sourceVersion and locale JSON match.
+ for(let visit=0;visit<2;visit++){
+  const reader=publicContentReader(publicConfig,null,async()=>{
+   throw Error('Unnecessary Worker fallback');
+  },cdnFetch,'zh-CN');
+  const loaded=await reader.topic(id,new URLSearchParams());
+  assert.equal(loaded.topic.translations['zh-CN'].body,'已翻译并缓存的中文正文');
+  const {translationView}=await import('../public/translation-ui.js');
+  let translateCalls=0;
+  const view=translationView('zh-CN',{direct:true,configured:true,hasCache:true,
+    request:async()=>{translateCalls++;throw Error('Unnecessary /api/translate');},render:()=>{}});
+  view.markPage(loaded);
+  await view.prime([['topic',loaded.topic]]);
+  assert.equal(view.item('topic',loaded.topic).result.body,'已翻译并缓存的中文正文');
+  assert.equal(translateCalls,0);
+  view.close();
+ }
+ assert.equal(azureCalls,0);
+});
+
 test('preview rollback rejects split-format CDN originals and uses the live Worker fallback',async()=>{
  const {publicContentReader}=await import('../public/public-content.js');
  const original={topic:{id:'demo',status:'published',body:'English body',content_version:1},
