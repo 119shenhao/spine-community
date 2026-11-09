@@ -48,6 +48,8 @@
       "PUBLIC_CONTENT_ON_DEMAND": "true",
       "GOOGLE_CLIENT_ID": "294338107553-bht5pr4qa112e9knbst517b0mvb9pus9.apps.googleusercontent.com",
       "TRANSLATION_ENABLED": "true",
+      "TRANSLATOR_REGION": "eastus",
+      "TRANSLATOR_F0_VERIFIED_AT": "2026-11-09T06:14:50Z",
       "IMPORT_ENABLED": "true",
       "COLLECT_ENABLED": "true",
       "PUBLIC_CONTENT_ENABLED": "true",
