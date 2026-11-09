@@ -1920,7 +1920,7 @@ test('separate locale CDN pages keep 19 cached translations when replies grow 19
  const config=projectionConfig(env),originalKey=topicProjectionKey(id),localeKey=localeObjectKey(originalKey,'zh-CN');
  async function publish(index=1){
   const projected=await buildProjection(DB,'topic',id,index,true,20);
-  const key=index===1?originalKey:`topics/${id}/comments/v2/page-${index}.json`;
+  const key=index===1?originalKey:`topics/${id}/comments/size-20/page-${index}.json`;
   const paths=await writeProjection(config,key,'topic',id,projected.version,projected.data);
   return {projected,paths,key};
  }
