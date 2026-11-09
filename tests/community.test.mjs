@@ -1643,7 +1643,8 @@ test('import and collector keep unverified source hints separate from Heavy auto
 
 test('language verifications are versioned and deleted content removes old evidence',async()=>{
  const {DB,call,topic}=await fixture();
- const id=await topic('Back stiffness','The stiffness has improved after physical therapy.', 'alice',{source_lang_mode:'auto'});
+ const id=await topic('My lower back hurts after sitting at my desk for a long time',
+  'I want to understand which exercises might help after the physiotherapist explained my recovery plan.', 'alice',{source_lang_mode:'auto'});
  assert.equal(DB.db.prepare('SELECT count(*) n FROM content_language_verifications WHERE content_id=?').get(id).n,1);
  await call('/api/topics/'+id,'PATCH',{title:'Updated history',body:'The recovery process is different now.',source_lang_mode:'manual',source_lang:'fr'});
  assert.equal(DB.db.prepare('SELECT count(*) n FROM content_language_verifications WHERE content_id=?').get(id).n,0);
