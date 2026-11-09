@@ -106,6 +106,26 @@ test('administrator can set Azure budgets without resetting usage or enabling un
  assert.equal(DB.db.prepare("SELECT count(*) n FROM moderation_actions WHERE target_id='translation_azure_budget'").get().n,2);
 });
 
+test('entry HTML prevents stale SPA modules and versioning preserves admin navigation',async()=>{
+ const source=readFileSync('scripts/prepare-build.mjs','utf8');
+ assert.match(source,/createVersionedFrontend/);
+ assert.match(source,/createHash\('sha256'\)/);
+ assert.match(source,/\/\_app\//);
+ const app=readFileSync('public/app.js','utf8');
+ assert.match(app,/translationProviders/);
+ assert.match(app,/languageReview/);
+ const {DB,env}=await fixture();
+ const origin='https://preview.test';
+ const response=await worker.fetch(new Request(origin+'/?utm_source=chatgpt.com'),
+  {...env,APP_ENV:'preview',ASSETS:{fetch:async()=>new Response('<html>test</html>',{
+   headers:{'content-type':'text/html','cache-control':'public, max-age=31536000'}
+  })}});
+ assert.equal(response.status,200);
+ assert.equal(response.headers.get('cache-control'),'no-store, max-age=0');
+ assert.equal(response.headers.get('pragma'),'no-cache');
+ assert.equal(response.headers.get('x-robots-tag'),'noindex, nofollow');
+});
+
 test('deployed browser modules pass JavaScript syntax validation',async()=>{
  const {spawnSync}=await import('node:child_process');
  for(const path of ['public/app.js','public/translation-admin.js','public/language-admin.js','public/i18n.js','public/i18n-zh-tw.js','public/public-content.js','public/translation-ui.js']){
