@@ -50,7 +50,7 @@ export async function adminRoute(req:Request,env:Env,user:Row|null,path:string):
       WHERE id=? AND status='published' AND content_version=? RETURNING content_version`,
       b.source_lang,b.id,previous.content_version);
     if(!updated)fail(409,'content_changed');
-    await audit(env,u,'language',b.id,'correct',
+    await audit(env,u,b.type,b.id,'correct_language',
       b.type+': '+b.source_lang+' ('+reason+')').run();
     return json({ok:true,version:updated.content_version});
   }
