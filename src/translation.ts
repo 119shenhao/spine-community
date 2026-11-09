@@ -18,10 +18,25 @@ function azureSourceLocale(locale:string) {
   return code.split('-')[0];
 }
 
+function verifiedFreeTierAt(env:Env) {
+  const verifiedAt=Math.floor(Date.parse(env.TRANSLATOR_F0_VERIFIED_AT||'')/1000);
+  return Number.isFinite(verifiedAt)&&verifiedAt<=now()&&now()-verifiedAt<31*86400?verifiedAt:null;
+}
+
+export function translationSetup(env:Env) {
+  return {
+    workerEnabled:env.TRANSLATION_ENABLED==='true',
+    keyConfigured:Boolean(env.TRANSLATOR_KEY),
+    freeTierVerified:verifiedFreeTierAt(env)!==null,
+    regionConfigured:Boolean(env.TRANSLATOR_REGION),
+    customEndpointConfigured:Boolean(env.TRANSLATOR_ENDPOINT)
+  };
+}
+
 function azureConfiguration(env:Env) {
   if(env.TRANSLATION_ENABLED!=='true'||!env.TRANSLATOR_KEY)return null;
-  const verifiedAt=Date.parse(env.TRANSLATOR_F0_VERIFIED_AT||'')/1000;
-  if(!Number.isFinite(verifiedAt)||verifiedAt>now()||now()-verifiedAt>=31*86400)return null;
+  const verifiedAt=verifiedFreeTierAt(env);
+  if(verifiedAt===null)return null;
   let endpoint:URL;
   try{endpoint=new URL(env.TRANSLATOR_ENDPOINT||AZURE_ENDPOINT);}catch{return null;}
   const global=endpoint.origin===AZURE_ENDPOINT&&endpoint.pathname==='/';
@@ -37,7 +52,7 @@ function azureConfiguration(env:Env) {
   url.searchParams.set('profanityAction','NoAction');
   const headers:Record<string,string>={'content-type':'application/json','Ocp-Apim-Subscription-Key':env.TRANSLATOR_KEY};
   if(env.TRANSLATOR_REGION)headers['Ocp-Apim-Subscription-Region']=env.TRANSLATOR_REGION;
-  return {url,headers,verifiedAt:Math.floor(verifiedAt)};
+  return {url,headers,verifiedAt};
 }
 export const translationConfigured=(env:Env)=>Boolean(azureConfiguration(env));
 
