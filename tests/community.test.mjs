@@ -1908,6 +1908,20 @@ test('a CDN miss on a D1 cache hit backfills direct text without calling Azure a
 });
 
 
+test('20-reply CDN paths use size-20 while legacy 50-reply paths remain parseable',async()=>{
+ const {objectKey,parseObjectKey,localeObjectKey}=await import('../.test-build/public-projection.js');
+ const key='topics/example/comments/size-20/page-2.json';
+ assert.equal(objectKey('topic','example',2,20),key);
+ assert.deepEqual(parseObjectKey(key),{scope:'topic',target:'example',index:2,pageSize:20});
+ assert.equal(localeObjectKey(key,'zh-CN'),'i18n/zh-CN/'+key);
+ const old='topics/example/comments/page-2.json';
+ assert.equal(objectKey('topic','example',2,50),old);
+ assert.deepEqual(parseObjectKey(old),{scope:'topic',target:'example',index:2,pageSize:50});
+ assert.equal(parseObjectKey('topics/example/comments/v2/page-2.json'),null);
+ assert.equal(parseObjectKey('topics/example/comments/size-30/page-2.json'),null);
+ assert.equal(objectKey('topic','example',1,20),'topics/example/detail.json');
+});
+
 test('separate locale CDN pages keep 19 cached translations when replies grow 19 -> 21 and one comment is edited',async()=>{
  const {DB,env,call,topic}=await fixture(),bucket=projectionBucket();
  enableProjection(env,bucket);
