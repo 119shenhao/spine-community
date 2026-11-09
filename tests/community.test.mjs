@@ -106,6 +106,14 @@ test('administrator can set Azure budgets without resetting usage or enabling un
  assert.equal(DB.db.prepare("SELECT count(*) n FROM moderation_actions WHERE target_id='translation_azure_budget'").get().n,2);
 });
 
+test('deployed browser modules pass JavaScript syntax validation',async()=>{
+ const {spawnSync}=await import('node:child_process');
+ for(const path of ['public/app.js','public/translation-admin.js','public/i18n.js','public/i18n-zh-tw.js','public/public-content.js','public/translation-ui.js']){
+  const result=spawnSync(process.execPath,['--check',path],{encoding:'utf8'});
+  assert.equal(result.status,0,path+' browser syntax error:\n'+result.stderr);
+ }
+});
+
 test('translation provider editor renders independent Azure budget and unavailable Aliyun',async()=>{
  const app=readFileSync('public/app.js','utf8'),view=readFileSync('public/translation-admin.js','utf8');
  assert.match(app,/translationProviders/);
