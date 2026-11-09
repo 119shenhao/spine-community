@@ -42,6 +42,11 @@ export async function renderTranslationAdmin(target,api,esc,locale){
   <h3>${tr('Azure Translator 额度设置','Azure Translator quota settings')}</h3>
   <form class="form-grid" id="translation-provider-form">
    <input type="hidden" name="provider" value="azure"/>
+   <label>${tr('当前翻译服务商','Active translation provider')}
+    <select name="active_provider" required>
+     ${rows.map(p=>`<option value="${esc(p.id)}" ${p.active?'selected':''} ${p.selectable?'':'disabled'}>${esc(p.name)}${p.selectable?'':tr('（未接入）',' (not available)')}</option>`).join('')}
+    </select>
+   </label>
    <label>${tr('每日网站预算（字符）','Daily website budget (characters)')}
     <input name="daily_limit" type="number" required min="1" max="${Number(response.capMonthly)}" step="1" value="${Number(azure.daily?.limit||0)}"/>
    </label>
