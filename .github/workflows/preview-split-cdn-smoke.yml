@@ -1,0 +1,82 @@
+name: Preview separate translation CDN smoke
+on:
+  push:
+    branches: [feature/v1-community-build-20261106]
+    paths: [.github/workflows/preview-split-cdn-smoke.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify split CDN, migrate one previously translated public post without Azure calls
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import {setTimeout as delay} from 'node:timers/promises';
+          const worker='https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev';
+          const cdn='https://spine-data-dev.nbn369.com';
+          const id='953f840b-a8ec-436c-8786-7980956e79e8';
+          const page='topics/'+id+'/detail.json';
+          const localized='i18n/zh-CN/'+page;
+          const read=async url=>{
+            const r=await fetch(url,{signal:AbortSignal.timeout(12000),redirect:'error',
+              headers:{'cache-control':'no-cache'}});
+            return {status:r.status,data:r.ok?await r.json():null};
+          };
+          let healthy=false;
+          for(let i=0;i<24;i++){
+            try{
+              const h=await read(worker+'/api/health');
+              const p=h.data?.publicContent;
+              if(h.status===200&&p?.separateTranslations===true&&
+                 p?.directTranslations===true&&p?.onDemand===true&&
+                 p?.baseUrl===cdn){
+                console.log('Preview separate translation config is active');
+                healthy=true;break;
+              }
+              console.log('Awaiting Preview deployment',h.status,
+                JSON.stringify({separate:p?.separateTranslations,direct:p?.directTranslations}));
+            }catch(e){console.log('Preview probe failed',String(e.message));}
+            await delay(5000);
+          }
+          assert(healthy,'Preview has not deployed the separate translation configuration');
+
+          let original=null,local=null;
+          async function check(){
+            const o=await read(cdn+'/'+page);
+            if(o.status!==200||o.data?.data?.translationLayout!=='separate-v1')return false;
+            const obj=o.data.data;
+            if(obj.topic?.id!==id||!obj.translationLocales?.includes('zh-CN'))return false;
+            const l=await read(cdn+'/'+localized);
+            if(l.status!==200||l.data?.translationLayout!=='separate-v1'||
+               l.data.sourceKey!==page||l.data.contentVersion!==o.data.contentVersion||
+               l.data.invalidated)return false;
+            if(!l.data.items?.some(x=>x.type==='topic'&&x.id===id&&
+               x.scope==='full'&&typeof x.body==='string'&&x.sourceVersion===obj.topic.content_version))return false;
+            original=obj;local=l.data;
+            return true;
+          }
+          if(!await check()){
+            // This is the same normal, authorized lazy migration path browsers use:
+            // GET the public original and request a missing projection. It never
+            // invokes /api/translate or Azure and never writes production data.
+            const warm=await fetch(worker+'/api/topics/'+id,{
+              headers:{'x-spine-projection-miss':page},
+              signal:AbortSignal.timeout(12000)
+            });
+            assert.equal(warm.status,200,'Public preview post not available for backfill');
+            console.log('Triggered preview-only on-demand projection rebuild');
+            for(let i=0;i<32&&!original;i++){
+              await delay(4000);
+              try{await check();}catch(e){console.log('R2/CDN check retry',String(e.message));}
+            }
+          }
+          assert(original&&local,'Existing cached Chinese translation was not published as separate CDN JSON');
+          console.log('Validated direct CDN reopens: original + Chinese translation JSON, no /api/translate call');
+          JS
