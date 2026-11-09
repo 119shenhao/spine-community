@@ -20,7 +20,7 @@ function clearlyEnglish(sample:string) {
   const words=sample.toLowerCase().match(/[a-z]+(?:'[a-z]+)?/g)||[];
   if(letters<45||latin<letters*.98||words.length<9)return false;
   const strong=words.filter(word=>englishWords.has(word));
-  return strong.length>=4&&new Set(strong).size>=3&&strong.length/words.length>=.2;
+  return strong.length>=4&&new Set(strong).size>=3&&strong.length/words.length>=.14;
 }
 
 function classify(sample:string,compareSection=false) {
