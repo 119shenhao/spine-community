@@ -65,7 +65,7 @@ async function startScan(env:Env,config:Config,user:Row,input:Row) {
     SELECT ?,CASE WHEN scope='feed' THEN 'feeds/latest/page-'||n||'.json'
       WHEN n=1 THEN 'topics/'||target||'/detail.json'
       ELSE 'topics/'||target||'/comments/'||?||'page-'||n||'.json' END,scope,target,n,version FROM expected LIMIT ?`,
-    Number(config.onDemand),FEED_LIMIT,config.pageSize,config.pageSize,target,target,SCAN_BUDGET+1,Number(config.onDemand),scanId,config.pageSize===20?'v2/':'',SCAN_BUDGET+1);
+    Number(config.onDemand),FEED_LIMIT,config.pageSize,config.pageSize,target,target,SCAN_BUDGET+1,Number(config.onDemand),scanId,config.pageSize===20?'size-20/':'',SCAN_BUDGET+1);
   if(await one(env.DB,"SELECT id FROM public_projection_scan WHERE environment=? AND phase IN ('listing','comparing')",env.APP_ENV))fail(409,'scan_already_active');
   try{
     await env.DB.batch([
