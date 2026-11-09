@@ -10,7 +10,7 @@ const englishWords=new Set([
  'would','could','should','will','your','you','they','their','there',
  'were','was','are','but','not','can','from','after','before','when',
  'because','been','about','which','what','where','how','does','did',
- 'than','then','into','through','while','during','without','since'
+ 'than','then','into','through','while','during','without','since','my','we','our'
 ]);
 
 type Evidence={language:string;score:number|null;method:'tinyld-heavy'};
@@ -37,6 +37,16 @@ function classify(sample:string,compareSection=false):Evidence {
   return trad===simp?unknown():{language:trad?'zh-TW':'zh-CN',score:null,method:LANGUAGE_DETECTOR};
  }
  if(letters<16||han+kana>=5&&latin>=10)return unknown();
+ // Force independent English sections to be recognized even when a mixed
+ // Spanish/English whole-post vote is biased towards Spanish.
+ if(compareSection&&letters>=25&&latin>=letters*.98){
+  const words=sample.toLowerCase().match(/[a-z]+/g)||[];
+  const strong=words.filter(w=>englishWords.has(w));
+  if(words.length>=6&&strong.length>=2&&new Set(strong).size>=2&&
+    /\b(?:i|my|we|the)\b/i.test(sample))
+   return {language:'en',score:null,method:LANGUAGE_DETECTOR};
+ }
+
  const [first,second]=detectAll(sample);
  if(!first||first.lang==='zh')return unknown();
  const confident=first.accuracy>=.42&&(!second||first.accuracy-second.accuracy>=.2);
