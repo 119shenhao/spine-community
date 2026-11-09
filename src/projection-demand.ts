@@ -45,7 +45,7 @@ export async function requestProjection(env:Env,req:Request,path:string) {
   if(scope==='topic'&&!await one(db,"SELECT 1 FROM topics WHERE id=? AND status='published'",target))return;
   const existing=await config.bucket.head(key);
   if(existing&&existing.customMetadata?.visibility!=='invalidated'&&
-     (!config.separateTranslations||existing.customMetadata?.translationFormat==='separate-v1'))return;
+     (config.separateTranslations?existing.customMetadata?.translationFormat==='separate-v1':existing.customMetadata?.translationFormat!=='separate-v1'))return;
   if('before' in page&&page.before){
     const boundary=await one(db,`SELECT rowid FROM comments WHERE topic_id=? AND status IN ('published','deleted')
       ORDER BY rowid LIMIT 1 OFFSET ?`,target,(index-1)*page.pageSize-1);
