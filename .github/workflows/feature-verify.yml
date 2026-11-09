@@ -20,6 +20,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run verify
+      - run: node scripts/benchmark-language.mjs
+      - run: npx wrangler deploy --dry-run --outdir .wrangler-dry-run
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
