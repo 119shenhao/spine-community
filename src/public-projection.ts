@@ -129,7 +129,7 @@ export function localeObjectKey(key:string,locale:string) {
 
 // Keep originals and available translated copies in separate public R2 objects.
 // The original page contains only an index of available target languages.
-function splitLocaleData(data:unknown) {
+export function splitLocaleData(data:unknown) {
   if(!data||typeof data!=='object'||Array.isArray(data))
     return {source:data,locales:new Map<string,Row[]>()};
   const original=structuredClone(data) as Row;
