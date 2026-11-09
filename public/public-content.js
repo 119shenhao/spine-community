@@ -126,7 +126,7 @@ export function publicContentReader(health,user,api,fetcher=fetch,locale=null) {
    if(!eligible||!PUBLIC_ID.test(topicId)||query.has('focus')||query.has('progress')||
      (page>1&&!previousVersion&&!health.publicContent.onDemand))return api(path);
    const key=page===1?`topics/${topicId}/detail.json`:
-      `topics/${topicId}/comments/${health?.publicContent?.pageSize===20?'v2/':''}page-${page}.json`;
+      `topics/${topicId}/comments/${health?.publicContent?.pageSize===20?'size-20/':''}page-${page}.json`;
    return read(key,options=>api(path,options),e=>e.topicId===topicId&&Array.isArray(e.data.comments)&&
     (page===1?e.data.topic?.id===topicId&&Array.isArray(e.data.progress):e.contentVersion===previousVersion),page===1);
   }
