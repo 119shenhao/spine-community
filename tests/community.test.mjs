@@ -1625,7 +1625,7 @@ test('free-only attestation, rolling budget and provider failures fail closed wi
  env.TRANSLATOR_F0_VERIFIED_AT=new Date(Date.now()-32*86400000).toISOString();
  assert.equal((await run(ids[0])).reason,'translation_not_configured');
  assert.equal(requests,0);
- mockTranslator(env,DB);
+ mockTranslator(env,DB,{TRANSLATION_MONTHLY_LIMIT:'200000'});
  DB.db.exec("INSERT INTO translation_usage_daily(provider,day_utc,characters,requests) VALUES('azure',date('now','-31 day'),199999,1)");
  assert.equal((await run(ids[0])).reason,'translation_quota_reached');
  DB.db.exec("UPDATE translation_usage_daily SET day_utc=date('now','-32 day')");
