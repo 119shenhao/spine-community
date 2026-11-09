@@ -1639,9 +1639,9 @@ test('Azure autodetect confirms unknown originals once and reuses D1 for later l
  assert.equal(first.data.items[0].translated,true,JSON.stringify(first.data));
  assert.equal(from,null,'Azure receives no from= when source is not known');
  assert.equal(count,1);
- assert.deepEqual(DB.db.prepare('SELECT language,method FROM content_language_verifications WHERE content_type=? AND content_id=?').get('topic',id),{
-  language:'en',method:'azure-auto'
- });
+ const verification=DB.db.prepare('SELECT language,method FROM content_language_verifications WHERE content_type=? AND content_id=?').get('topic',id);
+ assert.equal(verification.language,'en');
+ assert.equal(verification.method,'azure-auto');
  const cached=await translationBatch(call,[translationItem(id)],{locale:'zh-CN'});
  assert.equal(cached.data.items[0].translated,true);
  assert.equal(count,1,'cached translation must not contact Azure');
@@ -1713,7 +1713,7 @@ test('owner language review is protected and invalidates cached translations on 
  assert.equal(topicAfter.source_lang,'es');
  assert.equal(topicAfter.source_lang_mode,'manual');
  assert.equal(DB.db.prepare('SELECT count(*) n FROM topic_translations WHERE topic_id=?').get(id).n,0);
- assert.equal(DB.db.prepare("SELECT count(*) n FROM moderation_actions WHERE target_id=? AND target_type='language'").get(id).n,1);
+ assert.equal(DB.db.prepare("SELECT count(*) n FROM moderation_actions WHERE target_id=? AND target_type='topic' AND action='correct_language'").get(id).n,1);
  assert(!(await call('/api/admin/language-review','GET',undefined,'admin')).data.items.some(x=>x.id===id));
 });
 
