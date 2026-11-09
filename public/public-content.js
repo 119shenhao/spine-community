@@ -84,7 +84,12 @@ export function publicContentReader(health,user,api,fetcher=fetch,locale=null) {
    if(envelope.invalidated===true)throw Object.assign(contentError(503),{missing:true});
    if(envelope.data===null)throw Object.assign(contentError(404),{withdrawn:firstPage});
    if(!accept(envelope))throw contentError(503);
-   if(health?.publicContent?.separateTranslations&&envelope.data?.translationLayout!=='separate-v1')
+   const split=health?.publicContent?.separateTranslations===true;
+   const separateObject=envelope.data?.translationLayout==='separate-v1';
+   // During rollout or rollback, an old CDN object must never be interpreted
+   // as the new format (nor vice versa). Fall back to the current Worker
+   // projection and request an on-demand replacement of the incompatible key.
+   if(split!==separateObject)
      throw Object.assign(contentError(503),{missing:true});
   }catch(error){
    if(error.withdrawn&&!user)throw error;
