@@ -731,7 +731,7 @@ test('discussion-first home keeps search form on search page and places post but
  const css=readFileSync('public/styles.css','utf8');
  for(const locale of languages)assert(dictionaries[locale].newPost,'missing post button translation: '+locale);
  assert.equal(dictionaries['zh-CN'].newPost,'发帖');
- const nav=app.match(/\$\('#sidebar'\)\.innerHTML=`<nav>(.*?)<\/nav>/)?.[1];
+ const nav=app.match(/\$\('#sidebar'\)\.innerHTML=`<nav class="primary-nav">(.*?)<\/nav>/)?.[1];
  assert(nav,'sidebar navigation missing');
  assert(nav.indexOf("nav('mySpace'")>=0,'My space navigation missing');
  assert(nav.indexOf('data-action="compose"')>nav.indexOf("nav('mySpace'"),'Post button must follow My space');
