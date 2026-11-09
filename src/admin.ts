@@ -1,6 +1,6 @@
 import {Env,Row,all,one,stmt,now,id,fail,json,body,textField,requireRole,locales} from './core';
 import {purge,notify} from './content';
-import {translationBudgetStatus} from './translation';
+import {AZURE_SITE_MAX_MONTHLY,translationBudgetStatus,translationProvidersStatus} from './translation';
 const audit=(env:Env,u:Row,type:string,target:string,action:string,reason:string)=>stmt(env.DB,'INSERT INTO moderation_actions(id,actor_id,target_type,target_id,action,reason) VALUES(?,?,?,?,?,?)',id(),u.id,type,target,action,reason);
 export async function adminRoute(req:Request,env:Env,user:Row|null,path:string):Promise<Response|null>{
   if(!path.startsWith('/api/admin/'))return null;
@@ -20,6 +20,29 @@ export async function adminRoute(req:Request,env:Env,user:Row|null,path:string):
   if(path==='/api/admin/translation-budget'&&req.method==='GET'){
     requireRole(u,true);
     return json(await translationBudgetStatus(env));
+  }
+  if(path==='/api/admin/translation-providers'){
+    requireRole(u,true);
+    if(req.method==='GET')return json(await translationProvidersStatus(env));
+    if(req.method!=='POST')fail(405,'method_not_allowed');
+    const input=await body(req);
+    // Aliyun is a catalogue placeholder, not a ready-to-use adapter.
+    // Never silently route its requests to Azure or accept unbounded limits.
+    if(input.provider!=='azure'||input.active_provider!=='azure')fail(400,'translation_provider_not_integrated');
+    const daily=input.daily_limit,monthly=input.monthly_limit;
+    if(!Number.isSafeInteger(daily)||!Number.isSafeInteger(monthly)||
+      daily<1||monthly<1||daily>monthly||monthly>AZURE_SITE_MAX_MONTHLY)fail(400,'invalid_translation_budget');
+    await env.DB.batch([
+      stmt(env.DB,`INSERT INTO settings(key,value) VALUES('translation_active_provider','azure')
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value`),
+      stmt(env.DB,`INSERT INTO settings(key,value) VALUES('translation_azure_daily_limit',?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value`,String(daily)),
+      stmt(env.DB,`INSERT INTO settings(key,value) VALUES('translation_azure_monthly_limit',?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value`,String(monthly)),
+      audit(env,u,'setting','translation_azure_budget','update',
+        'Azure daily '+daily+' / monthly '+monthly)
+    ]);
+    return json(await translationProvidersStatus(env));
   }
   if(req.method!=='POST')fail(405,'method_not_allowed');
   const b=await body(req),reason=textField(b.reason,1,2000,'reason');
