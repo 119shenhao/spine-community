@@ -86,7 +86,7 @@ async function readItems(db:D1Database,items:Item[],locale:string) {
     FROM json_each(?)
   ), public_rows AS (
     SELECT r.*,t.content_version,COALESCE(v.language,t.source_lang) source_lang,
-      CASE WHEN v.language IS NOT NULL THEN 'auto' ELSE t.source_lang_mode END source_lang_mode,
+      CASE WHEN v.method='admin-manual' THEN 'manual' WHEN v.language IS NOT NULL THEN 'auto' ELSE t.source_lang_mode END source_lang_mode,
       x.provider,x.created_at cache_created_at,t.id topic_id,
       CASE WHEN r.token=x.projection_token THEN x.projection_key END projection_key,
       CASE WHEN r.token IS NULL OR r.token IS NOT x.projection_token THEN x.title_text END title_text,
@@ -97,7 +97,7 @@ async function readItems(db:D1Database,items:Item[],locale:string) {
     WHERE r.type='topic'
     UNION ALL
     SELECT r.*,c.content_version,COALESCE(v.language,c.source_lang) source_lang,
-      CASE WHEN v.language IS NOT NULL THEN 'auto' ELSE c.source_lang_mode END source_lang_mode,
+      CASE WHEN v.method='admin-manual' THEN 'manual' WHEN v.language IS NOT NULL THEN 'auto' ELSE c.source_lang_mode END source_lang_mode,
       x.provider,x.created_at,c.topic_id,
       CASE WHEN r.token=x.projection_token THEN x.projection_key END,NULL,
       CASE WHEN r.token IS NULL OR r.token IS NOT x.projection_token THEN x.body_text END
