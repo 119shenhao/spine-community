@@ -122,15 +122,54 @@ function canonical(value:unknown):string {
 }
 export const payloadHash=(data:unknown)=>hash(canonical(data));
 
-export async function purgeProjection(env:Env,config:NonNullable<ReturnType<typeof projectionConfig>>,key:string,allVariants=false) {
-  const url=config.base+'/'+key;
+export function localeObjectKey(key:string,locale:string) {
+  if(!/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})?$/.test(locale))throw Error('invalid_projection_locale');
+  return 'i18n/'+locale+'/'+key;
+}
+
+// Keep originals and available translated copies in separate public R2 objects.
+// The original page contains only an index of available target languages.
+function splitLocaleData(data:unknown) {
+  if(!data||typeof data!=='object'||Array.isArray(data))
+    return {source:data,locales:new Map<string,Row[]>()};
+  const original=structuredClone(data) as Row;
+  const languages=new Map<string,Row[]>();
+  const collect=(rows:Row[],type:'topic'|'comment',scope:string)=>{
+    for(const row of rows){
+      if(!row?.translations)continue;
+      for(const [locale,translated] of Object.entries(row.translations as Record<string,Row>)){
+        if(!translated||translated.sourceVersion!==row.content_version||typeof translated.body!=='string')continue;
+        const entries=languages.get(locale)||[];
+        entries.push({type,id:row.id,scope,...translated});
+        languages.set(locale,entries);
+      }
+      delete row.translations;
+    }
+  };
+  collect(original.topics||[],'topic','summary');
+  collect(original.topic?[original.topic]:[],'topic','full');
+  collect(original.comments||[],'comment','full');
+  collect(original.progress||[],'comment','preview');
+  const locales=new Map<string,Row[]>();
+  for(const [locale,rows] of languages){
+    rows.sort((a,b)=>String(a.type+':'+a.id+':'+a.scope).localeCompare(String(b.type+':'+b.id+':'+b.scope)));
+    locales.set(locale,rows);
+  }
+  original.translationLayout='separate-v1';
+  original.translationLocales=[...locales.keys()].sort();
+  return {source:original,locales};
+}
+
+export async function purgeProjection(env:Env,config:NonNullable<ReturnType<typeof projectionConfig>>,key:string,allVariants=false,extraKeys:string[]=[]) {
+  const urls=[key,...extraKeys].map(item=>config.base+'/'+item);
+  const url=urls[0];
   let response:Response;
   try{
     response=await fetch(`https://api.cloudflare.com/client/v4/zones/${env.CDN_ZONE_ID}/purge_cache`,{
       method:'POST',redirect:'manual',signal:AbortSignal.timeout(5000),
       headers:{authorization:'Bearer '+env.CDN_PURGE_API_TOKEN,'content-type':'application/json'},
-      body:JSON.stringify(allVariants?{prefixes:[new URL(url).host+new URL(url).pathname]}:
-        {files:[url,{url,headers:{Origin:config.origin}}]})
+      body:JSON.stringify(allVariants?{prefixes:urls.map(item=>new URL(item).host+new URL(item).pathname)}:
+        {files:urls.flatMap(item=>[item,{url:item,headers:{Origin:config.origin}}])})
     });
   }catch{throw Error('purge_unavailable');}
   if(!response.ok)throw Error('purge_http_'+response.status);
@@ -166,9 +205,9 @@ export async function drainProjection(env:Env,limit=2) {
         WHERE scope=? AND target=? AND lease=? AND lease_until>? AND version=? RETURNING last_object`,index,scope,target,token,now(),version);
       if(!reserved)continue;
       error='r2_publish_failed';
-      await writeProjection(config,key,scope,target,version,current.data,false,checkedAt);
+      const localeKeys=await writeProjection(config,key,scope,target,version,current.data,false,checkedAt);
       error='purge_failed';
-      await purgeProjection(env,config,key);
+      await purgeProjection(env,config,key,false,localeKeys);
       error='projection_checkpoint_failed';
       const done=!current.more&&index>=reserved.last_object;
       const updated=await one(db,`UPDATE public_projection SET next_object=?,published_version=CASE WHEN ? THEN version ELSE published_version END,
@@ -191,24 +230,64 @@ export async function drainProjection(env:Env,limit=2) {
 }
 
 export async function writeProjection(config:NonNullable<ReturnType<typeof projectionConfig>>,key:string,
-  scope:string,target:string,version:number,data:unknown,invalidated=false,checkedAt=0,refresh=false) {
-  const digest=await payloadHash(data);
+  scope:string,target:string,version:number,data:unknown,invalidated=false,checkedAt=0,refresh=false):Promise<string[]> {
+  const separated=config.separateTranslations;
+  const split=separated?splitLocaleData(data):{source:data,locales:new Map<string,Row[]>()};
+  const source=split.source;
+  const digest=await payloadHash(source);
   const visibility=invalidated?'invalidated':data===null?'withdrawn':'public';
   const old=await config.bucket.head(key);
   const oldVersion=Number(old?.customMetadata?.projectionVersion)||0;
   if(oldVersion>version)throw Error('r2_version_ahead');
   const cacheControl='public, max-age=0, s-maxage=7200, must-revalidate';
-  const format=config.directTranslations?'direct':'encrypted';
+  const format=separated?'separate-v1':config.directTranslations?'direct':'encrypted';
+  let previousLocales:string[]=[];
+  if(separated&&old?.customMetadata?.translationLocales){
+    try{previousLocales=JSON.parse(old.customMetadata.translationLocales);}catch{}
+    if(!Array.isArray(previousLocales))previousLocales=[];
+  }
+  const languages=[...split.locales.keys()].sort();
+  const keys:string[]=[];
+  if(separated){
+    // Always write locale data first. Missing translations get invalidation
+    // tombstones, so an edited reply cannot reuse an old R2 translation.
+    for(const locale of new Set([...previousLocales,...languages])){
+      const localeKey=localeObjectKey(key,locale);
+      const items=split.locales.get(locale);
+      const visible=visibility==='public'&&Boolean(items);
+      const body=visible?{
+        schemaVersion:1,contentVersion:version,translationLayout:'separate-v1',
+        locale,sourceKey:key,items
+      }:{schemaVersion:1,contentVersion:version,translationLayout:'separate-v1',
+        locale,sourceKey:key,invalidated:true,items:[]};
+      const oldLocale=await config.bucket.head(localeKey);
+      const oldLocaleVersion=Number(oldLocale?.customMetadata?.projectionVersion)||0;
+      if(oldLocaleVersion>version)throw Error('r2_version_ahead');
+      const localeHash=await payloadHash(body);
+      if(oldLocaleVersion===version&&oldLocale?.customMetadata?.payloadHash===localeHash)continue;
+      const result=await config.bucket.put(localeKey,JSON.stringify(body),{
+        onlyIf:oldLocale?{etagMatches:oldLocale.etag}:{etagDoesNotMatch:'*'},
+        httpMetadata:{contentType:'application/json',cacheControl},
+        customMetadata:{projectionVersion:String(version),payloadHash:localeHash,
+          visibility:visible?'public':'invalidated',translationFormat:'separate-v1'}
+      });
+      if(!result)throw Error('r2_conditional_write_conflict');
+      keys.push(localeKey);
+    }
+  }
   if(oldVersion===version&&old?.customMetadata?.payloadHash===digest&&old.customMetadata.visibility===visibility&&
     old.customMetadata.translationFormat===format&&old.customMetadata.cachePolicy==='edge-60'&&
-    (!refresh||Number(old.customMetadata.translationCheckedAt)>=checkedAt))return;
+    (!refresh||Number(old.customMetadata.translationCheckedAt)>=checkedAt))return keys;
   const result=await config.bucket.put(key,JSON.stringify({
     schemaVersion:1,contentVersion:version,generatedAt:new Date().toISOString(),
-    ...(scope==='topic'?{topicId:target}:{}),...(invalidated?{invalidated:true}:{}),data
+    ...(scope==='topic'?{topicId:target}:{}),...(invalidated?{invalidated:true}:{}),data:source
   }),{
     onlyIf:old?{etagMatches:old.etag}:{etagDoesNotMatch:'*'},
     httpMetadata:{contentType:'application/json',cacheControl},
-    customMetadata:{projectionVersion:String(version),payloadHash:digest,visibility,translationFormat:format,translationCheckedAt:String(checkedAt),cachePolicy:'edge-60'}
+    customMetadata:{projectionVersion:String(version),payloadHash:digest,visibility,
+      translationFormat:format,translationLocales:JSON.stringify(languages),
+      translationCheckedAt:String(checkedAt),cachePolicy:'edge-60'}
   });
   if(!result)throw Error('r2_conditional_write_conflict');
+  return keys;
 }
