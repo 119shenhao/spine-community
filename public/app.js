@@ -218,7 +218,7 @@ document.addEventListener('submit',async event=>{const form=event.target;if(!(fo
    await renderTranslationAdmin($('#admin-content'),api,esc,locale);
    return;
   }
-  if(form.id==='admin-form'){await send('/api/admin/'+form.dataset.endpoint,{...JSON.parse(form.dataset.payload),reason:v.reason});closeModal();toast(t('success'));await render();return;
+  if(form.id==='admin-form'){await send('/api/admin/'+form.dataset.endpoint,{...JSON.parse(form.dataset.payload),reason:v.reason});closeModal();toast(t('success'));await render();return;}
   if(form.id==='term-form'){await send('/api/admin/taxonomy',{id:form.dataset.id||undefined,term_type:v.term_type,slug:v.slug,labels:{[locale]:v.label},...(v.aliases.trim()?{aliases:v.aliases.split(/[,，]/).map(s=>s.trim()).filter(Boolean)}:{}),reason:v.reason});state.terms=(await api('/api/taxonomy?locale='+locale)).terms;closeModal();toast(t('success'));await render();return;}
  }catch(e){toast(errorText(e));}finally{if(submit)submit.disabled=false;}
 });
