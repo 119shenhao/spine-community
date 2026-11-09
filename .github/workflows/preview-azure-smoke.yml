@@ -31,7 +31,7 @@ jobs:
           import {readFileSync,appendFileSync} from 'node:fs';
           import {execFileSync} from 'node:child_process';
           import {setTimeout as delay} from 'node:timers/promises';
-          import {unpackTranslation} from './public/translation-ui.js';
+          import {unpackTranslation,translationView} from './public/translation-ui.js';
           import {publicContentReader} from './public/public-content.js';
 
           const preview='https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev';
@@ -65,10 +65,10 @@ jobs:
           const actor=randomUUID(),topic=randomUUID();
           const page='topics/'+topic+'/detail.json';
           const item={type:'topic',id:topic,scope:'full',version:1,page};
-          const read=async(generate,locale='fr',token)=>{
+          const read=async(generate,locale='fr',token,project=true)=>{
             const response=await fetch(preview+'/api/translate',{
               method:'POST',headers:{origin:preview,'content-type':'application/json'},redirect:'error',
-              signal:AbortSignal.timeout(20000),body:JSON.stringify({locale,generate,items:[{...item,token}]})
+              signal:AbortSignal.timeout(20000),body:JSON.stringify({locale,generate,items:[{...item,token,page:project?item.page:undefined}]})
             });
             assert.equal(response.status,200,'Unexpected Preview API status');
             return (await response.json()).items[0];
@@ -89,7 +89,8 @@ jobs:
             if(response.status===404)return {status:404};
             assert.equal(response.status,200,'Unexpected CDN status');
             assert.equal(response.headers.get('access-control-allow-origin'),preview);
-            return {status:200,cache:response.headers.get('cf-cache-status'),payload:await response.json()};
+            return {status:200,cache:response.headers.get('cf-cache-status'),age:response.headers.get('age'),
+              control:response.headers.get('cache-control'),payload:await response.json()};
           };
           async function waitForCdn(accept,label,retry) {
             let observed;
@@ -111,10 +112,10 @@ jobs:
             let live;
             for(let attempt=0;attempt<24;attempt++){
               live=await health();
-              if(live?.environment==='preview'&&live.version==='0.2.0-public-viewer.1'&&live.translationConfigured===true)break;
+              if(live?.environment==='preview'&&live.version==='0.2.0-cdn-translation.1'&&live.translationConfigured===true)break;
               await delay(8000);
             }
-            assert.equal(live?.version,'0.2.0-public-viewer.1','The signed-in CDN build is not deployed');
+            assert.equal(live?.version,'0.2.0-cdn-translation.1','The translation CDN build is not deployed');
             assert.equal(live?.translationConfigured,true,'Preview Worker switch, key, region, endpoint or F0 verification timestamp is missing or invalid');
             fixtureStarted=true;
             sql("INSERT INTO users(id,nickname) VALUES('"+actor+"','Azure smoke fixture'); "+
@@ -139,21 +140,35 @@ jobs:
             assert.equal(cold.payload.data.topic.translations?.fr,undefined);
             assert.equal((await read(false)).reason,'translation_cache_miss');
             assert.equal((await read(true,'en')).reason,'same_language');
-            const translation=await read(true);
+            const direct=live.publicContent.directTranslations===true;
+            const translation=await read(true,'fr',undefined,!direct);
             assert.equal(translation.translated,true,'Azure failed: '+(translation.reason||'unknown'));
             assert.equal(translation.provider,'azure');
             assert(translation.body&&translation.body!=='This fictional fixture has a blue chair and no personal information.');
             const cached=await read(false);
             assert.equal(cached.body,translation.body);
             const warm=await waitForCdn(result=>result.cache==='HIT'&&result.payload?.data?.topic?.translations?.fr,
-              'Encrypted translation cache HIT',wakeProjection);
-            const encrypted=warm.payload.data.topic.translations.fr;
-            assert(encrypted.ciphertext&&encrypted.token);
-            assert(!JSON.stringify(warm.payload).includes(translation.body),'CDN must not contain a plaintext translation');
-            const unlock=await read(false,'fr',encrypted.token);
-            assert.equal(unlock.body,undefined,'Worker should return only a key for the CDN version');
-            assert.equal((await unpackTranslation(unlock,encrypted)).body,translation.body);
-            console.log('Real Azure translation returned from Preview CDN as HIT and decrypted after a key-only Worker response.');
+              'Translation cache HIT',wakeProjection);
+            const projected=warm.payload.data.topic.translations.fr;
+            if(direct){
+              assert.equal(projected.sourceVersion,1);
+              assert.equal(projected.body,translation.body);
+              assert.equal(projected.token,undefined);
+              let calls=0;
+              const view=translationView('fr',{direct:true,configured:true,hasCache:true,
+                request:async()=>{calls++;throw Error('Unexpected Worker request');}});
+              const row=warm.payload.data.topic;
+              view.markPage({projectionKey:page,topic:row});
+              await view.prime([['topic',row]]);
+              assert.equal(view.item('topic',row).result.body,translation.body);
+              assert.equal(calls,0);
+              view.close();
+              console.log('Real Azure translation returned as CDN HIT with zero translation Worker calls.');
+            }else{
+              assert(projected.ciphertext&&projected.token);
+              const unlock=await read(false,'fr',projected.token);
+              assert.equal((await unpackTranslation(unlock,projected)).body,translation.body);
+            }
             for(const action of ['like','bookmark','follow']){
               const response=await fetch(preview+'/api/topics/'+topic+'/'+action,{
                 method:'PUT',headers:{origin:preview,cookie:'sc_session='+session},signal:AbortSignal.timeout(10000)
@@ -178,18 +193,25 @@ jobs:
             assert.equal(member.projectionKey,page);
             assert.equal(member.topic.author_id,actor);
             assert(member.topic.liked&&member.topic.bookmarked&&member.topic.followed);
-            assert.equal(member.topic.translations.fr.token,encrypted.token);
+            assert.deepEqual(member.topic.translations.fr,projected);
             assert.deepEqual(apiCalls,['/api/public-content/viewer']);
             console.log('Signed-in Preview reads used the shared CDN translation with separate no-store viewer state.');
+            assert.match(warm.control||'',/s-maxage=60\b/,'The R2 cache header must reach the edge');
+            await delay(66000);
+            const expired=await cdnRead();
+            console.log('Edge expiry probe: '+JSON.stringify({before:[warm.cache,warm.age],after:[expired.cache,expired.age],control:expired.control}));
+            assert(['MISS','EXPIRED','REVALIDATED'].includes(expired.cache)||
+              expired.cache==='HIT'&&expired.age!==null&&Number(expired.age)<60,
+              'Cloudflare still serves an edge object beyond the 60-second freshness cap');
             const provenance=sql("SELECT provider,product_id,engine_type,source_language,locale,source_version FROM topic_translations "+
               "WHERE topic_id='"+topic+"' AND scope='full'")[0];
             assert.deepEqual(provenance,{provider:'azure',product_id:'azure_ai_translator_text',engine_type:'nmt',
               source_language:'en',locale:'fr',source_version:1});
             sql("UPDATE topics SET status='hidden' WHERE id='"+topic+"'");
-            assert.equal((await read(false,'fr',encrypted.token)).reason,'not_found');
+            assert.equal((await read(false,'fr',projected.token)).reason,'not_found');
             await wakeProjection();
             await waitForCdn(result=>result.payload?.data===null,'CDN withdrawal',wakeProjection);
-            console.log('Old CDN ciphertext cannot be unlocked and the CDN projection is withdrawn.');
+            console.log('The CDN projection is withdrawn and the translation API rejects the old version.');
             passed=true;
           } finally {
             try {
@@ -202,5 +224,5 @@ jobs:
             }
           }
           appendFileSync(process.env.GITHUB_STEP_SUMMARY,
-            'Preview only: real Azure NMT, cold read, same-language skip, D1 cache and provenance, R2/CDN encrypted HIT, key-only Worker response, signed-in viewer state, withdrawal and fixture cleanup passed. Translation remains enabled.\n');
+            'Preview only: real Azure NMT, cold read, same-language skip, D1 cache and provenance, R2/CDN HIT, 60-second edge expiration, signed-in viewer state, withdrawal and fixture cleanup passed. Translation remains enabled.\n');
           JS
