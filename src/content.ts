@@ -61,9 +61,9 @@ export async function contentRoute(req:Request,env:Env,u:Row|null,path:string):P
       if(focus){const f=await one(env.DB,'SELECT rowid cursor FROM comments WHERE id=? AND topic_id=?',focus,topicId);if(f)before=String(Math.max(0,f.cursor-1));}
       if(before!==null&&(!Number.isSafeInteger(Number(before))||Number(before)<0))fail(400,'invalid_cursor');
       const progressOnly=url.searchParams.get('progress')==='1';
-      const comments=await all(env.DB,`SELECT c.*,u.nickname FROM comments c JOIN users u ON u.id=c.author_id WHERE c.topic_id=? AND (c.status IN ('published','deleted') OR c.author_id=? OR ?=1) AND (? IS NULL OR c.rowid>?) AND (?=0 OR c.kind='progress') ORDER BY c.rowid LIMIT 50`,topicId,u?.id||'', ['admin','moderator'].includes(u?.role)?1:0,before,before?Number(before):0,progressOnly?1:0);
+      const comments=await all(env.DB,`SELECT c.*,u.nickname FROM comments c JOIN users u ON u.id=c.author_id WHERE c.topic_id=? AND (c.status IN ('published','deleted') OR c.author_id=? OR ?=1) AND (? IS NULL OR c.rowid>?) AND (?=0 OR c.kind='progress') ORDER BY c.rowid LIMIT ?`,topicId,u?.id||'', ['admin','moderator'].includes(u?.role)?1:0,before,before?Number(before):0,progressOnly?1:0,env.PUBLIC_CONTENT_PAGE_SIZE==='20'?20:50);
       const decorated=await decorate(env,comments,u,'comment');
-      const cursor=comments.length===50?await one(env.DB,'SELECT rowid cursor FROM comments WHERE id=?',comments.at(-1)!.id):null;
+      const cursor=comments.length===(env.PUBLIC_CONTENT_PAGE_SIZE==='20'?20:50)?await one(env.DB,'SELECT rowid cursor FROM comments WHERE id=?',comments.at(-1)!.id):null;
       const progress=await all(env.DB,`SELECT c.id,c.body,c.source_lang,c.source_lang_mode,c.content_version,c.progress_seq,c.created_at FROM comments c WHERE c.topic_id=? AND c.kind='progress' AND c.status='published' ORDER BY c.progress_seq DESC LIMIT 2`,topicId);
       return json({topic,comments:decorated,progress,next:cursor?.cursor||null});
     }
