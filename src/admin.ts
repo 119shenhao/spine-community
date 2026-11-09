@@ -1,5 +1,6 @@
 import {Env,Row,all,one,stmt,now,id,fail,json,body,textField,requireRole,locales} from './core';
 import {purge,notify} from './content';
+import {verificationWrite} from './language-state';
 import {AZURE_SITE_MAX_MONTHLY,translationBudgetStatus,translationProvidersStatus} from './translation';
 const audit=(env:Env,u:Row,type:string,target:string,action:string,reason:string)=>stmt(env.DB,'INSERT INTO moderation_actions(id,actor_id,target_type,target_id,action,reason) VALUES(?,?,?,?,?,?)',id(),u.id,type,target,action,reason);
 export async function adminRoute(req:Request,env:Env,user:Row|null,path:string):Promise<Response|null>{
@@ -50,6 +51,7 @@ export async function adminRoute(req:Request,env:Env,user:Row|null,path:string):
       WHERE id=? AND status='published' AND content_version=? RETURNING content_version`,
       b.source_lang,b.id,previous.content_version);
     if(!updated)fail(409,'content_changed');
+    await verificationWrite(env.DB,b.type,b.id,updated.content_version,b.source_lang,'admin-manual',null).run();
     await audit(env,u,b.type,b.id,'correct_language',
       b.type+': '+b.source_lang+' ('+reason+')').run();
     return json({ok:true,version:updated.content_version});
