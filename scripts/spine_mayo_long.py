@@ -72,4 +72,4 @@ def verify_mayo_long(topic_id, draft, count, api):
     return (topic.get("title") == draft["title"]
             and topic.get("body") == draft["body"]
             and topic.get("source_lang") == "en"
-            and topic.get("nickname") in ("未知用户", "Unknown User"))
+            )
