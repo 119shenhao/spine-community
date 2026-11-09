@@ -201,3 +201,14 @@
 - 测试提交：[`52ac304`](https://github.com/119shenhao/spine-community/commit/52ac304916afbff48cb20a283e2f89f1c3214b34)，仅修改（当时路径）`docs/requirements/README.md`。
 - **用户查看 Cloudflare 部署历史后确认：没有出现新部署。** 因此对本次纯文档提交，跳过发布的设置已经验证有效。
 - 此记录只证明上述配置和本次测试有效；后续配置发生变化时需要重新检查。
+
+
+## 2026-11-09 — 前端静态资源按内容版本发布（防止管理菜单旧版缓存）
+
+- 现象：用户在开发预览 `/#/admin?tab=translationProviders` 中仍看到旧版管理菜单（没有翻译服务管理和原文语言核对），虽然 GitHub 开发分支和服务器提供的新版 `/app.js` 已包含入口，且用户确为管理员。
+- 根因及保护：旧网站 HTML 始终直接引用固定的 `/app.js`、`/styles.css`；浏览器/静态缓存层可能混合不同发布批次的模块。改造 `scripts/prepare-build.mjs`：每次构建以所有 `public/*.js` 和 `public/*.css` 的 SHA-256 内容摘要生成单一 `public/_app/<16位哈希>/` 目录；HTML 改指向 `/_app/<哈希>/app.js` 和 `/_app/<哈希>/styles.css`。JS 依赖以相对路径加载，保证同版本；仍由 Cloudflare Assets/CDN 直接提供静态资源，不增加 Worker 的静态文件请求。
+- 根路径及 `/index.html` 入口设置 `Cache-Control: no-store, max-age=0`、`Pragma: no-cache`，不更改现有 API、R2 翻译缓存策略。
+- 自动化保障：`feature-verify.yml` 的 Wrangler dry-run 后校验 HTML、构建版前端目录与资源一致性；`preview-language-health.yml` 实际从 GitHub Actions 外部访问 Cloudflare 开发预览站，确认首页不缓存、版本摘要一致、14个 JS/CSS 文件可读取且和当前代码一致、管理导航包含 `translationProviders` 与 `languageReview`。
+- 2026-11-09 真实检查：`Frontend revision confirmed 346c4f0390b36319 all 14 assets and owner-only tabs`，Worker `/api/health` HTTP 200，预览 D1 就绪，在线 Actions：https://github.com/119shenhao/spine-community/actions/runs/42610279956 成功。该检查验证匿名可访问的真实线上资源，不等同于读取用户浏览器当前 DOM；若用户一直停留旧版标签页，还需重新导航到新入口。
+- **仅修改开发分支并验证预览部署**，未合并发布生产代码、不操作生产 D1。新增前端 JS 文件需放在 `public/` 根目录，自动进入版本打包。今后每次静态版本发布都应保持这种验证。
+
