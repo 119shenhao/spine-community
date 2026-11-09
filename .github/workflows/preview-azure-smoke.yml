@@ -32,6 +32,7 @@ jobs:
           import {execFileSync} from 'node:child_process';
           import {setTimeout as delay} from 'node:timers/promises';
           import {unpackTranslation} from './public/translation-ui.js';
+          import {publicContentReader} from './public/public-content.js';
 
           const preview='https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev';
           const cdn='https://spine-data-dev.nbn369.com';
@@ -110,9 +111,10 @@ jobs:
             let live;
             for(let attempt=0;attempt<24;attempt++){
               live=await health();
-              if(live?.environment==='preview'&&live.translationConfigured===true)break;
+              if(live?.environment==='preview'&&live.version==='0.2.0-public-viewer.1'&&live.translationConfigured===true)break;
               await delay(8000);
             }
+            assert.equal(live?.version,'0.2.0-public-viewer.1','The signed-in CDN build is not deployed');
             assert.equal(live?.translationConfigured,true,'Preview Worker switch, key, region, endpoint or F0 verification timestamp is missing or invalid');
             fixtureStarted=true;
             sql("INSERT INTO users(id,nickname) VALUES('"+actor+"','Azure smoke fixture'); "+
@@ -126,7 +128,7 @@ jobs:
             assert.equal((await cdnRead()).status,404);
             const requestOriginal=async()=>{
               const response=await fetch(preview+'/api/topics/'+topic,{
-                headers:{'x-spine-projection-miss':page},redirect:'error',signal:AbortSignal.timeout(12000)
+                headers:{'x-spine-projection-miss':page,cookie:'sc_session='+session},redirect:'error',signal:AbortSignal.timeout(12000)
               });
               assert.equal(response.status,200,'Preview original fallback failed');
               assert.equal((await response.json()).topic.id,topic);
@@ -152,6 +154,33 @@ jobs:
             assert.equal(unlock.body,undefined,'Worker should return only a key for the CDN version');
             assert.equal((await unpackTranslation(unlock,encrypted)).body,translation.body);
             console.log('Real Azure translation returned from Preview CDN as HIT and decrypted after a key-only Worker response.');
+            for(const action of ['like','bookmark','follow']){
+              const response=await fetch(preview+'/api/topics/'+topic+'/'+action,{
+                method:'PUT',headers:{origin:preview,cookie:'sc_session='+session},signal:AbortSignal.timeout(10000)
+              });
+              assert.equal(response.status,200,'Fixture '+action+' failed');
+            }
+            const apiCalls=[];
+            const memberReader=publicContentReader(live,{id:actor},async(path,options)=>{
+              apiCalls.push(path);
+              const response=await fetch(preview+path,{
+                ...options,headers:{origin:preview,cookie:'sc_session='+session,'content-type':'application/json',...options?.headers}
+              });
+              assert.equal(response.status,200,'Signed-in viewer read failed');
+              assert.equal(response.headers.get('cache-control'),'no-store');
+              return response.json();
+            },async(url,options)=>{
+              assert.equal(url,cdn+'/'+page);
+              assert.equal(options.credentials,'omit');
+              return fetch(url,{...options,headers:{origin:preview}});
+            });
+            const member=await memberReader.topic(topic,new URLSearchParams());
+            assert.equal(member.projectionKey,page);
+            assert.equal(member.topic.author_id,actor);
+            assert(member.topic.liked&&member.topic.bookmarked&&member.topic.followed);
+            assert.equal(member.topic.translations.fr.token,encrypted.token);
+            assert.deepEqual(apiCalls,['/api/public-content/viewer']);
+            console.log('Signed-in Preview reads used the shared CDN translation with separate no-store viewer state.');
             const provenance=sql("SELECT provider,product_id,engine_type,source_language,locale,source_version FROM topic_translations "+
               "WHERE topic_id='"+topic+"' AND scope='full'")[0];
             assert.deepEqual(provenance,{provider:'azure',product_id:'azure_ai_translator_text',engine_type:'nmt',
@@ -173,5 +202,5 @@ jobs:
             }
           }
           appendFileSync(process.env.GITHUB_STEP_SUMMARY,
-            'Preview only: real Azure NMT, cold read, same-language skip, D1 cache and provenance, R2/CDN encrypted HIT, key-only Worker response, withdrawal and fixture cleanup passed. Translation remains enabled.\n');
+            'Preview only: real Azure NMT, cold read, same-language skip, D1 cache and provenance, R2/CDN encrypted HIT, key-only Worker response, signed-in viewer state, withdrawal and fixture cleanup passed. Translation remains enabled.\n');
           JS

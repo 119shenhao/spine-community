@@ -10,6 +10,7 @@ import {collectRoute} from './collect';
 import {projectionConfig} from './public-projection';
 import {drainPublicContent,requestProjection} from './projection-demand';
 import {projectionAdminRoute} from './projection-admin';
+import {projectionViewerRoute} from './projection-viewer';
 
 function wakeProjection(env:Env,ctx:ExecutionContext|undefined) {
  const config=projectionConfig(env);
@@ -70,19 +71,19 @@ export default {
      ready:projectionReady,enabled:Boolean(config?.enabled),purgeConfigured:Boolean(config?.purgeReady),
      zoneConfigured:Boolean(config?.zoneConfigured),tokenConfigured:Boolean(config?.tokenConfigured)
     };
-    return json({environment:env.APP_ENV==='preview'?'preview':'production',status:ready?'ok':'setup_required',stage:'v1-development',version:'0.2.0-translation.1',publicContent,databaseConfigured:Boolean(env.DB),databaseReady:ready,imageUploadsEnabled:false,importEnabled:importEnabled(req,env),googleConfigured:Boolean(env.GOOGLE_CLIENT_ID&&env.GOOGLE_CLIENT_SECRET),translationReady,translationCacheAvailable,...(env.APP_ENV==='preview'?{translationSetup:{...translationSetup(env),databaseEnabled:translationEnabled}}:{}),translationConfigured:translationReady&&translationEnabled&&translationConfigured(env),analyticsConfigured:Boolean(env.ANALYTICS_SALT)},ready?200:503);
+    return json({environment:env.APP_ENV==='preview'?'preview':'production',status:ready?'ok':'setup_required',stage:'v1-development',version:'0.2.0-public-viewer.1',publicContent,databaseConfigured:Boolean(env.DB),databaseReady:ready,imageUploadsEnabled:false,importEnabled:importEnabled(req,env),googleConfigured:Boolean(env.GOOGLE_CLIENT_ID&&env.GOOGLE_CLIENT_SECRET),translationReady,translationCacheAvailable,...(env.APP_ENV==='preview'?{translationSetup:{...translationSetup(env),databaseEnabled:translationEnabled}}:{}),translationConfigured:translationReady&&translationEnabled&&translationConfigured(env),analyticsConfigured:Boolean(env.ANALYTICS_SALT)},ready?200:503);
    }
    if(!env.DB)fail(503,'database_not_configured');
    if(!['GET','HEAD'].includes(req.method))sameOrigin(req);
    const ip=req.headers.get('cf-connecting-ip')||'local';
    await rate(env.DB,'api:'+await hash(ip+new Date().toISOString().slice(0,10)),180);
    const user=await currentUser(req,env);
-   for(const route of [authRoute,communityRoute,contentRoute,searchRoute,translationRoute,projectionAdminRoute,adminRoute]){
+   for(const route of [authRoute,communityRoute,contentRoute,searchRoute,translationRoute,projectionViewerRoute,projectionAdminRoute,adminRoute]){
     const response=await route(req,env,user,path,ctx);
     if(!response)continue;
     if(response.ok){
      if(changesProjection(path,req.method))wakeProjection(env,ctx);
-     if(ctx&&!user&&req.method==='GET'&&req.headers.has('x-spine-projection-miss')){
+     if(ctx&&req.method==='GET'&&req.headers.has('x-spine-projection-miss')){
       ctx.waitUntil(requestProjection(env,req,path).catch(()=>console.warn('public_projection_request_failed')));
      }
     }

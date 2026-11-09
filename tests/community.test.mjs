@@ -1318,7 +1318,6 @@ test('anonymous standard routes fetch only their CDN host, pagination rejects st
  assert.equal((await reader.topic('demo',new URLSearchParams('before=10'),2,2)).worker,true);
  assert.equal((await reader.feed(new URLSearchParams('offset=20'),2)).worker,true);
  assert.equal((await reader.topic('demo',new URLSearchParams('focus=reply'))).worker,true);
- assert.equal((await publicContentReader(health,{id:'me'},api,fetcher).topic('demo',new URLSearchParams())).worker,true);
  assert.equal((await reader.feed(new URLSearchParams('body_part=neck'))).worker,true);
  withdrawn=true;
  await assert.rejects(reader.topic('demo',new URLSearchParams()),error=>error.status===404);
@@ -1370,7 +1369,7 @@ test('on-demand projection warms exact public pages and invalidates existing cop
   const health=await call('/api/health','GET',undefined,null);
   assert.equal(health.data.publicContent.onDemand,true);
   assert.equal((await fallback('/api/topics/'+other,paths[1])).status,200);
-  assert.equal((await fallback('/api/topics/'+other,topicProjectionKey(other),'bob')).status,200);
+  assert.equal((await fallback('/api/topics/'+other,paths[1],'bob')).status,200);
   assert.equal((await fallback('/api/topics/missing',topicProjectionKey('missing'))).status,404);
   await flush();
   assert.equal(bucket.files.size,0);
@@ -1378,7 +1377,7 @@ test('on-demand projection warms exact public pages and invalidates existing cop
   assert.equal(feed.status,200);
   await flush();
   assert.deepEqual([...bucket.files.keys()],paths.slice(0,1));
-  const detail=await fallback('/api/topics/'+main,paths[1]);
+  const detail=await fallback('/api/topics/'+main,paths[1],'bob');
   assert.equal(detail.data.topic.body,'Synthetic original body');
   await flush();
   assert.deepEqual([...bucket.files.keys()],paths.slice(0,2));
@@ -1775,4 +1774,85 @@ test('post dialog keeps the close action visible when the long form scrolls',()=
  assert.match(style,/dialog #modal-content\s*\{[^}]*overflow-y:auto/);
  assert.match(style,/max-height:calc\(100dvh/);
  assert(app.includes("content.scrollTop=0"));
+});
+
+test('signed-in public CDN reads attach interaction state without sending credentials to CDN',async()=>{
+ const {publicContentReader}=await import('../public/public-content.js');
+ const {DB,call,topic}=await fixture();
+ const id=await topic('Public member feed','Fictional CDN content');
+ const reply=await call('/api/topics/'+id+'/comments','POST',{body:'A public test reply.',source_lang:'en'},'bob');
+ const replyId=reply.data.id;
+ await call('/api/topics/'+id+'/like','PUT',{},'bob');
+ await call('/api/topics/'+id+'/bookmark','PUT',{},'bob');
+ await call('/api/topics/'+id+'/follow','PUT',{},'bob');
+ await call('/api/comments/'+replyId+'/like','PUT',{},'bob');
+ const health={environment:'preview',publicContent:{baseUrl:'https://spine-data-dev.nbn369.com',fallback:true,onDemand:true}};
+ const feed=await buildProjection(DB,'feed','latest',1),detail=await buildProjection(DB,'topic',id,1);
+ const requests=[];
+ const fetcher=async(url,options)=>{
+  requests.push(url);
+  assert.equal(options.credentials,'omit');
+  assert(!options.headers);
+  const payload=url.includes('/feeds/')?feed:detail;
+  return Response.json({schemaVersion:1,contentVersion:payload.version,topicId:id,data:payload.data});
+ };
+ const reader=user=>publicContentReader(health,{id:user},async(path,options)=>{
+  requests.push(path);
+  const result=await call(path,options?.method||'GET',options?.body?JSON.parse(options.body):undefined,user,options?.headers);
+  assert.equal(result.status,200);
+  if(options?.method==='POST'){
+   assert.equal(result.headers.get('cache-control'),'no-store');
+   assert(!JSON.stringify(result.data).includes('Fictional CDN content'));
+  }
+  return result.data;
+ },fetcher);
+ const bob=reader('bob');
+ const home=await bob.feed(new URLSearchParams('sort=latest'));
+ assert.equal(home.projectionKey,'feeds/latest/page-1.json');
+ assert.equal(home.topics[0].liked,true);
+ assert.equal(home.topics[0].bookmarked,true);
+ assert.equal(home.topics[0].followed,true);
+ assert.equal(home.topics[0].author_id,undefined);
+ const post=await bob.topic(id,new URLSearchParams());
+ assert.equal(post.projectionKey,'topics/'+id+'/detail.json');
+ assert.equal(post.topic.body,'Fictional CDN content');
+ assert.equal(post.comments[0].author_id,'bob');
+ assert.equal(post.comments[0].liked,true);
+ const alice=await reader('alice').topic(id,new URLSearchParams());
+ assert.equal(alice.topic.author_id,'alice');
+ assert.equal(alice.topic.bookmarked,false);
+ assert.equal(alice.comments[0].liked,false);
+ assert.equal(alice.comments[0].author_id,undefined);
+ assert(requests.every(url=>url.startsWith(health.publicContent.baseUrl)||url==='/api/public-content/viewer'));
+ assert.equal((await call('/api/public-content/viewer','POST',{},null)).status,401);
+});
+
+test('signed-in CDN overlay falls back for private replies, stale versions and withdrawn pages',async()=>{
+ const {publicContentReader}=await import('../public/public-content.js');
+ const {DB,call,topic}=await fixture();
+ const id=await topic('Projection private-reply fixture','Current public original.');
+ const privateReply=await call('/api/topics/'+id+'/comments','POST',{body:'A promo code awaits review.',source_lang:'en'},'bob');
+ assert.equal(privateReply.data.status,'pending_review');
+ let snapshot=await buildProjection(DB,'topic',id,1),withdrawn=false;
+ const health={environment:'preview',publicContent:{baseUrl:'https://spine-data-dev.nbn369.com',fallback:true}};
+ const reader=user=>publicContentReader(health,{id:user},async(path,opts)=>{
+  const response=await call(path,opts?.method||'GET',opts?.body?JSON.parse(opts.body):undefined,user);
+  if(response.status!==200)throw Object.assign(Error(response.data.error),{status:response.status});
+  return response.data;
+ },async()=>Response.json({schemaVersion:1,contentVersion:snapshot.version,topicId:id,data:withdrawn?null:snapshot.data}));
+ const params=new URLSearchParams();
+ assert.equal((await reader('alice').topic(id,params)).projectionVersion,snapshot.version);
+ for(const viewer of ['bob','mod']){
+  const data=await reader(viewer).topic(id,params);
+  assert.equal(data.projectionVersion,undefined);
+  assert.equal(data.comments[0].id,privateReply.data.id);
+ }
+ DB.db.prepare('UPDATE topics SET body=?,content_version=content_version+1 WHERE id=?').run('Edited public original.',id);
+ assert.equal((await reader('alice').topic(id,params)).topic.body,'Edited public original.');
+ DB.db.prepare("UPDATE topics SET status='hidden' WHERE id=?").run(id);
+ await assert.rejects(reader('bob').topic(id,params),error=>error.status===404);
+ withdrawn=true;
+ const own=await reader('alice').topic(id,params);
+ assert.equal(own.topic.status,'hidden');
+ assert.equal(own.projectionVersion,undefined);
 });
