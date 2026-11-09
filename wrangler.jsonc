@@ -47,7 +47,7 @@
       "CDN_ZONE_ID": "7857d08dff2a46bf824914c687a21413",
       "PUBLIC_CONTENT_ON_DEMAND": "true",
       "PUBLIC_CONTENT_PAGE_SIZE": "50",
-      "PUBLIC_TRANSLATION_SEPARATE": "false",
+      "PUBLIC_TRANSLATION_SEPARATE": "true",
       "PUBLIC_TRANSLATION_DIRECT": "false",
       "GOOGLE_CLIENT_ID": "294338107553-bht5pr4qa112e9knbst517b0mvb9pus9.apps.googleusercontent.com",
       "TRANSLATION_ENABLED": "true",
