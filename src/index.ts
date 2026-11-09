@@ -33,6 +33,10 @@ export default {
    const asset=await env.ASSETS.fetch(req);
    if(path==='/'||path==='/index.html'){
     const headers=new Headers(asset.headers);
+    // The HTML document must always revalidate its asset revision after
+    // deployment; JS/CSS themselves remain on static, content-versioned URLs.
+    headers.set('Cache-Control','no-store, max-age=0');
+    headers.set('Pragma','no-cache');
     if(env.APP_ENV==='preview')headers.set('X-Robots-Tag','noindex, nofollow');
     else headers.delete('X-Robots-Tag');
     return new Response(asset.body,{status:asset.status,statusText:asset.statusText,headers});
