@@ -317,7 +317,8 @@ async function generate(env:Env,entry:Item,row:Row,locale:string,config:Settings
       // Azure sometimes reports generic Chinese. Only accept a specific script
       // after our own text has enough evidence to distinguish Han variants.
       const normalized=primary?.toLowerCase()==='zh'
-        ?detectSourceLanguageEvidence(...(topic?[c.title,c.body]:[c.body])).language
+        ?(detectSourceLanguageEvidence(...(topic?[c.title,c.body]:[c.body])).language==='und'
+          ?'zh':detectSourceLanguageEvidence(...(topic?[c.title,c.body]:[c.body])).language)
         :primary;
       const detectedScore=typeof score==='number'?score:NaN;
       const reliable=typeof normalized==='string'&&/^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})?$/.test(normalized)&&
@@ -328,7 +329,8 @@ async function generate(env:Env,entry:Item,row:Row,locale:string,config:Settings
       const conflicting=parsed.slice(0,-1).some(part=>{
         const candidate=part.detectedLanguage;
         return typeof candidate?.language==='string'&&typeof candidate.score==='number'&&
-          candidate.score>=.65&&!sameLanguage(candidate.language,normalized);
+          candidate.score>=.65&&!sameLanguage(candidate.language,normalized)&&
+          !(candidate.language.toLowerCase().startsWith('zh')&&normalized.toLowerCase().startsWith('zh'));
       });
       if(conflicting)return result('source_language_uncertain');
       if(!await confirmAzureLanguage(db,entry.type,c,normalized,detectedScore))return result('content_changed');
