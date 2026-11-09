@@ -86,13 +86,15 @@ function sourceFields(c){
  const preferred=postingLanguage(state.user,locale,languages);
  const suggested=preferred==='zh-CN'?'简体中文':preferred==='zh-TW'?'繁體中文':new Intl.DisplayNames([locale],{type:'language'}).of(preferred);
  const manual=c?.source_lang_mode==='manual'?c.source_lang:null;
- const custom=manual&&manual!=='und'&&!languages.includes(manual);
- return `<label>${t('sourceLanguage')}<select name="source_lang"><option value="auto" ${manual?'':'selected'}>${t('detectLanguage')} · ${esc(suggested)}</option>${languageOptions(manual)}<option value="custom" ${custom?'selected':''}>${t('sourceLanguageCode')}</option></select></label><label data-language-code ${custom?'':'hidden'}>${t('sourceLanguageCode')}<input name="source_language_code" maxlength="12" pattern="[a-z]{2,3}(-[A-Za-z0-9]{2,8})?" value="${custom?esc(manual):''}" ${custom?'required':'disabled'}></label>`;
+ // Preserve an existing manual language outside the common choices when editing.
+ const saved=manual&&manual!=='und'&&!languages.includes(manual)
+  ?`<option value="${esc(manual)}" selected>${esc(new Intl.DisplayNames([locale],{type:'language'}).of(manual)||manual)}</option>`:'';
+ return `<label>${t('sourceLanguage')}<select name="source_lang"><option value="auto" ${manual?'':'selected'}>${t('detectLanguage')} · ${esc(suggested)}</option>${languageOptions(manual)}${saved}</select></label>`;
 }
 function sourcePayload(fields){
  const label=fields.source_lang;
  return label==='auto'||!label?{source_lang_mode:'auto'}:
-  {source_lang_mode:'manual',source_lang:label==='custom'?fields.source_language_code:label};
+  {source_lang_mode:'manual',source_lang:label};
 }
 async function showTopic(n,topicId,params,force){$('#main').innerHTML='<div class="loading"><span class="spinner"></span></div>';try{const p=new URLSearchParams();if(params.get('comment'))p.set('focus',params.get('comment'));if(params.get('progress'))p.set('progress','1');const data=await (force?api('/api/topics/'+encodeURIComponent(topicId)+'?'+p):publicReads().topic(topicId,p));if(n!==sequence)return;translations.markPage(data);await translations.prime([['topic',data.topic],...data.progress.map(row=>['comment',row,'preview']),...data.comments.slice(0,4).map(row=>['comment',row])]);if(n!==sequence)return;state.topicVersion=data.projectionVersion||null;state.commentPage=1;state.topic=data.topic;state.comments=data.comments;state.progress=data.progress;state.commentNext=data.next;renderTopic(data.progress);translateVisible(n);if(params.get('comment'))setTimeout(()=>$('[data-comment="'+CSS.escape(params.get('comment'))+'"]')?.scrollIntoView({block:'center'}),150);}catch(e){if(n===sequence)$('#main').innerHTML=errorPanel(e);}}
 function commentHtml(c){let depth=0,parent=c.parent_comment_id,seen=new Set();while(parent&&!seen.has(parent)){seen.add(parent);depth++;parent=state.comments.find(x=>x.id===parent)?.parent_comment_id;}return `<article class="comment ${depth?'nested':''}" class-depth="${Math.min(depth,4)}" id="comment-${esc(c.id)}" data-comment="${esc(c.id)}"><div class="topic-meta"><span class="avatar">${esc(displayAuthor(c).slice(0,1))}</span><strong>${esc(displayAuthor(c))}</strong><time>${date(c.created_at)}</time>${c.kind==='progress'?`<span class="tag">${t('progress')} #${c.progress_seq}</span>`:''}${c.parent_comment_id?`<a href="#/topic/${esc(c.topic_id)}?comment=${esc(c.parent_comment_id)}">↳ ${t('reply')}</a>`:''}${statusHtml(c.status)}</div><div class="prose ${c.status==='deleted'?'deleted':''}" data-body="${esc(c.id)}">${c.status==='deleted'?t('deletedComment'):esc(c.body)}</div>${translationShell('comment',c)}${actions(c,'comment')}</article>`;}
@@ -204,7 +206,7 @@ document.addEventListener('submit',async event=>{const form=event.target;if(!(fo
  }catch(e){toast(errorText(e));}finally{if(submit)submit.disabled=false;}
 });
 $('#language').addEventListener('change',async e=>{locale=e.target.value;translations?.close();++sequence;localStorage.setItem('sc_locale',locale);try{state.terms=(await api('/api/taxonomy?locale='+locale)).terms;}catch{}await render();});
-document.addEventListener('change',e=>{if(e.target.name==='source_lang'){const code=$('[data-language-code]',e.target.form);const custom=e.target.value==='custom';code.hidden=!custom;code.lastElementChild.disabled=!custom;code.lastElementChild.required=custom;}if(e.target.id==='sort'){const current=route();location.hash=sortRoute(current.path,current.params,e.target.value);}});
+document.addEventListener('change',e=>{if(e.target.id==='sort'){const current=route();location.hash=sortRoute(current.path,current.params,e.target.value);}});
 document.addEventListener('keydown',event=>{if(event.key==='Escape')document.querySelector('.account-menu[open]')?.removeAttribute('open');});
 window.addEventListener('hashchange',()=>{window.scrollTo({top:0});render();});
 async function boot(){renderChrome();await Promise.allSettled([refreshMe(),api('/api/health').then(r=>state.health=r),api('/api/taxonomy?locale='+locale).then(r=>state.terms=r.terms)]);await render();refreshUnread();}
