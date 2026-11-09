@@ -1783,6 +1783,13 @@ test('owner language review is protected and invalidates cached translations on 
  const topicAfter=(await call('/api/topics/'+id)).data.topic;
  assert.equal(topicAfter.source_lang,'es');
  assert.equal(topicAfter.source_lang_mode,'manual');
+ const evidence=DB.db.prepare('SELECT language,method FROM content_language_verifications WHERE content_type=? AND content_id=? AND content_version=?').get('topic',id,2);
+ assert.equal(evidence.language,'es');
+ assert.equal(evidence.method,'admin-manual');
+ const {buildProjection}=await import('../.test-build/public-projection.js');
+ const projection=(await buildProjection(DB,'topic',id,1,false)).data.topic;
+ assert.equal(projection.source_lang,'es');
+ assert.equal(projection.source_lang_mode,'manual');
  assert.equal(DB.db.prepare('SELECT count(*) n FROM topic_translations WHERE topic_id=?').get(id).n,0);
  assert.equal(DB.db.prepare("SELECT count(*) n FROM moderation_actions WHERE target_id=? AND target_type='topic' AND action='correct_language'").get(id).n,1);
  assert(!(await call('/api/admin/language-review','GET',undefined,'admin')).data.items.some(x=>x.id===id));
