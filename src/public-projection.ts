@@ -30,7 +30,7 @@ export function objectKey(scope:string,target:string,index:number,pageSize=50) {
   if(scope==='feed'&&target==='latest')return `feeds/latest/page-${index}.json`;
   if(scope!=='topic'||!TOPIC_ID.test(target))throw Error('invalid_projection_target');
   return index===1?`topics/${target}/detail.json`:
-    `topics/${target}/comments/${pageSize===20?'v2/':''}page-${index}.json`;
+    `topics/${target}/comments/${pageSize===20?'size-20/':''}page-${index}.json`;
 }
 
 export function parseObjectKey(key:string):
@@ -39,7 +39,7 @@ export function parseObjectKey(key:string):
   |null {
   const feed=key.match(/^feeds\/latest\/page-([1-9][0-9]*)\.json$/);
   if(feed&&Number(feed[1])<=FEED_LIMIT)return {scope:'feed',target:'latest',index:Number(feed[1])};
-  const topic=key.match(/^topics\/([A-Za-z0-9_-]{1,128})\/(?:detail\.json|comments\/(v2\/)?page-([1-9][0-9]*)\.json)$/);
+  const topic=key.match(/^topics\/([A-Za-z0-9_-]{1,128})\/(?:detail\.json|comments\/(size-20\/)?page-([1-9][0-9]*)\.json)$/);
   if(!topic)return null;
   const index=topic[3]?Number(topic[3]):1;
   return Number.isSafeInteger(index)&&(!topic[3]||index>=2)?{scope:'topic',target:topic[1],index,pageSize:topic[2]?20:50}:null;
