@@ -383,5 +383,41 @@ class DiscoveryTests(unittest.TestCase):
             parse_healthunlocked(html.replace("2 replies","3 replies"), "153318229")
 
 
+    def test_readback_accepts_anonymous_display_name(self):
+        from spine_collect import verify
+        topic_id = "12345678-1234-1234-1234-123456789abc"
+        draft = {
+            "title": "Recovery discussion", "body": "Original post text",
+            "source_lang": "en",
+            "comments": [{"body": "Reply text", "source_lang": "en",
+                          "replies": [{"body": "Nested reply", "source_lang": "en"}]}],
+        }
+        response = {
+            "topic": {**{k: draft[k] for k in ("title", "body", "source_lang")},
+                      "nickname": "Anonymous"},
+            "comments": [
+                {"id": "c1", "parent_comment_id": None, "body": "Reply text",
+                 "source_lang": "en", "nickname": "Anonymous"},
+                {"id": "c2", "parent_comment_id": "c1", "body": "Nested reply",
+                 "source_lang": "en", "nickname": "Anonymous"},
+            ],
+            "next": None,
+        }
+        with patch("spine_collect.api", return_value=response):
+            self.assertTrue(verify(topic_id, draft, 2))
+        response["comments"][1]["body"] = "Changed reply"
+        with patch("spine_collect.api", return_value=response):
+            self.assertFalse(verify(topic_id, draft, 2))
+
+    def test_mayo_readback_accepts_anonymous_display_name(self):
+        from spine_mayo_long import verify_mayo_long
+        topic_id = "12345678-1234-1234-1234-123456789abc"
+        draft = {"title": "Recovery discussion", "body": "Original post text"}
+        response = {"topic": {**draft, "source_lang": "en", "nickname": "Anonymous"}}
+        self.assertTrue(verify_mayo_long(topic_id, draft, 1, lambda path: response))
+        response["topic"]["body"] = "Changed body"
+        self.assertFalse(verify_mayo_long(topic_id, draft, 1, lambda path: response))
+
+
 if __name__ == "__main__":
     unittest.main()
