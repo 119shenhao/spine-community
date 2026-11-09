@@ -1643,7 +1643,9 @@ test('automatic source detection overrides the suggested locale, and authors can
  assert.equal(same.data.items[0].reason,'same_language');
  const uncertain=await translationBatch(call,[translationItem(reply.data.id,{type:'comment'})]);
  assert.equal(uncertain.data.items[0].reason,'source_language_uncertain');
- assert.equal(external,0);
+ // Unknown short text now attempts one budgeted Azure auto-detection; a
+ // response lacking detectedLanguage must not be cached as trustworthy.
+ assert.equal(external,1);
  const edit=await call('/api/topics/'+id,'PATCH',{title,body,source_lang_mode:'manual',source_lang:'es'});
  assert.equal(edit.status,200);
  const updated=(await call('/api/topics/'+id)).data.topic;
