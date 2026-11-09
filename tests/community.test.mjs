@@ -1857,6 +1857,25 @@ test('signed-in CDN overlay falls back for private replies, stale versions and w
  assert.equal(own.projectionVersion,undefined);
 });
 
+test('a missing CDN locale cache reuses a valid D1 translation without generating again',async()=>{
+ const {translationView}=await import('../public/translation-ui.js');
+ const row={id:'older',status:'published',source_lang:'en',source_lang_mode:'manual',
+   content_version:1,summary:'English original summary'};
+ const requests=[];
+ const view=translationView('zh-CN',{direct:true,configured:true,hasCache:true,
+  request:async payload=>{
+   requests.push(payload);
+   return {items:[{translated:true,title:'中文标题',body:'已缓存的中文摘要',provider:'azure'}]};
+  },render:()=>{}});
+ view.markPage({projectionKey:'feeds/latest/page-1.json',topics:[row]});
+ await view.prime([['topic',row,'summary']]);
+ await new Promise(resolve=>setImmediate(resolve));
+ const state=view.item('topic',row,'summary');
+ assert.equal(state.result?.body,'已缓存的中文摘要');
+ assert.deepEqual(requests.map(item=>item.generate),[false]);
+ view.close();
+});
+
 test('a matching direct CDN translation needs no Worker request and can toggle back to original',async()=>{
  const {translationView}=await import('../public/translation-ui.js');
  const row={id:'cached',status:'published',source_lang:'en',source_lang_mode:'manual',content_version:2,
