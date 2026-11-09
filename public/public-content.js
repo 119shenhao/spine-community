@@ -8,7 +8,7 @@ function contentError(status) {
  return Object.assign(new Error(status===404?'not_found':'public_content_unavailable'),{status});
 }
 
-export function publicContentReader(health,user,api,fetcher=fetch) {
+export function publicContentReader(health,user,api,fetcher=fetch,locale=null) {
  const base=health?.publicContent?.baseUrl;
  const eligible=base===HOSTS[health?.environment]&&Boolean(base)&&(!user||health.publicContent.signedIn===true);
  async function applyViewer(data,key,version) {
@@ -38,6 +38,41 @@ export function publicContentReader(health,user,api,fetcher=fetch) {
   };
   return add(topics,state.topics)&&add(comments,state.comments);
  }
+ async function attachLocale(data,key,version) {
+  if(!health?.publicContent?.separateTranslations||!locale||
+    !data.translationLocales?.includes(locale))return;
+  const url=base+'/i18n/'+encodeURIComponent(locale)+'/'+key;
+  try {
+   const response=await fetcher(url,{credentials:'omit',referrerPolicy:'no-referrer',
+     redirect:'error',signal:AbortSignal.timeout(4500)});
+   if(!response.ok)return;
+   const translated=await response.json();
+   if(translated.schemaVersion!==1||translated.translationLayout!=='separate-v1'||
+      translated.locale!==locale||translated.sourceKey!==key||
+      translated.contentVersion!==version||translated.invalidated||
+      !Array.isArray(translated.items))return;
+   const index=new Map();
+   for(const item of translated.items) {
+    if(!item||!['topic','comment'].includes(item.type)||typeof item.id!=='string'||
+       !['summary','full','preview'].includes(item.scope)||typeof item.body!=='string')continue;
+    index.set([item.type,item.id,item.scope].join(':'),item);
+   }
+   const apply=(rows,type,scope)=>{
+    for(const row of rows) {
+     const item=index.get([type,row.id,scope].join(':'));
+     if(item?.sourceVersion!==row.content_version||row.status&&row.status!=='published')continue;
+     (row.translations??={})[locale]={
+       title:item.title||'',body:item.body,provider:item.provider,
+       sourceVersion:item.sourceVersion
+     };
+    }
+   };
+   apply(data.topics||[],'topic','summary');
+   apply(data.topic?[data.topic]:[],'topic','full');
+   apply(data.comments||[],'comment','full');
+   apply(data.progress||[],'comment','preview');
+  }catch{} // CDN miss: show original; the visible missing rows are translated on demand.
+ }
  async function read(key,fallback,accept,firstPage=true) {
   let envelope;
   try{
@@ -49,6 +84,8 @@ export function publicContentReader(health,user,api,fetcher=fetch) {
    if(envelope.invalidated===true)throw Object.assign(contentError(503),{missing:true});
    if(envelope.data===null)throw Object.assign(contentError(404),{withdrawn:firstPage});
    if(!accept(envelope))throw contentError(503);
+   if(health?.publicContent?.separateTranslations&&envelope.data?.translationLayout!=='separate-v1')
+     throw Object.assign(contentError(503),{missing:true});
   }catch(error){
    if(error.withdrawn&&!user)throw error;
    if(user||health.publicContent.fallback){
@@ -63,6 +100,7 @@ export function publicContentReader(health,user,api,fetcher=fetch) {
    try{ready=await applyViewer(envelope.data,key,envelope.contentVersion);}catch{}
    if(!ready)return fallback();
   }
+  await attachLocale(envelope.data,key,envelope.contentVersion);
   return {...envelope.data,projectionVersion:envelope.contentVersion,projectionKey:key};
  }
 
@@ -87,7 +125,8 @@ export function publicContentReader(health,user,api,fetcher=fetch) {
    const path='/api/topics/'+encodeURIComponent(topicId)+'?'+query;
    if(!eligible||!PUBLIC_ID.test(topicId)||query.has('focus')||query.has('progress')||
      (page>1&&!previousVersion&&!health.publicContent.onDemand))return api(path);
-   const key=page===1?`topics/${topicId}/detail.json`:`topics/${topicId}/comments/page-${page}.json`;
+   const key=page===1?`topics/${topicId}/detail.json`:
+      `topics/${topicId}/comments/${health?.publicContent?.pageSize===20?'v2/':''}page-${page}.json`;
    return read(key,options=>api(path,options),e=>e.topicId===topicId&&Array.isArray(e.data.comments)&&
     (page===1?e.data.topic?.id===topicId&&Array.isArray(e.data.progress):e.contentVersion===previousVersion),page===1);
   }
