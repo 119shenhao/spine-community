@@ -316,10 +316,10 @@ async function generate(env:Env,entry:Item,row:Row,locale:string,config:Settings
       const primary=typeof raw==='string'?raw.trim():null;
       // Azure sometimes reports generic Chinese. Only accept a specific script
       // after our own text has enough evidence to distinguish Han variants.
+      const scriptGuess=primary?.toLowerCase()==='zh'
+        ?detectSourceLanguageEvidence(...(topic?[c.title,c.body]:[c.body])).language:null;
       const normalized=primary?.toLowerCase()==='zh'
-        ?(detectSourceLanguageEvidence(...(topic?[c.title,c.body]:[c.body])).language==='und'
-          ?'zh':detectSourceLanguageEvidence(...(topic?[c.title,c.body]:[c.body])).language)
-        :primary;
+        ?(scriptGuess&&scriptGuess!=='und'?scriptGuess:'zh'):primary;
       const detectedScore=typeof score==='number'?score:NaN;
       const reliable=typeof normalized==='string'&&/^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})?$/.test(normalized)&&
         normalized!=='und'&&Number.isFinite(detectedScore)&&detectedScore>=.65&&detectedScore<=1;
