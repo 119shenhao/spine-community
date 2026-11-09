@@ -36,3 +36,15 @@ END;
 CREATE TRIGGER language_verification_comment_delete AFTER DELETE ON comments BEGIN
  DELETE FROM content_language_verifications WHERE content_type='comment' AND content_id=OLD.id;
 END;
+
+-- Remove stale evidence whenever the underlying version changes or is deleted.
+CREATE TRIGGER language_verification_topic_version AFTER UPDATE OF content_version,status ON topics
+WHEN OLD.content_version<>NEW.content_version OR NEW.status='deleted' BEGIN
+ DELETE FROM content_language_verifications WHERE content_type='topic' AND content_id=NEW.id
+  AND (content_version<>NEW.content_version OR NEW.status='deleted');
+END;
+CREATE TRIGGER language_verification_comment_version AFTER UPDATE OF content_version,status ON comments
+WHEN OLD.content_version<>NEW.content_version OR NEW.status='deleted' BEGIN
+ DELETE FROM content_language_verifications WHERE content_type='comment' AND content_id=NEW.id
+  AND (content_version<>NEW.content_version OR NEW.status='deleted');
+END;
