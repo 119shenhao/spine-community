@@ -1,4 +1,4 @@
-import {detectAll} from 'tinyld/light';
+import {detectAll} from 'tinyld/heavy';
 import {Row,fail,lang} from './core';
 
 const traditional=/[這個與體經驗醫療復頸壓覺後時會裡還過說為讓樣關頭緩謝測試]/u;
