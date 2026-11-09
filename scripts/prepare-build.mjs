@@ -1,4 +1,6 @@
-import {readFileSync} from 'node:fs';
+import {readFileSync,readdirSync,mkdirSync,rmSync,copyFileSync,writeFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 const PREVIEW='4362537a-5748-4a05-b0c4-219c3db36996';
 const expectedBranch='feature/v1-community-build-20261106';
@@ -26,3 +28,30 @@ if(process.env.WORKERS_CI==='1'&&process.env.WORKERS_CI_BRANCH===expectedBranch)
  run([...cli,'execute',...common,'--command',"SELECT value FROM settings WHERE key='schema_version'; SELECT id,nickname,is_system FROM users WHERE id='system-unknown-import'; PRAGMA foreign_key_check;",'--json']);
  console.log('Preview-only migration verified for '+PREVIEW);
 }else console.log('Remote migration skipped outside the named Cloudflare preview build.');
+
+function createVersionedFrontend() {
+ // Static JS and CSS are served directly from Cloudflare Assets/CDN (no extra
+ // Worker invocations). A unique directory for every content revision avoids
+ // browsers mixing an old entry module with newly deployed dependencies.
+ const root='public';
+ const names=readdirSync(root,{withFileTypes:true})
+  .filter(item=>item.isFile()&&/\.(js|css)$/.test(item.name))
+  .map(item=>item.name).sort();
+ if(!names.includes('app.js')||!names.includes('styles.css'))throw Error('Frontend entry assets missing');
+ const h=createHash('sha256');
+ for(const name of names){h.update(name);h.update('\0');h.update(readFileSync(join(root,name)));}
+ const revision=h.digest('hex').slice(0,16);
+ const folder=join(root,'_app');
+ rmSync(folder,{recursive:true,force:true});
+ mkdirSync(join(folder,revision),{recursive:true});
+ for(const name of names)copyFileSync(join(root,name),join(folder,revision,name));
+ const htmlFile=join(root,'index.html');
+ const html=readFileSync(htmlFile,'utf8');
+ const entry=/<link rel="stylesheet" href="\/(?:_app\/[a-f0-9]{16}\/)?styles\.css"><script type="module" src="\/(?:_app\/[a-f0-9]{16}\/)?app\.js"><\/script>/;
+ if(!entry.test(html))throw Error('Frontend HTML entry markup changed; refusing a stale deployment');
+ const replacement='<link rel="stylesheet" href="/_app/'+revision+'/styles.css">'+
+  '<script type="module" src="/_app/'+revision+'/app.js"></script>';
+ writeFileSync(htmlFile,html.replace(entry,replacement),'utf8');
+ console.log('Frontend asset revision '+revision+' ('+names.length+' versioned CSS/JS files)');
+}
+createVersionedFrontend();
