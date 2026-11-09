@@ -11,6 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -41,19 +42,46 @@ jobs:
           console.error('Preview deployment not confirmed:',JSON.stringify(last));
           process.exit(1);
           JS
-      - name: Validate public frontend modules (read-only)
+      - name: Verify currently deployed revisioned frontend and admin menu (read-only)
         run: |
           node --input-type=module <<'JS'
           import assert from 'node:assert/strict';
+          import {readdirSync,readFileSync} from 'node:fs';
+          import {createHash} from 'node:crypto';
+          import {setTimeout as delay} from 'node:timers/promises';
+
           const base='https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev';
-          for(const [path,needle] of [
-            ['/','/app.js'],['/app.js','renderLanguageReview'],
-            ['/language-admin.js','language-review-form'],['/translation-admin.js','translation-provider-form']
-          ]){
-            const response=await fetch(base+path,{redirect:'error',signal:AbortSignal.timeout(12000)});
-            assert.equal(response.status,200,path+' is unavailable');
-            const content=await response.text();
-            assert(content.includes(needle),path+' is missing its expected module code');
-            console.log('Frontend asset available:',path,'length',content.length);
+          const files=readdirSync('public').filter(name=>/\\.(?:js|css)$/.test(name)).sort();
+          const hash=createHash('sha256');
+          for(const name of files){
+            hash.update(name);hash.update('\\0');hash.update(readFileSync('public/'+name));
           }
+          const expected=hash.digest('hex').slice(0,16);
+          let revision=null,html='';
+          for(let i=0;i<24;i++){
+            const url=base+'/?utm_source=chatgpt.com&revision_probe='+expected+'-'+i;
+            const response=await fetch(url,{redirect:'error',signal:AbortSignal.timeout(10000),headers:{'cache-control':'no-cache'}});
+            assert.equal(response.status,200,'Homepage is unavailable');
+            const cache=response.headers.get('cache-control')||'';
+            assert(cache.includes('no-store'),'Homepage HTML is still cacheable: '+cache);
+            html=await response.text();
+            revision=html.match(/src="\\/_app\\/([a-f0-9]{16})\\/app\\.js"/)?.[1]||null;
+            if(revision===expected)break;
+            console.log('Waiting for frontend deploy, expected',expected,'observed',revision);
+            await delay(6000);
+          }
+          assert.equal(revision,expected,'Cloudflare is serving stale or unversioned frontend HTML');
+          assert(html.includes('/_app/'+expected+'/styles.css'),'CSS must share the new revision');
+          for(const file of files){
+            const response=await fetch(base+'/_app/'+expected+'/'+file,{
+              redirect:'error',signal:AbortSignal.timeout(10000)
+            });
+            assert.equal(response.status,200,'Missing versioned asset '+file);
+            const code=await response.text();
+            assert.equal(code,readFileSync('public/'+file,'utf8'),'Stale asset content for '+file);
+          }
+          const entry=readFileSync('public/app.js','utf8');
+          assert(entry.includes('translationProviders')&&entry.includes('languageReview'),
+            'The current build omits admin translation navigation');
+          console.log('Frontend revision confirmed',expected,'all',files.length,'assets and owner-only tabs');
           JS
