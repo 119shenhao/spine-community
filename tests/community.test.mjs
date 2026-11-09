@@ -112,20 +112,22 @@ test('translation provider editor renders independent Azure budget and unavailab
  assert.match(app,/id==='translation-provider-form'/);
  assert.match(view,/name="daily_limit"/);
  assert.match(view,/name="monthly_limit"/);
+ assert.match(view,/name="active_provider"/);
  assert.match(view,/not_integrated/);
  const {renderTranslationAdmin}=await import('../public/translation-admin.js');
  const target={innerHTML:''};
  await renderTranslationAdmin(target,async()=>({activeProvider:'azure',capMonthly:1900000,providers:[
-  {id:'azure',name:'Azure',active:true,implemented:true,freeMonthly:2000000,
+  {id:'azure',name:'Azure',active:true,implemented:true,selectable:true,freeMonthly:2000000,
    status:'ready',daily:{limit:200000,reserved:9982,remaining:190018},
    monthly:{limit:1800000,reserved:9982,remaining:1790018},
    rolling31Day:{limit:1800000,recorded:9982,remaining:1790018}},
-  {id:'aliyun',name:'Alibaba',active:false,implemented:false,status:'not_integrated'}
+  {id:'aliyun',name:'Alibaba',active:false,implemented:false,selectable:false,status:'not_integrated'}
  ]}),x=>String(x),'zh-CN');
  assert.match(target.innerHTML,/value="200000"/);
  assert.match(target.innerHTML,/value="1800000"/);
  assert.match(target.innerHTML,/max="1900000"/);
  assert.match(target.innerHTML,/Alibaba/);
+ assert.match(target.innerHTML,/value="aliyun"[^>]*disabled/);
  assert.match(target.innerHTML,/不能启用/);
 });
 
