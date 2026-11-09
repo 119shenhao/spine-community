@@ -108,7 +108,7 @@ test('administrator can set Azure budgets without resetting usage or enabling un
 
 test('deployed browser modules pass JavaScript syntax validation',async()=>{
  const {spawnSync}=await import('node:child_process');
- for(const path of ['public/app.js','public/translation-admin.js','public/i18n.js','public/i18n-zh-tw.js','public/public-content.js','public/translation-ui.js']){
+ for(const path of ['public/app.js','public/translation-admin.js','public/language-admin.js','public/i18n.js','public/i18n-zh-tw.js','public/public-content.js','public/translation-ui.js']){
   const result=spawnSync(process.execPath,['--check',path],{encoding:'utf8'});
   assert.equal(result.status,0,path+' browser syntax error:\n'+result.stderr);
  }
@@ -1693,6 +1693,23 @@ test('Azure autodetect refuses low-confidence and mixed-language results',async 
  assert.equal(mixed.data.items[0].reason,'source_language_uncertain');
  assert.equal(DB.db.prepare('SELECT count(*) n FROM content_language_verifications WHERE content_id=?').get(id).n,0);
  assert.equal(DB.db.prepare('SELECT count(*) n FROM topic_translations WHERE topic_id=?').get(id).n,0);
+});
+
+test('administrator language review client has no implicit public access or reload',async()=>{
+ const view=readFileSync('public/language-admin.js','utf8');
+ const app=readFileSync('public/app.js','utf8');
+ assert.match(app,/languageReview/);
+ assert.match(app,/state.user.role==='admin'/);
+ assert.match(app,/renderLanguageReview/);
+ assert.match(app,/language-review-form/);
+ assert.match(view,/\/api\/admin\/language-review/);
+ assert.match(view,/source_lang/);
+ const {renderLanguageReview}=await import('../public/language-admin.js');
+ const target={innerHTML:''};
+ await renderLanguageReview(target,async()=>({items:[{id:'demo',type:'topic',title:'Sample',
+  preview:'English sentence',source_lang:'und',source_lang_mode:'auto'}]}),x=>String(x),'zh-CN');
+ assert.match(target.innerHTML,/语言/);
+ assert.match(target.innerHTML,/language-review-form/);
 });
 
 test('owner language review is protected and invalidates cached translations on correction',async()=>{
