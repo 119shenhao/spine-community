@@ -1892,8 +1892,10 @@ test('a CDN miss on a D1 cache hit backfills direct text without calling Azure a
  await call('/api/topics/'+id,'GET',undefined,null,{'x-spine-projection-miss':page},ctx);
  await flush();
  assert.equal((await (await bucket.get(page)).json()).data.topic.translations,undefined);
+ DB.db.prepare("DELETE FROM public_projection_demand WHERE scope='topic' AND target=?").run(id);
  const initial=await translationBatch(call,[translationItem(id)],{locale:'fr'});
  assert.equal(initial.data.items[0].translated,true);
+ DB.db.prepare('UPDATE topic_translations SET projection_token=NULL,projection_key=NULL WHERE topic_id=?').run(id);
  const cached=await translationBatch(call,[translationItem(id,{page})],{locale:'fr',generate:false,ctx});
  assert.equal(cached.data.items[0].translated,true);
  await flush();

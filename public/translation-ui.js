@@ -101,7 +101,7 @@ export function translationView(locale,{request,configured,hasCache,direct,rende
   },
   async prime(candidates){
    const states=[...new Set(candidates.map(([type,row,scope])=>item(type,row,scope)).filter(state=>state&&!state.checked))].slice(0,8);
-   if(states.length&&(hasCache||states.some(state=>state.entry.token)))await load(states,false,AbortSignal.timeout(450));
+   if(!direct&&states.length&&(hasCache||states.some(state=>state.entry.token)))await load(states,false,AbortSignal.timeout(450));
   },
   item,
   observe(nodes){

@@ -84,7 +84,7 @@ async function readItems(db:D1Database,items:Item[],locale:string) {
       json_extract(value,'$.scope') scope,json_extract(value,'$.version') version,json_extract(value,'$.token') token
     FROM json_each(?)
   ), public_rows AS (
-    SELECT r.*,t.content_version,t.source_lang,t.source_lang_mode,x.provider,x.created_at cache_created_at,x.projection_token cache_token,t.id topic_id,
+    SELECT r.*,t.content_version,t.source_lang,t.source_lang_mode,x.provider,x.created_at cache_created_at,t.id topic_id,
       CASE WHEN r.token=x.projection_token THEN x.projection_key END projection_key,
       CASE WHEN r.token IS NULL OR r.token IS NOT x.projection_token THEN x.title_text END title_text,
       CASE WHEN r.token IS NULL OR r.token IS NOT x.projection_token THEN x.body_text END body_text
@@ -92,7 +92,7 @@ async function readItems(db:D1Database,items:Item[],locale:string) {
     LEFT JOIN topic_translations x ON x.topic_id=t.id AND x.locale=? AND x.source_version=t.content_version AND x.scope=r.scope
     WHERE r.type='topic'
     UNION ALL
-    SELECT r.*,c.content_version,c.source_lang,c.source_lang_mode,x.provider,x.created_at,x.projection_token,c.topic_id,
+    SELECT r.*,c.content_version,c.source_lang,c.source_lang_mode,x.provider,x.created_at,c.topic_id,
       CASE WHEN r.token=x.projection_token THEN x.projection_key END,NULL,
       CASE WHEN r.token IS NULL OR r.token IS NOT x.projection_token THEN x.body_text END
     FROM requested r JOIN comments c ON c.id=r.id AND c.status='published'
@@ -244,7 +244,7 @@ export async function translationRoute(req:Request,env:Env,_user:Row|null,path:s
     if(row.source_lang_mode!=='legacy'&&row.source_lang==='und')return result('source_language_uncertain');
     if(row.projection_key)return {translated:true,key:row.projection_key};
     if(row.provider){
-      if(ctx&&env.PUBLIC_TRANSLATION_DIRECT==='true'&&!entry.token&&row.cache_token)
+      if(ctx&&env.PUBLIC_TRANSLATION_DIRECT==='true'&&!entry.token)
         queueRefresh(entry,row,row.cache_created_at);
       return cached(row);
     }

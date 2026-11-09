@@ -72,9 +72,9 @@ export async function refreshProjectionTranslations(env:Env,items:{type:string;i
     const page=item.page&&parseObjectKey(item.page);
     if(!page||(page.scope==='feed'&&(item.type!=='topic'||item.scope!=='summary'))||
       (page.scope==='topic'&&item.type==='topic'&&(item.scope!=='full'||page.target!==item.id||page.index!==1)))continue;
+    const object=config.directTranslations?await config.bucket.head(item.page!):null;
     if(item.createdAt!==undefined){
       if(!config.directTranslations)continue;
-      const object=await config.bucket.head(item.page!);
       if(!object||object.customMetadata?.visibility!=='public')continue;
       const checked=Number(object.customMetadata.translationCheckedAt)||0;
       if(object.customMetadata.translationFormat==='direct'&&
@@ -84,7 +84,13 @@ export async function refreshProjectionTranslations(env:Env,items:{type:string;i
       WHERE scope=? AND target=? AND object_index=? AND (reserved=1 OR pending=1) AND last_error IS NULL
       AND refresh_translations=0 RETURNING reserved`,
       page.scope,page.target,page.index);
-    if(changed)queued++;
+    // A legacy published page may still be tracked as a contiguous reservation.
+    // Adopt the already published key in the same demand queue on its first translation miss.
+    const adopted=!changed&&object?.customMetadata?.visibility==='public'&&await one(env.DB,
+      `INSERT OR IGNORE INTO public_projection_demand(scope,target,object_index,reserved,refresh_translations)
+       SELECT ?,?,?,1,1 WHERE EXISTS(SELECT 1 FROM public_projection WHERE scope=? AND target=? AND state<>'dead')
+       RETURNING reserved`,page.scope,page.target,page.index,page.scope,page.target);
+    if(changed||adopted)queued++;
   }
   if(queued)await drainDemand(env,config,Math.min(queued+1,4));
 }

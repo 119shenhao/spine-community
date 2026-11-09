@@ -9,14 +9,14 @@ export async function projectTranslations(db:D1Database,topics:Row[],comments:Ro
   const rows=await all(db,`SELECT 'topic' type,topic_id id,scope,locale,source_version,title_text,body_text,provider,projection_token,projection_key
     FROM topic_translations x JOIN json_each(?) r
       ON x.topic_id=json_extract(r.value,'$[0]') AND x.source_version=json_extract(r.value,'$[1]')
-    WHERE scope=? AND projection_token IS NOT NULL AND projection_key IS NOT NULL
+    WHERE scope=? AND (?=1 OR (projection_token IS NOT NULL AND projection_key IS NOT NULL))
     UNION ALL
     SELECT 'comment',comment_id,x.scope,locale,source_version,'',body_text,provider,projection_token,projection_key
     FROM comment_translations x JOIN (
       SELECT value,'full' scope FROM json_each(?) UNION ALL SELECT value,'preview' FROM json_each(?)
     ) r ON x.comment_id=json_extract(r.value,'$[0]') AND x.source_version=json_extract(r.value,'$[1]') AND x.scope=r.scope
-    WHERE projection_token IS NOT NULL AND projection_key IS NOT NULL
-    ORDER BY type,id,scope,locale LIMIT 64`,refs(topics),scope,refs(comments),refs(progress));
+    WHERE (?=1 OR (projection_token IS NOT NULL AND projection_key IS NOT NULL))
+    ORDER BY type,id,scope,locale LIMIT 64`,refs(topics),scope,Number(direct),refs(comments),refs(progress),Number(direct));
   const index=new Map<string,Row[]>();
   for(const [type,part,group] of [['topic',scope,topics],['comment','full',comments],['comment','preview',progress]] as const){
     for(const row of group){
