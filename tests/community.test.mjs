@@ -891,6 +891,10 @@ test('post/reply language menus use 简体中文 and 繁體中文 rather than re
  assert(source.includes('sourceFields(c)'));
  assert(source.includes('sourceFields(editing?c:null)'));
  assert(source.includes('profilePostingLanguageOptions(u,locale,languages,t,languageOptions)'));
+ assert(!source.includes('<option value="custom"'),'do not offer manual language-code input in the UI');
+ assert(!source.includes('name="source_language_code"'),'do not render language-code input');
+ assert(source.includes('const saved=manual'),'editing an existing uncommon language must retain its selection');
+ assert(source.includes('source_lang:label'),'standard manual language selection remains supported');
 });
 
 // D1-backed collector queue: dedupe, retry scheduling, preview-only gating, and URL safety.
