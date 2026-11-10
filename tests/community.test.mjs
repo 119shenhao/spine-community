@@ -2689,3 +2689,75 @@ test('SEO: generated HTML retains security headers and home causes no D1 work',a
  assert.equal(page.headers.get('x-frame-options'),'DENY');
  assert.match(page.headers.get('cache-control'),/no-store/);
 });
+
+
+test('SEO: Chinese English and Japanese originals stay authoritative in preview SSR even when reader language differs',async()=>{
+ const {env,DB,topic}=await fixture();
+ env.APP_ENV='preview';
+ env.ASSETS={fetch:async()=>new Response(readFileSync('public/index.html','utf8'))};
+ const cases=[
+  ['zh-CN','我的腰椎康复记录','久坐后腰部酸痛，经过锻炼后逐渐好转。'],
+  ['en','My lower back recovery journal','Sitting for a long time made my lower back hurt. Walking helped me recover.'],
+  ['ja','腰痛からの回復体験','長時間座った後に腰が痛くなりました。運動で少しずつ回復しました。']
+ ];
+ const origin='https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev';
+ for(const [lang,title,body] of cases){
+  const id=await topic(title,body,'alice',{source_lang:lang});
+  const canonical='https://spine.nbn369.com/topic/'+id;
+  const response=await worker.fetch(new Request(origin+'/topic/'+id+'?lang=fr'),env);
+  assert.equal(response.status,200);
+  assert.match(response.headers.get('x-robots-tag'),/noindex/);
+  const html=await response.text();
+  assert(html.includes('<html lang="'+lang+'">'));
+  assert(html.includes('<title>'+title+' | Spine Community</title>'));
+  assert(html.includes('<meta name="description" content="'+body+'">'));
+  assert(html.includes('<meta property="og:title" content="'+title+' | Spine Community">'));
+  assert(html.includes('<meta property="og:description" content="'+body+'">'));
+  assert(html.includes('<h1>'+title+'</h1>'));
+  assert(html.includes('<p>'+body+'</p>'));
+  assert.equal(html.split('<link rel="canonical"').length-1,1);
+  assert(html.includes('<link rel="canonical" href="'+canonical+'">'));
+  assert(!html.includes('hreflang='));
+  assert(!html.includes(canonical+'?lang='));
+  const match=html.match(/<script type="application\/ld\+json">([^<]+)<\/script>/);
+  assert(match,'DiscussionForumPosting present for a first-party user');
+  const structured=JSON.parse(match[1]);
+  assert.equal(structured.headline,title);
+  assert.equal(structured.text,body);
+  assert.equal(structured.url,canonical);
+  const plain=await (await worker.fetch(new Request(origin+'/topic/'+id),env)).text();
+  assert.equal(plain,html,'reader language query cannot change initial SEO');
+ }
+ const uncertain=await topic('Language label pending review','Text must not be identified as English without evidence');
+ DB.db.prepare('UPDATE topics SET source_lang=? WHERE id=?').run('invalid-language-tag',uncertain);
+ const uncertainHtml=await (await worker.fetch(new Request(origin+'/topic/'+uncertain),env)).text();
+ assert(uncertainHtml.includes('<html lang="und">'),'invalid historical language should not be falsely marked English');
+ assert.equal(DB.db.prepare('SELECT source_lang FROM topics WHERE id=?').get(uncertain).source_lang,'invalid-language-tag',
+  'SEO must not silently change historical content language data');
+});
+
+test('SEO: on-demand production sitemap is canonical and reflects published, synced and hidden rows in isolated fixture',async()=>{
+ const {env,DB,topic}=await fixture();
+ env.APP_ENV='production'; // Only a local in-memory test database, never production D1.
+ const url='https://spine.nbn369.com/sitemap.xml';
+ const read=async()=>await (await worker.fetch(new Request(url),env)).text();
+ const before=await read();
+ assert.match(before,/<loc>https:\/\/spine\.nbn369\.com\/<\/loc>/);
+ const newlyPublished=await topic('New public member experience','Recovery notes from a newly published member');
+ const synced='seo-synced-original';
+ DB.db.prepare("INSERT INTO topics(id,author_id,title,body,source_lang,status) VALUES(?,'alice',?,?,?,'published')")
+  .run(synced,'A synced original Spanish story','Mi recuperación después del dolor lumbar.','es');
+ const fresh=await read();
+ for(const id of [newlyPublished,synced]){
+  const loc='<loc>https://spine.nbn369.com/topic/'+id+'</loc>';
+  assert.equal(fresh.split(loc).length-1,1,'one canonical link for '+id);
+ }
+ assert(!fresh.includes('?lang='));
+ assert(!fresh.includes('<xhtml:link'));
+ DB.db.prepare("UPDATE topics SET status='hidden' WHERE id=?").run(newlyPublished);
+ const after=await read();
+ assert(!after.includes('/topic/'+newlyPublished));
+ assert.equal(after.split('<loc>https://spine.nbn369.com/topic/'+synced+'</loc>').length-1,1);
+ DB.db.prepare("UPDATE topics SET status='pending_review' WHERE id=?").run(synced);
+ assert(!(await read()).includes('/topic/'+synced));
+});

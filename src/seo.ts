@@ -109,7 +109,7 @@ async function htmlPage(req:Request,env:Env,path:string):Promise<Response> {
  if(topic&&record&&record.status==='published'){
   const canonical=CANONICAL_ORIGIN+'/topic/'+encodeURIComponent(record.id);
   const title=String(record.title||'Spine Community')+' | Spine Community';
-  html=injectMetadata(html,canonical,title,description(record.body),true,/^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})?$/.test(record.source_lang)?record.source_lang:'en');
+  html=injectMetadata(html,canonical,title,description(record.body),true,/^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})?$/.test(record.source_lang)?record.source_lang:'und');
   // Google DiscussionForumPosting applies to first-party community members,
   // not imported/synthetic system-author posts. No claimed author profile URLs.
   if(record.is_system===0&&record.nickname&&Number(record.created_at)>0){
