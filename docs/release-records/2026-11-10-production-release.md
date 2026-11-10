@@ -54,3 +54,15 @@
 - [生产写入工作流 #42750794988](https://github.com/119shenhao/spine-community/actions/runs/42750794988) **Success**，实际日志：`Production translation_enabled: false -> true`。
 - 随后独立发起 [只读复核 #42750854757](https://github.com/119shenhao/spine-community/actions/runs/42750854757)，**Success**，生产 D1 实际状态：`translation_enabled=true`；`topic_translations=3`、`comment_translations=2`；2026-11-10 UTC 当前翻译字符预留 3,849；`provider_blocked_at=0`、`cooldown_until=0`。这表明正式数据库已开始产生译文缓存，但**不等于**已从公网验证首页与详情页的译文呈现、Azure 账户真实计费或 CDN 缓存命中。
 - 本次没有发布站点新版本、操作生产用户／帖子／回复、同步预览数据、开启采集导入或改动 Azure 免费额度与 Secret。
+
+## 2026-11-10 生产新版本：回复交互、iOS 焦点与流量统计开关
+
+- 用户明确指令：「发布新版本，开发环境到生产环境」。
+- 开发源提交：`5a8188ad35463ee7483f22d65c86b19cbd1c514d`。开发 Actions [#42758476677](https://github.com/119shenhao/spine-community/actions/runs/42758476677) **Success**，111 项自动测试通过。
+- 基于当时生产 `main` 提交 `786997002d16ca87e65b60ccf84393859a9a619d` 创建 `release/spine-20261110-analytics-5a8188a`，仅选取 9 个代码/测试文件。发布候选 `5f60fbeb02374f3188e4717bbd59b257f6619e9d`；差异核对严格只有 `public/app.js`、`public/i18n.js`、`public/i18n-zh-tw.js`、`public/styles.css`、`src/admin.ts`、`src/community.ts`、`src/core.ts`、`src/index.ts`、`tests/community.test.mjs`。
+- [发布 PR #16](https://github.com/119shenhao/spine-community/pull/16) **Merged**，生产 merge commit：`b24d71c8a8085c948e0c28cc7bf17158f6a4b7bd`。
+- [Cloudflare Production Workers Build](https://dash.cloudflare.com/289976272520a38732bef34108585e11/workers/services/view/spine-community/production/builds/f1251cfb-8aed-485a-8753-6f4e6ef3c8e6) 的该 merge commit 对应 GitHub Check **completed/success**，表示正式构建已成功。
+- 功能：未登录点击首页/详情回复弹登录，已登录可直接回复并正确关联帖子；登录弹窗关闭后消除 iPhone Safari 主区域蓝色焦点框；后台统计增加站长独占流量开关、D1 `settings.analytics_enabled` 缺省视为关闭，取消对 Cloudflare `ANALYTICS_SALT` 的依赖，历史统计保留。
+- **生产 D1 无迁移**：对比开发/生产 Git 树，所有 `migrations/v1/` 文件一致；代码复用既有 `settings` 表与审计表，默认 `analytics_enabled=false`（缺失项按 false 解释）。没有同步任何帖子、评论、用户、点赞或翻译缓存数据。
+- 保留生产 `wrangler.jsonc` 的环境设置、`keep_vars: true`，保留 `main` 文档与所有生产工作流，不从开发分支覆盖。没有擅自开启统计；生产站长需在「社区管理 → 社区统计」手动打开。
+- **尚未完成独立公网验收**：本次工具访问 `https://spine.nbn369.com/api/health` 返回不可访问，不能据此判断网站故障，也不能以构建成功代替在线 HTTP/API/UI 实测。建议站长检查 `/api/health` 的 `analyticsEnabled:false`，随后登录后台验证新开关与手机版回复按钮。
