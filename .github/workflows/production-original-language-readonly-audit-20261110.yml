@@ -1,0 +1,117 @@
+name: Production D1 source-language audit (read-only)
+on:
+  push:
+    branches: [feature/v1-community-build-20261106]
+    paths: [.github/workflows/production-original-language-readonly-audit-20261110.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  production-language:
+    if: github.repository == '119shenhao/spine-community' && github.ref == 'refs/heads/feature/v1-community-build-20261106'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Read-only production language metadata and independent text comparison
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PROD_D1_API_TOKEN }}
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import {readFileSync,mkdirSync,writeFileSync} from 'node:fs';
+          import ts from 'typescript';
+          const account='289976272520a38732bef34108585e11';
+          const dbid='5919ff78-b8fc-46ab-85f0-01fe5e6a41b0';
+          const dbname='spine-community-db';
+          const token=process.env.CLOUDFLARE_API_TOKEN;
+          if(!token)throw Error('Missing production D1 audit token');
+          const url='https://api.cloudflare.com/client/v4/accounts/'+account+'/d1/database/'+dbid;
+          async function api(sql) {
+            if(sql!==undefined&&!/^\s*SELECT\b/i.test(sql))throw Error('Read-only SELECT only');
+            const response=await fetch(url+(sql===undefined?'':'/query'),{
+              method:sql===undefined?'GET':'POST',
+              headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+              body:sql===undefined?undefined:JSON.stringify({sql}),
+              signal:AbortSignal.timeout(30000)
+            });
+            if(!response.ok)throw Error('Cloudflare D1 HTTP '+response.status);
+            const data=await response.json();
+            if(data.success!==true)throw Error('Cloudflare D1 unsuccessful response');
+            return data.result;
+          }
+          const info=await api();
+          assert.equal(info.uuid,dbid,'Wrong production DB ID');
+          assert.equal(info.name,dbname,'Wrong production DB name');
+          async function select(sql) {
+            const data=await api(sql);
+            if(!Array.isArray(data)||data.length!==1||data[0].success!==true)
+              throw Error('Invalid read-only query response');
+            return data[0].results;
+          }
+          const tables=await select("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('topics','content_language_verifications')");
+          assert.equal(tables.length,2,'Missing language proof schema');
+          mkdirSync('.audit-build',{recursive:true});
+          for(const file of ['core','source-language']){
+            const source=readFileSync('src/'+file+'.ts','utf8');
+            const output=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText.replace(/from '(\.\/[^']+)'/g,"from '$1.js'");
+            writeFileSync('.audit-build/'+file+'.js',output);
+          }
+          const {detectSourceLanguageEvidence}=await import('./.audit-build/source-language.js');
+          const result={db:dbname,mode:'read_only',topics:0,legacy:0,manual:0,auto:0,
+            current_proof:0,proof_conflict:0,legacy_proof:0,
+            unknown:0,unknown_detected:0,unknown_inconclusive:0,
+            legacy_known:0,legacy_agree:0,legacy_suspect:0,legacy_inconclusive:0,
+            stored_suspect_languages:{},detected_suspect_languages:{},
+            note:'Possible language mismatches, not confirmed mistakes. No text, post identifiers, or personal data logged.'};
+          const pageSize=20;
+          for(let offset=0;offset<10000;offset+=pageSize){
+            const sql="SELECT t.id,t.title,t.body,t.source_lang,t.source_lang_mode,t.content_version,v.language proof_language "+
+              "FROM topics t LEFT JOIN content_language_verifications v ON v.content_type='topic' "+
+              "AND v.content_id=t.id AND v.content_version=t.content_version "+
+              "WHERE t.status='published' ORDER BY t.id LIMIT "+pageSize+" OFFSET "+offset;
+            const rows=await select(sql);
+            if(rows.length>pageSize)throw Error('Invalid page size');
+            for(const row of rows){
+              result.topics++;
+              const stored=typeof row.source_lang==='string'?row.source_lang:'und';
+              const mode=row.source_lang_mode;
+              if(stored==='und')result.unknown++;
+              if(mode==='legacy')result.legacy++;
+              if(mode==='manual')result.manual++;
+              if(mode==='auto')result.auto++;
+              if(row.proof_language!=null){
+                result.current_proof++;
+                if(row.proof_language!==stored)result.proof_conflict++;
+                if(mode==='legacy')result.legacy_proof++;
+              }
+              if(mode!=='legacy')continue;
+              const evidence=detectSourceLanguageEvidence(String(row.title||''),String(row.body||''));
+              const detected=evidence.language;
+              if(stored==='und'){
+                if(detected==='und')result.unknown_inconclusive++;
+                else result.unknown_detected++;
+              }else{
+                result.legacy_known++;
+                if(detected==='und')result.legacy_inconclusive++;
+                else if(detected===stored)result.legacy_agree++;
+                else{
+                  result.legacy_suspect++;
+                  result.stored_suspect_languages[stored]=(result.stored_suspect_languages[stored]||0)+1;
+                  result.detected_suspect_languages[detected]=(result.detected_suspect_languages[detected]||0)+1;
+                }
+              }
+            }
+            if(rows.length<pageSize)break;
+          }
+          assert(result.topics<10000,'Audit hit pagination limit');
+          assert.equal(result.legacy_known,result.legacy_agree+result.legacy_suspect+result.legacy_inconclusive);
+          console.log('PRODUCTION_D1_READONLY_LANGUAGE_AUDIT '+JSON.stringify(result));
+          JS
