@@ -1709,7 +1709,7 @@ test('import and collector keep unverified source hints separate from Heavy auto
  assert.equal(short.status,201,JSON.stringify(short.data));
  const shortId=short.data.results[0].id;
  const unverified=DB.db.prepare('SELECT source_lang,source_lang_mode FROM topics WHERE id=?').get(shortId);
- assert.equal(unverified.source_lang,'fr');
+ assert.equal(unverified.source_lang,'und','uncertain imported hints must not be treated as indexed originals');
  assert.equal(unverified.source_lang_mode,'legacy');
 });
 
