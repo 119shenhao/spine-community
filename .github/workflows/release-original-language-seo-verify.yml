@@ -5,6 +5,7 @@ on:
       - release/original-language-seo-20261110
     paths:
       - .github/workflows/release-original-language-seo-verify.yml
+      - tests/community.test.mjs
   workflow_dispatch:
 
 permissions:
