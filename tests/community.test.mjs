@@ -447,6 +447,46 @@ test('production sync maps arbitrary published topic/reply authors to Unknown Us
 });
 
 
+test('one-time sync publishes only manually confirmed or current-version verified languages',async()=>{
+ const {DB}=await fixture();
+ const {resolveSyncLanguage,buildInserts,fingerprint}=await import('../scripts/sync-preview-to-production.mjs');
+ const manual={id:'manual',status:'published',source_lang:'es',source_lang_mode:'manual',content_version:3};
+ const auto={id:'auto',status:'published',source_lang:'fr',source_lang_mode:'legacy',content_version:2,
+  verified_version:2,verified_language:'en',verified_method:'tinyld-heavy',verified_score:.87};
+ const stale={id:'stale',status:'published',source_lang:'en',source_lang_mode:'auto',content_version:3,
+  verified_version:2,verified_language:'en',verified_method:'tinyld-heavy',verified_score:.99};
+ const admin={id:'admin-proof',status:'published',source_lang:'fr',source_lang_mode:'legacy',content_version:2,
+  verified_version:2,verified_language:'ja',verified_method:'admin-manual',verified_score:null};
+ const deleted={...admin,status:'deleted'};
+ assert.deepEqual([resolveSyncLanguage(manual).label,resolveSyncLanguage(auto).label,
+   resolveSyncLanguage(stale).label,resolveSyncLanguage(admin).label,resolveSyncLanguage(deleted).label],
+  ['es','en','und','ja','und']);
+ assert.equal(resolveSyncLanguage(admin).mode,'manual');
+ const topic={...auto,id:'verified-topic',title:'Original title',body:'Original text',
+   symptom_duration_days:null,created_at:1234};
+ const comments=[
+  {...manual,id:'manual-reply',parent_comment_id:null,kind:'regular',progress_seq:null,body:'Gracias',created_at:1235},
+  {...stale,id:'stale-reply',parent_comment_id:null,kind:'regular',progress_seq:null,body:'Old text',created_at:1236},
+  {...admin,id:'admin-reply',parent_comment_id:null,kind:'regular',progress_seq:null,body:'Confirmed language',created_at:1237},
+  {...deleted,id:'removed-reply',parent_comment_id:null,kind:'regular',progress_seq:null,body:null,created_at:1238}
+ ];
+ const sql=buildInserts(topic,comments,[],fingerprint(topic.title,topic.body));
+ DB.db.exec(sql);DB.db.exec(sql);
+ const stored=DB.db.prepare('SELECT source_lang,source_lang_mode FROM topics WHERE id=?').get(topic.id);
+ assert.deepEqual(stored,{source_lang:'en',source_lang_mode:'auto'});
+ const proof=DB.db.prepare('SELECT content_version,language,method,score FROM content_language_verifications WHERE content_id=?').get(topic.id);
+ assert.equal(proof.content_version,1,'new production content starts at version 1');
+ assert.equal(proof.language,'en');assert.equal(proof.method,'tinyld-heavy');
+ assert.equal(proof.score,.87);
+ assert.deepEqual(DB.db.prepare('SELECT source_lang,source_lang_mode FROM comments WHERE id=?').get('manual-reply'),{source_lang:'es',source_lang_mode:'manual'});
+ assert.deepEqual(DB.db.prepare('SELECT source_lang,source_lang_mode FROM comments WHERE id=?').get('stale-reply'),{source_lang:'und',source_lang_mode:'legacy'});
+ assert.deepEqual(DB.db.prepare('SELECT source_lang,source_lang_mode FROM comments WHERE id=?').get('admin-reply'),{source_lang:'ja',source_lang_mode:'manual'});
+ assert.deepEqual(DB.db.prepare('SELECT source_lang,source_lang_mode FROM comments WHERE id=?').get('removed-reply'),{source_lang:'und',source_lang_mode:'legacy'});
+ assert.equal(DB.db.prepare("SELECT count(*) n FROM content_language_verifications WHERE content_id IN ('manual-reply','stale-reply','removed-reply')").get().n,0);
+ assert.equal(DB.db.prepare("SELECT method FROM content_language_verifications WHERE content_id='admin-reply'").get().method,'admin-manual');
+ assert.equal(DB.db.prepare('PRAGMA foreign_key_check').all().length,0);
+});
+
 // Collection coordination test fixtures never access the network or production database.
 async function collectFixture(){
  const f=await importFixture();
@@ -1131,10 +1171,11 @@ test('Mayo long threads resume from private D1 staging and publish 60 replies at
  assert.equal((await long('start',token1,meta)).status,200);
  assert.equal((await long('start',token1,meta)).data.already_started,true);
  assert.equal((await long('start',token1,{...meta,expected_pages:401})).status,400);
+ const chineseReply='这次我的腰椎疼痛已经缓解，之前久坐会疼，现在慢慢能走路，恢复过程还有一些问题。';
  const items=p=>Array.from({length:10},(_,i)=>{
    const number=(p-1)*10+i+1;
    return {source_comment_id:String(number),parent_source_comment_id:number===1?null:'1',
-     body:'Detailed lumbar recovery reply '+number,source_lang:'en'};
+     body:number===2?chineseReply:'Detailed lumbar recovery reply '+number,source_lang:'en'};
  });
  assert.equal((await long('page',token1,{page_number:1,comments:items(1)})).status,200);
  assert.equal((await long('page',token1,{page_number:1,comments:items(1)})).data.already_saved,true);
@@ -1157,6 +1198,10 @@ test('Mayo long threads resume from private D1 staging and publish 60 replies at
  const topicId=finished.data.topic_id;
  assert.equal(DB.db.prepare('SELECT COUNT(*) c FROM comments WHERE topic_id=?').get(topicId).c,60);
  assert.equal(DB.db.prepare('SELECT reply_count c FROM topics WHERE id=?').get(topicId).c,60);
+ const chinese=DB.db.prepare('SELECT id,source_lang,source_lang_mode FROM comments WHERE topic_id=? AND body=?').get(topicId,chineseReply);
+ assert.equal(chinese.source_lang,'zh-CN','Mayo replies are not all automatically English');
+ assert.equal(chinese.source_lang_mode,'auto');
+ assert.equal(DB.db.prepare("SELECT method FROM content_language_verifications WHERE content_type='comment' AND content_id=?").get(chinese.id).method,'tinyld-heavy');
  const a=DB.db.prepare('SELECT id FROM comments WHERE topic_id=? AND body=?').get(topicId,'Detailed lumbar recovery reply 1');
  const b=DB.db.prepare('SELECT parent_comment_id p FROM comments WHERE topic_id=? AND body=?').get(topicId,'Detailed lumbar recovery reply 60');
  assert.equal(b.p,a.id);
@@ -1709,7 +1754,7 @@ test('import and collector keep unverified source hints separate from Heavy auto
  assert.equal(short.status,201,JSON.stringify(short.data));
  const shortId=short.data.results[0].id;
  const unverified=DB.db.prepare('SELECT source_lang,source_lang_mode FROM topics WHERE id=?').get(shortId);
- assert.equal(unverified.source_lang,'fr');
+ assert.equal(unverified.source_lang,'und','uncertain imported hints must not be treated as indexed originals');
  assert.equal(unverified.source_lang_mode,'legacy');
 });
 
