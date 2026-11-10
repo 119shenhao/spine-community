@@ -37,3 +37,11 @@
 
 ## 回滚说明
 - 优先回滚 Cloudflare Worker 到此前兼容版本，视结构兼容性选择；生产 D1 Time Travel 回退可能丢失此后新增的真实用户数据，必须另行审核和授权，禁止直接自动回滚。
+
+## 2026-11-10 生产翻译与 R2/CDN 环境变量恢复
+
+- 用户提供生产/预览 Cloudflare Settings 截图，确认生产 `TRANSLATION_ENABLED=true`、`TRANSLATOR_REGION=eastus`、`TRANSLATOR_F0_VERIFIED_AT=2026-11-09T06:14:50Z` 已恢复且 `TRANSLATOR_KEY` Secret 已存在；此次未修改以上变量或 Secret。
+- 生产相对于开发预览尚缺七个普通变量：`CDN_ZONE_ID`、`PUBLIC_CONTENT_ENABLED`、`PUBLIC_CONTENT_READS`、`PUBLIC_CONTENT_FALLBACK`、`PUBLIC_CONTENT_PAGE_SIZE`、`PUBLIC_TRANSLATION_SEPARATE`、`PUBLIC_TRANSLATION_DIRECT`。通过 [PR #11](https://github.com/119shenhao/spine-community/pull/11) 写入 `wrangler.jsonc`，沿用 `keep_vars: true`，不触碰密钥或 D1 数据。
+- PR #11 后首轮 Cloudflare 生产构建失败：现有测试要求生产 `PUBLIC_TRANSLATION_SEPARATE` 不为 `true`，与本轮已确认的配置策略矛盾；通过 [PR #12](https://github.com/119shenhao/spine-community/pull/12) 调整为核对开发与生产均采用分离式译文 JSON，仍检查生产/预览 R2 桶隔离；开发分支 `verify` 成功。测试调整亦同步开发分支。
+- 为确保更新到正式构建，通过 [PR #13](https://github.com/119shenhao/spine-community/pull/13) 仅重排生产普通变量顺序（不改变值），触发正式配置构建。最终生产提交 `25ba3afbd18cdf4e398000638d87ee9eef2eb59b` 对应 [Cloudflare Workers Build](https://dash.cloudflare.com/289976272520a38732bef34108585e11/workers/services/view/spine-community/production/builds/25960c09-e883-40d0-912e-8e264c35bc60) **Success**，2026-11-10T03:24:27Z 完成。
+- 未执行生产 D1 迁移、数据库写入、真实内容同步、导入或采集操作；当前工具无法直连生产 `/api/health`，因此尚未独立验证生产 D1 `translation_enabled`、Azure 新译文生成、R2/CDN 回源及缓存清理实际响应。
