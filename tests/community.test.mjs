@@ -2461,12 +2461,18 @@ test('separate locale CDN pages keep 19 cached translations when replies grow 19
  assert.equal(localized.items.length,19);
 });
 
-test('topic detail reply opens login/composer instead of re-navigating the same topic',()=>{
+test('topic and feed reply controls check login before opening a composer',()=>{
  const app=readFileSync('public/app.js','utf8');
- assert.match(app,/function actions\(c,type='topic',inDetail=false\)/);
- assert.match(app,/type==='topic'\?\(inDetail\?`<button[^\`]+data-action="reply"/);
- assert.match(app,/\$\{translationShell\('topic',c\)\}\$\{actions\(c,'topic',true\)\}/);
- assert.match(app,/if\(action==='reply'\)return replyModal\(type==='topic'\?null:findContent\('comment',id\)\)/);
- assert.match(app,/function replyModal\([^\n]+if\(!needUser\(\)\)return/);
- assert.match(app,/function needUser\(\)\{if\(state.user\)return true;showLogin\(\);return false;\}/);
+ assert(app.includes("function actions(c,type='topic'){"));
+ assert(app.includes("${type==='topic'?(c.status==='published'?\`<button"));
+ assert(app.includes('data-action="reply" ${attrs}'));
+ assert(app.includes("${translationShell('topic',c)}${actions(c)}"));
+ assert(app.includes("${translationShell('topic',c,'summary')}"));
+ assert(app.includes('if(action===\'reply\')return type===\'topic\'?replyModal(null,\'regular\',false,id):replyModal(findContent(\'comment\',id));'));
+ assert(app.includes('function replyModal(c=null,kind=\'regular\',editing=false,topicId=null){if(!needUser())return;'));
+ assert(app.includes('function needUser(){if(state.user)return true;showLogin();return false;}'));
+ assert(app.includes('data-topic-id="${esc(topicId||c?.topic_id||\'\')}"'));
+ assert(app.includes('const topicId=form.dataset.topicId||state.topic?.id||'));
+ assert(app.includes("for(const card of document.querySelectorAll('[data-topic]'))"));
+ assert(app.includes("for(const count of card.querySelectorAll('[data-reply-count]'))"));
 });
