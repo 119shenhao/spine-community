@@ -2627,3 +2627,58 @@ test('SEO: History API, canonical links and redirects replace hash-only navigati
  assert.match(html,/class="brand" href="\//);
  assert(cfg.assets.run_worker_first.includes('/topic/*'));
 });
+
+
+test('SEO: deleted post retains reply placeholder but is noindexed; drafts never leak text',async()=>{
+ const {env,DB,topic,call}=await fixture();env.APP_ENV='production';
+ env.ASSETS={fetch:async()=>new Response(readFileSync('public/index.html','utf8'))};
+ const id=await topic('A post that will be deleted','Sensitive fictional material that must vanish after deletion');
+ assert.equal((await call('/api/topics/'+id,'DELETE',{},'alice')).status,200);
+ const removed=await worker.fetch(new Request('https://spine.nbn369.com/topic/'+id),env);
+ assert.equal(removed.status,200);
+ assert.match(removed.headers.get('x-robots-tag'),/noindex/);
+ const html=await removed.text();
+ assert.match(html,/Post removed/);
+ assert.match(html,/type="module"/);
+ assert.doesNotMatch(html,/Sensitive fictional material/);
+ assert.doesNotMatch(html,/rel="canonical"/);
+ assert(!(await (await worker.fetch(new Request('https://spine.nbn369.com/sitemap.xml'),env)).text()).includes(id));
+ const draft=await topic('A private review example','SECRET PATIENT DETAIL');
+ DB.db.prepare("UPDATE topics SET status='pending_review' WHERE id=?").run(draft);
+ const response=await worker.fetch(new Request('https://spine.nbn369.com/topic/'+draft),env);
+ assert.equal(response.status,404);
+ assert.match(response.headers.get('x-robots-tag'),/noindex/);
+ const shell=await response.text();
+ assert.match(shell,/type="module"/);
+ assert.doesNotMatch(shell,/SECRET PATIENT DETAIL/);
+});
+
+test('SEO: forum structured data is limited to actual users, not imported system posts',async()=>{
+ const {env,DB,topic}=await fixture();env.APP_ENV='production';
+ env.ASSETS={fetch:async()=>new Response(readFileSync('public/index.html','utf8'))};
+ const id=await topic('An original experience','Detailed original text from a forum member');
+ const page=await (await worker.fetch(new Request('https://spine.nbn369.com/topic/'+id),env)).text();
+ const match=page.match(/<script type="application\/ld\+json">([^<]+)<\/script>/);
+ assert(match);
+ const data=JSON.parse(match[1]);
+ assert.equal(data['@type'],'DiscussionForumPosting');
+ assert.equal(data.author.name,'alice');
+ assert.equal(data.headline,'An original experience');
+ assert.equal(data.text,'Detailed original text from a forum member');
+ assert.match(data.datePublished,/^\d{4}-\d{2}-\d{2}T/);
+ DB.db.prepare("INSERT INTO users(id,nickname,is_system) VALUES('seo-system','Anonymous',1)").run();
+ DB.db.prepare("INSERT INTO topics(id,author_id,title,body,status) VALUES('seo-import','seo-system','Imported question','Transcribed external content','published')").run();
+ const imported=await (await worker.fetch(new Request('https://spine.nbn369.com/topic/seo-import'),env)).text();
+ assert.match(imported,/<h1>Imported question<\/h1>/);
+ assert.doesNotMatch(imported,/DiscussionForumPosting/);
+});
+
+test('SEO: generated HTML retains security headers and home causes no D1 work',async()=>{
+ const env={APP_ENV:'production',DB:{prepare(){throw Error('home must not query D1');}},
+  ASSETS:{fetch:async()=>new Response(readFileSync('public/index.html','utf8'))}};
+ const page=await worker.fetch(new Request('https://spine.nbn369.com/'),env);
+ assert.equal(page.status,200);
+ assert.match(page.headers.get('content-security-policy'),/script-src 'self'/);
+ assert.equal(page.headers.get('x-frame-options'),'DENY');
+ assert.match(page.headers.get('cache-control'),/no-store/);
+});
