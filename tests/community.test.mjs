@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {readFileSync,writeFileSync,mkdirSync,readdirSync} from 'node:fs';
 import ts from 'typescript';
+import {spawnSync} from 'node:child_process';
 mkdirSync('.test-build',{recursive:true});
 for(const file of readdirSync('src').filter(f=>f.endsWith('.ts'))){const source=readFileSync('src/'+file,'utf8');const js=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText.replace(/from '(\.\/[^']+)'/g,"from '$1.js'");writeFileSync('.test-build/'+file.replace('.ts','.js'),js);}
 const {default:worker}=await import('../.test-build/index.js');
@@ -446,6 +447,75 @@ test('production sync maps arbitrary published topic/reply authors to Unknown Us
  assert.throws(()=>buildInserts(topic,[wrong],[],fingerprint(topic.title,topic.body)),/Unsupported source comment kind/);
 });
 
+
+test('one-time sync publishes only manually confirmed or current-version verified languages',async()=>{
+ const {DB}=await fixture();
+ const {resolveSyncLanguage,buildInserts,fingerprint}=await import('../scripts/sync-preview-to-production.mjs');
+ const manual={id:'manual',status:'published',source_lang:'es',source_lang_mode:'manual',content_version:3};
+ const auto={id:'auto',status:'published',source_lang:'fr',source_lang_mode:'legacy',content_version:2,
+  verified_version:2,verified_language:'en',verified_method:'tinyld-heavy',verified_score:.87};
+ const stale={id:'stale',status:'published',source_lang:'en',source_lang_mode:'auto',content_version:3,
+  verified_version:2,verified_language:'en',verified_method:'tinyld-heavy',verified_score:.99};
+ const admin={id:'admin-proof',status:'published',source_lang:'fr',source_lang_mode:'legacy',content_version:2,
+  verified_version:2,verified_language:'ja',verified_method:'admin-manual',verified_score:null};
+ const deleted={...admin,status:'deleted'};
+ assert.deepEqual([resolveSyncLanguage(manual).label,resolveSyncLanguage(auto).label,
+   resolveSyncLanguage(stale).label,resolveSyncLanguage(admin).label,resolveSyncLanguage(deleted).label],
+  ['es','en','und','ja','und']);
+ assert.equal(resolveSyncLanguage(admin).mode,'manual');
+ const topic={...auto,id:'verified-topic',title:'Original title',body:'Original text',
+   symptom_duration_days:null,created_at:1234};
+ const comments=[
+  {...manual,id:'manual-reply',parent_comment_id:null,kind:'regular',progress_seq:null,body:'Gracias',created_at:1235},
+  {...stale,id:'stale-reply',parent_comment_id:null,kind:'regular',progress_seq:null,body:'Old text',created_at:1236},
+  {...admin,id:'admin-reply',parent_comment_id:null,kind:'regular',progress_seq:null,body:'Confirmed language',created_at:1237},
+  {...deleted,id:'removed-reply',parent_comment_id:null,kind:'regular',progress_seq:null,body:null,created_at:1238}
+ ];
+ const sql=buildInserts(topic,comments,[],fingerprint(topic.title,topic.body));
+ DB.db.exec(sql);DB.db.exec(sql);
+ const stored=DB.db.prepare('SELECT source_lang,source_lang_mode FROM topics WHERE id=?').get(topic.id);
+ assert.equal(stored.source_lang,'en');assert.equal(stored.source_lang_mode,'auto');
+ const proof=DB.db.prepare('SELECT content_version,language,method,score FROM content_language_verifications WHERE content_id=?').get(topic.id);
+ assert.equal(proof.content_version,1,'new production content starts at version 1');
+ assert.equal(proof.language,'en');assert.equal(proof.method,'tinyld-heavy');
+ assert.equal(proof.score,.87);
+ assert.equal(DB.db.prepare('SELECT source_lang FROM comments WHERE id=?').get('manual-reply').source_lang,'es');
+ assert.equal(DB.db.prepare('SELECT source_lang_mode FROM comments WHERE id=?').get('manual-reply').source_lang_mode,'manual');
+ assert.equal(DB.db.prepare('SELECT source_lang FROM comments WHERE id=?').get('stale-reply').source_lang,'und');
+ assert.equal(DB.db.prepare('SELECT source_lang_mode FROM comments WHERE id=?').get('stale-reply').source_lang_mode,'legacy');
+ assert.equal(DB.db.prepare('SELECT source_lang FROM comments WHERE id=?').get('admin-reply').source_lang,'ja');
+ assert.equal(DB.db.prepare('SELECT source_lang_mode FROM comments WHERE id=?').get('admin-reply').source_lang_mode,'manual');
+ assert.equal(DB.db.prepare('SELECT source_lang FROM comments WHERE id=?').get('removed-reply').source_lang,'und');
+ assert.equal(DB.db.prepare('SELECT source_lang_mode FROM comments WHERE id=?').get('removed-reply').source_lang_mode,'legacy');
+ assert.equal(DB.db.prepare("SELECT count(*) n FROM content_language_verifications WHERE content_id IN ('manual-reply','stale-reply','removed-reply')").get().n,0);
+ assert.equal(DB.db.prepare("SELECT method FROM content_language_verifications WHERE content_id='admin-reply'").get().method,'admin-manual');
+ assert.equal(DB.db.prepare('PRAGMA foreign_key_check').all().length,0);
+});
+
+test('Mayo staged content accepts non-English hints and verifies the published original',async()=>{
+ const {collect,claim,DB}=await collectFixture();
+ const source='multilingual-long-test';
+ const token=(await claim('mayoclinic',[source])).data.results[0].lease_token;
+ const call=(action,extra={})=>collect('/api/collect/long/'+action,{
+  site:'mayoclinic',source_id:source,lease_token:token,...extra
+ });
+ const title='我的腰椎疼痛康复过程';
+ const body='这个腰椎疼痛困扰我很多年，后来开始康复训练，现在慢慢恢复了正常活动。';
+ const start=await call('start',{expected_pages:1,title,body,source_lang:'zh-CN'});
+ assert.equal(start.status,200,JSON.stringify(start.data));
+ const reply='我也是腰椎疼痛的患者，之前久坐会加重，现在经过治疗有所缓解。';
+ const page=await call('page',{page_number:1,comments:[{source_comment_id:'1',parent_source_comment_id:null,body:reply,source_lang:'zh-CN'}]});
+ assert.equal(page.status,200,JSON.stringify(page.data));
+ const result=await call('finish');
+ assert.equal(result.status,200,JSON.stringify(result.data));
+ const topic=DB.db.prepare('SELECT source_lang,source_lang_mode FROM topics WHERE id=?').get(result.data.topic_id);
+ assert.equal(topic.source_lang,'zh-CN');
+ assert.equal(topic.source_lang_mode,'auto');
+ const row=DB.db.prepare('SELECT id,source_lang,source_lang_mode FROM comments WHERE topic_id=?').get(result.data.topic_id);
+ assert.equal(row.source_lang,'zh-CN');assert.equal(row.source_lang_mode,'auto');
+ const proof=DB.db.prepare('SELECT method FROM content_language_verifications WHERE content_id=?').get(result.data.topic_id);
+ assert.equal(proof.method,'tinyld-heavy');
+});
 
 // Collection coordination test fixtures never access the network or production database.
 async function collectFixture(){
@@ -1131,10 +1201,11 @@ test('Mayo long threads resume from private D1 staging and publish 60 replies at
  assert.equal((await long('start',token1,meta)).status,200);
  assert.equal((await long('start',token1,meta)).data.already_started,true);
  assert.equal((await long('start',token1,{...meta,expected_pages:401})).status,400);
+ const chineseReply='这次我的腰椎疼痛已经缓解，之前久坐会疼，现在慢慢能走路，恢复过程还有一些问题。';
  const items=p=>Array.from({length:10},(_,i)=>{
    const number=(p-1)*10+i+1;
    return {source_comment_id:String(number),parent_source_comment_id:number===1?null:'1',
-     body:'Detailed lumbar recovery reply '+number,source_lang:'en'};
+     body:number===2?chineseReply:'Detailed lumbar recovery reply '+number,source_lang:'en'};
  });
  assert.equal((await long('page',token1,{page_number:1,comments:items(1)})).status,200);
  assert.equal((await long('page',token1,{page_number:1,comments:items(1)})).data.already_saved,true);
@@ -1157,6 +1228,10 @@ test('Mayo long threads resume from private D1 staging and publish 60 replies at
  const topicId=finished.data.topic_id;
  assert.equal(DB.db.prepare('SELECT COUNT(*) c FROM comments WHERE topic_id=?').get(topicId).c,60);
  assert.equal(DB.db.prepare('SELECT reply_count c FROM topics WHERE id=?').get(topicId).c,60);
+ const chinese=DB.db.prepare('SELECT id,source_lang,source_lang_mode FROM comments WHERE topic_id=? AND body=?').get(topicId,chineseReply);
+ assert.equal(chinese.source_lang,'zh-CN','Mayo replies are not all automatically English');
+ assert.equal(chinese.source_lang_mode,'auto');
+ assert.equal(DB.db.prepare("SELECT method FROM content_language_verifications WHERE content_type='comment' AND content_id=?").get(chinese.id).method,'tinyld-heavy');
  const a=DB.db.prepare('SELECT id FROM comments WHERE topic_id=? AND body=?').get(topicId,'Detailed lumbar recovery reply 1');
  const b=DB.db.prepare('SELECT parent_comment_id p FROM comments WHERE topic_id=? AND body=?').get(topicId,'Detailed lumbar recovery reply 60');
  assert.equal(b.p,a.id);
@@ -2688,4 +2763,137 @@ test('SEO: generated HTML retains security headers and home causes no D1 work',a
  assert.match(page.headers.get('content-security-policy'),/script-src 'self'/);
  assert.equal(page.headers.get('x-frame-options'),'DENY');
  assert.match(page.headers.get('cache-control'),/no-store/);
+});
+
+
+test('SEO: Chinese English and Japanese originals stay authoritative in preview SSR even when reader language differs',async()=>{
+ const {env,DB,topic}=await fixture();
+ env.APP_ENV='preview';
+ env.ASSETS={fetch:async()=>new Response(readFileSync('public/index.html','utf8'))};
+ const cases=[
+  ['zh-CN','我的腰椎康复记录','久坐后腰部酸痛，经过锻炼后逐渐好转。'],
+  ['en','My lower back recovery journal','Sitting for a long time made my lower back hurt. Walking helped me recover.'],
+  ['ja','腰痛からの回復体験','長時間座った後に腰が痛くなりました。運動で少しずつ回復しました。']
+ ];
+ const origin='https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev';
+ for(const [lang,title,body] of cases){
+  const id=await topic(title,body,'alice',{source_lang:lang});
+  const canonical='https://spine.nbn369.com/topic/'+id;
+  const response=await worker.fetch(new Request(origin+'/topic/'+id+'?lang=fr'),env);
+  assert.equal(response.status,200);
+  assert.match(response.headers.get('x-robots-tag'),/noindex/);
+  const html=await response.text();
+  assert(html.includes('<html lang="'+lang+'">'));
+  assert(html.includes('<title>'+title+' | Spine Community</title>'));
+  assert(html.includes('<meta name="description" content="'+body+'">'));
+  assert(html.includes('<meta property="og:title" content="'+title+' | Spine Community">'));
+  assert(html.includes('<meta property="og:description" content="'+body+'">'));
+  assert(html.includes('<h1>'+title+'</h1>'));
+  assert(html.includes('<p>'+body+'</p>'));
+  assert.equal(html.split('<link rel="canonical"').length-1,1);
+  assert(html.includes('<link rel="canonical" href="'+canonical+'">'));
+  assert(!html.includes('hreflang='));
+  assert(!html.includes(canonical+'?lang='));
+  const match=html.match(/<script type="application\/ld\+json">([^<]+)<\/script>/);
+  assert(match,'DiscussionForumPosting present for a first-party user');
+  const structured=JSON.parse(match[1]);
+  assert.equal(structured.headline,title);
+  assert.equal(structured.text,body);
+  assert.equal(structured.url,canonical);
+  const plain=await (await worker.fetch(new Request(origin+'/topic/'+id),env)).text();
+  assert.equal(plain,html,'reader language query cannot change initial SEO');
+ }
+ const uncertain=await topic('Language label pending review','Text must not be identified as English without evidence');
+ DB.db.prepare('UPDATE topics SET source_lang=? WHERE id=?').run('invalid-language-tag',uncertain);
+ const uncertainHtml=await (await worker.fetch(new Request(origin+'/topic/'+uncertain),env)).text();
+ assert(uncertainHtml.includes('<html lang="und">'),'invalid historical language should not be falsely marked English');
+ assert.equal(DB.db.prepare('SELECT source_lang FROM topics WHERE id=?').get(uncertain).source_lang,'invalid-language-tag',
+  'SEO must not silently change historical content language data');
+});
+
+test('SEO: on-demand production sitemap is canonical and reflects published, synced and hidden rows in isolated fixture',async()=>{
+ const {env,DB,topic}=await fixture();
+ env.APP_ENV='production'; // Only a local in-memory test database, never production D1.
+ const url='https://spine.nbn369.com/sitemap.xml';
+ const read=async()=>await (await worker.fetch(new Request(url),env)).text();
+ const before=await read();
+ assert.match(before,/<loc>https:\/\/spine\.nbn369\.com\/<\/loc>/);
+ const newlyPublished=await topic('New public member experience','Recovery notes from a newly published member');
+ const synced='seo-synced-original';
+ DB.db.prepare("INSERT INTO topics(id,author_id,title,body,source_lang,status) VALUES(?,'alice',?,?,?,'published')")
+  .run(synced,'A synced original Spanish story','Mi recuperación después del dolor lumbar.','es');
+ const fresh=await read();
+ for(const id of [newlyPublished,synced]){
+  const loc='<loc>https://spine.nbn369.com/topic/'+id+'</loc>';
+  assert.equal(fresh.split(loc).length-1,1,'one canonical link for '+id);
+ }
+ assert(!fresh.includes('?lang='));
+ assert(!fresh.includes('<xhtml:link'));
+ DB.db.prepare("UPDATE topics SET status='hidden' WHERE id=?").run(newlyPublished);
+ const after=await read();
+ assert(!after.includes('/topic/'+newlyPublished));
+ assert.equal(after.split('<loc>https://spine.nbn369.com/topic/'+synced+'</loc>').length-1,1);
+ DB.db.prepare("UPDATE topics SET status='pending_review' WHERE id=?").run(synced);
+ assert(!(await read()).includes('/topic/'+synced));
+});
+
+
+test('preview historical backfill retains und when unverified and never overwrites manual',async()=>{
+ const {DB,env,call}=await fixture();
+ env.APP_ENV='preview';
+ const words='I have had lower back pain for a long time and I am now seeing a physiotherapist after work.';
+ const chinese='我最近一直腰痛，每天久坐会觉得更加难受，后来开始慢慢调整姿势，也尝试康复训练。';
+ for(const [id,title,body,lang,mode] of [
+  ['history-en','A long English back pain account',words,'fr','legacy'],
+  ['history-short','OK','OK','und','legacy'],
+  ['history-preserved','OK','OK','es','legacy'],
+  ['history-manual','Manual','Manual','zh-CN','manual']
+ ]){
+  DB.db.prepare('INSERT INTO topics(id,author_id,title,body,status,source_lang,source_lang_mode) VALUES(?,?,?,?,\'published\',?,?)')
+   .run(id,'bob',title,body,lang,mode);
+ }
+ DB.db.prepare('INSERT INTO comments(id,topic_id,author_id,body,status,source_lang,source_lang_mode) VALUES(?,?,?,?,\'published\',?,?)')
+  .run('history-comment','history-en','bob',chinese,'en','legacy');
+ DB.db.prepare("INSERT INTO topic_translations(topic_id,locale,source_version,title_text,body_text,provider) VALUES('history-en','zh-CN',1,'旧标题','旧翻译','test')").run();
+ const check=await call('/api/admin/historical-language-backfill?type=topic','GET',undefined,'admin');
+ assert.equal(check.status,200,JSON.stringify(check.data));
+ const lookup=Object.fromEntries(check.data.items.map(x=>[x.id,x]));
+ assert.equal(lookup['history-en'].language,'en');
+ assert.equal(lookup['history-en'].verified,true);
+ assert.equal(lookup['history-short'].language,'und');
+ assert.equal(lookup['history-short'].verified,false);
+ assert.equal(lookup['history-short'].mode,'legacy');
+ assert.equal(lookup['history-preserved'].language,'es');
+ assert.equal(lookup['history-preserved'].needsReview,true);
+ assert.equal(lookup['history-manual'],undefined);
+ assert.equal((await call('/api/admin/historical-language-backfill?type=topic','GET',undefined,'mod')).status,403);
+ assert.equal((await call('/api/admin/historical-language-backfill','POST',{type:'topic',preview_confirm:'wrong'},'admin')).status,400);
+ const applied=await call('/api/admin/historical-language-backfill','POST',{type:'topic',preview_confirm:'spine-community-db-preview'},'admin');
+ assert.equal(applied.status,200,JSON.stringify(applied.data));
+ assert.equal(applied.data.detected,1);
+ assert.equal(applied.data.defaulted,0);
+ assert.equal(applied.data.alreadyProvisional,2);
+ const verified=DB.db.prepare("SELECT source_lang,source_lang_mode,content_version FROM topics WHERE id='history-en'").get();
+ assert.equal(verified.source_lang,'en');
+ assert.equal(verified.source_lang_mode,'auto');
+ assert.equal(verified.content_version,2);
+ assert.equal(DB.db.prepare("SELECT language,method,content_version FROM content_language_verifications WHERE content_type='topic' AND content_id='history-en'").get().method,'tinyld-heavy');
+ assert.equal(DB.db.prepare("SELECT count(*) n FROM topic_translations WHERE topic_id='history-en'").get().n,0);
+ const fallback=DB.db.prepare("SELECT source_lang,source_lang_mode,content_version FROM topics WHERE id='history-short'").get();
+ assert.equal(fallback.source_lang,'und');
+ assert.equal(fallback.source_lang_mode,'legacy');
+ assert.equal(fallback.content_version,1);
+ assert.equal(DB.db.prepare("SELECT count(*) n FROM content_language_verifications WHERE content_type='topic' AND content_id='history-short'").get().n,0);
+ assert.equal(DB.db.prepare("SELECT source_lang FROM topics WHERE id='history-manual'").get().source_lang,'zh-CN');
+ assert.equal(DB.db.prepare("SELECT content_version FROM topics WHERE id='history-preserved'").get().content_version,1);
+ const again=await call('/api/admin/historical-language-backfill','POST',{type:'topic',preview_confirm:'spine-community-db-preview'},'admin');
+ assert.equal(again.status,200);
+ assert.equal(again.data.updated,0,'repeated backfill is idempotent');
+ const comment=await call('/api/admin/historical-language-backfill','POST',{type:'comment',preview_confirm:'spine-community-db-preview'},'admin');
+ assert.equal(comment.status,200,JSON.stringify(comment.data));
+ assert.equal(DB.db.prepare("SELECT source_lang,source_lang_mode,content_version FROM comments WHERE id='history-comment'").get().source_lang,'zh-CN');
+ assert.equal(DB.db.prepare("SELECT method FROM content_language_verifications WHERE content_type='comment' AND content_id='history-comment'").get().method,'tinyld-heavy');
+ env.APP_ENV='production';
+ assert.equal((await call('/api/admin/historical-language-backfill?type=topic','GET',undefined,'admin')).status,403);
+ assert.equal((await call('/api/admin/historical-language-backfill','POST',{type:'topic',preview_confirm:'spine-community-db-preview'},'admin')).status,403);
 });

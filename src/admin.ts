@@ -1,6 +1,7 @@
 import {Env,Row,all,one,stmt,now,id,fail,json,body,textField,requireRole,locales,analyticsEnabled} from './core';
 import {purge,notify} from './content';
 import {verificationWrite} from './language-state';
+import {proposeHistoricalLanguage} from './historical-language';
 import {AZURE_SITE_MAX_MONTHLY,translationBudgetStatus,translationProvidersStatus} from './translation';
 const audit=(env:Env,u:Row,type:string,target:string,action:string,reason:string)=>stmt(env.DB,'INSERT INTO moderation_actions(id,actor_id,target_type,target_id,action,reason) VALUES(?,?,?,?,?,?)',id(),u.id,type,target,action,reason);
 export async function adminRoute(req:Request,env:Env,user:Row|null,path:string):Promise<Response|null>{
@@ -17,6 +18,65 @@ export async function adminRoute(req:Request,env:Env,user:Row|null,path:string):
       privacy:u.role==='admin'?await all(env.DB,"SELECT p.*,u.nickname FROM privacy_requests p JOIN users u ON u.id=p.user_id WHERE p.status IN ('open','processing') ORDER BY p.requested_at LIMIT 100"):[],
       metrics:await all(env.DB,`WITH RECURSIVE days(d,n) AS(SELECT date('now'),1 UNION ALL SELECT date(d,'-1 day'),n+1 FROM days WHERE n<?) SELECT d day_utc,COALESCE(c.new_users,0) new_users,COALESCE(c.new_topics,0) new_topics,COALESCE(c.new_comments,0) new_comments,COALESCE(c.new_reports,0) new_reports,COALESCE(t.uv_estimate,0) uv_estimate,COALESCE(t.pv,0) pv,COALESCE(t.peak_active_5m_estimate,0) peak_active_5m_estimate,t.peak_hour_utc,COALESCE(t.peak_hour_pv,0) peak_hour_pv FROM days LEFT JOIN daily_community_metrics c ON c.day_utc=d LEFT JOIN daily_traffic_metrics t ON t.day_utc=d ORDER BY d DESC`,days),
       settings:u.role==='admin'?await all(env.DB,'SELECT key,value FROM settings'):[],analyticsEnabled:await analyticsEnabled(env.DB)});
+  }
+  // Preview-only bounded backfill. 'legacy' means provisional, and must not
+  // be confused with a detector/admin verification. Production D1 is excluded.
+  if(path==='/api/admin/historical-language-backfill'){
+    requireRole(u,true);
+    if(env.APP_ENV!=='preview')fail(403,'preview_only');
+    if(req.method!=='GET'&&req.method!=='POST')fail(405,'method_not_allowed');
+    const b=req.method==='POST'?await body(req):{};
+    const type=req.method==='GET'?url.searchParams.get('type'):b.type;
+    if(type!=='topic'&&type!=='comment')fail(400,'invalid_language_target');
+    const after=req.method==='GET'?url.searchParams.get('after')||'':b.after||'';
+    if(typeof after!=='string'||(after&&!/^[A-Za-z0-9_-]{1,128}$/.test(after)))
+      fail(400,'invalid_cursor');
+    if(b?.preview_confirm!==undefined&&b.preview_confirm!=='spine-community-db-preview')
+      fail(400,'invalid_preview_confirmation');
+    if(req.method==='POST'&&b.preview_confirm!=='spine-community-db-preview')
+      fail(400,'preview_confirmation_required');
+    const table=type==='topic'?'topics':'comments';
+    const rows=await all(env.DB,`SELECT c.id,${type==='topic'?'c.title':'NULL title'},c.body,c.source_lang,c.source_lang_mode,
+        c.content_version FROM ${table} c LEFT JOIN content_language_verifications v
+        ON v.content_type=? AND v.content_id=c.id AND v.content_version=c.content_version
+        WHERE c.status='published' AND c.id>? AND c.source_lang_mode<>'manual'
+          AND (c.source_lang_mode='legacy' OR c.source_lang='und')
+          AND v.content_id IS NULL ORDER BY c.id LIMIT 20`,type,after);
+    const candidates=rows.map(row=>({row,proposal:proposeHistoricalLanguage(row,
+      type==='topic'?[row.title,row.body]:[row.body])}));
+    const next=rows.length===20?rows.at(-1)!.id:null;
+    if(req.method==='GET')return json({type,next,items:candidates.map(({row,proposal})=>({
+      id:row.id,source_lang:row.source_lang,source_lang_mode:row.source_lang_mode,
+      content_version:row.content_version,...proposal
+    }))});
+    let updated=0,alreadyProvisional=0,conflicts=0,detected=0,defaulted=0;
+    for(const {row,proposal} of candidates){
+      if(proposal.mode==='legacy'&&row.source_lang===proposal.language&&row.source_lang_mode==='legacy'){
+        alreadyProvisional++;continue;
+      }
+      // All predicates are checked again inside the atomic D1 batch, preventing
+      // accidental overwrite of a human correction or concurrently edited text.
+      const update=stmt(env.DB,`UPDATE ${table} SET source_lang=?,source_lang_mode=?,
+        content_version=content_version+1,updated_at=unixepoch()
+        WHERE id=? AND status='published' AND content_version=?
+          AND source_lang_mode<>'manual' AND (source_lang_mode='legacy' OR source_lang='und')
+          AND NOT EXISTS(SELECT 1 FROM content_language_verifications
+           WHERE content_type=? AND content_id=? AND content_version=?)`,
+       proposal.language,proposal.mode,row.id,row.content_version,type,row.id,row.content_version);
+      const writes=[update];
+      if(proposal.verified)writes.push(verificationWrite(env.DB,type,row.id,
+        row.content_version+1,proposal.language,'tinyld-heavy',proposal.score));
+      const result=await env.DB.batch(writes);
+      if(result[0].meta.changes!==1){conflicts++;continue;}
+      if(proposal.verified&&result[1].meta.changes!==1)
+        throw new Error('historical_language_proof_not_saved');
+      updated++;
+      if(proposal.verified)detected++;else defaulted++;
+      await audit(env,u,type,row.id,'automatic_historical_language',
+        proposal.reason+': '+proposal.language+(proposal.verified?' (verified)':' (provisional, review pending)')).run();
+    }
+    return json({type,next,examined:rows.length,updated,detected,defaulted,
+      alreadyProvisional,conflicts,remainingReviewRequired:true});
   }
   if(path==='/api/admin/language-review'){
     requireRole(u,true);
