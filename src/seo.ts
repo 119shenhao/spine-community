@@ -28,7 +28,7 @@ function forbiddenPage(req:Request,env:Env,status=404):Response {
  return new Response(req.method==='HEAD'?null:'<!doctype html><html lang="en"><meta charset="utf-8"><title>Not found — Spine Community</title><main><h1>Not found</h1><a href="/">All discussions</a></main></html>',{status,headers:pageHeaders(env,false)});
 }
 function pageXml(rows:Row[],homepage=false):string {
- const urls=(homepage?[{loc:CANONICAL_ORIGIN+'/'}]:[]).concat(rows.map(row=>({
+ const urls:{loc:string;date?:string|null}[]=(homepage?[{loc:CANONICAL_ORIGIN+'/'}]:[]).concat(rows.map(row=>({
   loc:CANONICAL_ORIGIN+'/topic/'+encodeURIComponent(row.id),
   date:xmlDate(row.updated_at||row.created_at)
  })));
@@ -52,6 +52,8 @@ async function sitemap(req:Request,env:Env,path:string):Promise<Response> {
  const match=path.match(/^\/sitemaps\/topics-([1-9][0-9]*)\.xml$/);
  if(!match||Number(match[1])>100000)return forbiddenPage(req,env);
  const index=Number(match[1]);
+ const count=await one(env.DB,"SELECT count(*) n FROM topics WHERE status='published'");
+ if(index>Math.ceil(Number(count?.n||0)/TOPICS_PER_SITEMAP))return forbiddenPage(req,env);
  const rows=await all(env.DB,"SELECT id,updated_at,created_at FROM topics WHERE status='published' ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?",TOPICS_PER_SITEMAP,(index-1)*TOPICS_PER_SITEMAP);
  if(!rows.length)return forbiddenPage(req,env);
  return xmlResponse(req,env,pageXml(rows));
