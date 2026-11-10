@@ -66,3 +66,13 @@
 - **生产 D1 无迁移**：对比开发/生产 Git 树，所有 `migrations/v1/` 文件一致；代码复用既有 `settings` 表与审计表，默认 `analytics_enabled=false`（缺失项按 false 解释）。没有同步任何帖子、评论、用户、点赞或翻译缓存数据。
 - 保留生产 `wrangler.jsonc` 的环境设置、`keep_vars: true`，保留 `main` 文档与所有生产工作流，不从开发分支覆盖。没有擅自开启统计；生产站长需在「社区管理 → 社区统计」手动打开。
 - **尚未完成独立公网验收**：本次工具访问 `https://spine.nbn369.com/api/health` 返回不可访问，不能据此判断网站故障，也不能以构建成功代替在线 HTTP/API/UI 实测。建议站长检查 `/api/health` 的 `analyticsEnabled:false`，随后登录后台验证新开关与手机版回复按钮。
+
+## 2026-11-10 SEO 正式发布：robots.txt / sitemap.xml / History API
+
+- 用户明确要求核实 `robots.txt`、`sitemap.xml`，若正式站缺少则从开发环境发布新版。检查开发代码确认这两个地址由 `src/seo.ts` **动态响应**，不是单独的静态文件；生产此前还没有 `seoRoute`。
+- 本次源代码为开发提交 `d7887800fcf8bbbca43dff35a22642818749dcfe`。GitHub Actions [#42769967646](https://github.com/119shenhao/spine-community/actions/runs/42769967646) **Success**，119/119 测试通过；[开发预览 SEO 只读 HTTP Smoke #42769217272](https://github.com/119shenhao/spine-community/actions/runs/42769217272) **Success**，属于开发前一提交版本的真实抓取检查。
+- 基于当时 `main` `c98bf28c2e261d1cddd498d46d41d212e15133b5` 建立发布分支 `release/spine-seo-robots-sitemap-20261110`，仅替换七个必要文件：`src/seo.ts`、`src/index.ts`、`src/core.ts`、`public/app.js`、`public/index.html`、`tests/community.test.mjs`、`wrangler.jsonc`。已审查 `wrangler.jsonc`，**生产 Vars/D1/R2/预览绑定/keep_vars 不变**，只增补 `assets.run_worker_first` 正式网页与 SEO 路径。
+- [正式发布 PR #17](https://github.com/119shenhao/spine-community/pull/17) **Merged**，生产提交 `c9bf7ddd7423cdeb67d6bcc89035d60f077ad771`。与之对应的 [Cloudflare Production Workers Builds](https://dash.cloudflare.com/289976272520a38732bef34108585e11/workers/services/view/spine-community/production/builds/9cbcde58-d4a9-4d29-a5fa-3eb234d96a59) **completed/success**，完成时间 `2026-11-10T06:50:17Z`。
+- `https://spine.nbn369.com/robots.txt`：生产允许爬取并指向 `https://spine.nbn369.com/sitemap.xml`；预览禁止爬取。生产 Sitemap 只包含公开帖子并基于 D1 实时生成；超过 500 篇自动索引分片。`/topic/ID` 服务端提供公开原文 HTML、canonical 和基本 Open Graph 元数据；非公开/删除帖子不向爬虫泄露正文。前端使用 History API，**无旧 # 路由兼容**。
+- 对比 `migrations/v1/*` 无差异，**无需生产 D1 迁移/写入，不同步预览业务数据**。保留既有 GitHub Workflow 和 main/docs 文件。
+- **公网访问限制**：web 打开正式及预览两个 SEO URL 都返回无法访问；容器对 `spine.nbn369.com` DNS 解析失败。故本次只证明代码已合并、Cloudflare 生产构建已通过，**未独立完成生产端点 HTTP 200/响应内容或 Google 实际收录验证**。建议在可联网终端分别访问 `robots.txt`、`sitemap.xml`、真实公开 `/topic/ID`、`/api/health`，并将 Sitemap 提交到 Google Search Console。
