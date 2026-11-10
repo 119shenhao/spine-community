@@ -10,9 +10,9 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Inspect schema or apply reviewed migrations
+        description: Inspect schema, apply migrations, or enable production translation
         type: choice
-        options: [inspect, apply]
+        options: [inspect, apply, enable-translation]
         default: inspect
       migration_sha:
         description: Full commit SHA containing the reviewed migrations/v1 SQL
@@ -57,15 +57,17 @@ jobs:
           data=json.loads(Path('docs/release-requests/production-d1.json').read_text('utf8'))
           op=data.get('operation')
           sha=data.get('migration_sha')
-          if op not in ('inspect','apply') or not isinstance(sha,str) or not re.fullmatch('[0-9a-f]{40}',sha):
+          if op not in ('inspect','apply','enable-translation') or not isinstance(sha,str) or not re.fullmatch('[0-9a-f]{40}',sha):
               raise SystemExit('Invalid operation or migration SHA')
           if os.environ['MESSAGE'] != f'chatgpt-release-d1 {op} {sha}':
               raise SystemExit('Request must match the explicit GitHub commit message')
           if data.get('repository')!='119shenhao/spine-community' or data.get('production_db_id')!='5919ff78-b8fc-46ab-85f0-01fe5e6a41b0':
               raise SystemExit('Wrong repository or production D1 target')
           confirmation = data.get('confirmation','')
-          if op=='apply' and (confirmation!='spine-community-db' or data.get('user_authorized') is not True):
-              raise SystemExit('Production apply requires a specific approved request')
+          if op in ('apply','enable-translation') and (confirmation!='spine-community-db' or data.get('user_authorized') is not True):
+              raise SystemExit('Production write requires a specific approved request')
+          if op=='enable-translation' and (data.get('setting')!='translation_enabled' or data.get('value')!='true'):
+              raise SystemExit('Only the explicitly approved translation_enabled=true change is supported')
           if op=='inspect' and confirmation:
               raise SystemExit('Inspect must not carry a production write confirmation')
           with open(os.environ['GITHUB_OUTPUT'],'a') as f:
@@ -109,9 +111,9 @@ jobs:
           fi
           case "$OPERATION" in
             inspect) ;;
-            apply)
+            apply|enable-translation)
               if [[ "$CONFIRMATION" != "$D1_NAME" ]]; then
-                echo "::error::Type the exact production database name to confirm apply."
+                echo "::error::Type the exact production database name to confirm a production write."
                 exit 1
               fi
               ;;
@@ -248,10 +250,75 @@ jobs:
                   print(json.dumps(diagnostic, sort_keys=True, indent=2), file=summary)
                   print("```", file=summary)
 
-          if blocking_reason and os.environ["OPERATION"] == "apply":
+          if blocking_reason and os.environ["OPERATION"] != "inspect":
               raise SystemExit(blocking_reason)
+          if pending and os.environ["OPERATION"] == "enable-translation":
+              raise SystemExit("Refusing to change production settings while migrations are pending.")
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
               print(f"apply_needed={'true' if pending and not blocking_reason else 'false'}", file=output)
+          PY
+
+      - name: Enable translation in production D1 (authorized, single setting)
+        if: inputs.operation == 'enable-translation'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PROD_D1_API_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from urllib.request import Request, urlopen
+          from urllib.error import HTTPError, URLError
+
+          account = os.environ["CLOUDFLARE_ACCOUNT_ID"]
+          db_id = os.environ["D1_ID"]
+          name = os.environ["D1_NAME"]
+          token = os.environ["CLOUDFLARE_API_TOKEN"]
+          if not token or name != "spine-community-db" or db_id != "5919ff78-b8fc-46ab-85f0-01fe5e6a41b0":
+              raise SystemExit("Authorized production D1 target or token is not available.")
+          endpoint = f"https://api.cloudflare.com/client/v4/accounts/{account}/d1/database/{db_id}"
+          headers = {"Authorization": "Bearer " + token, "Content-Type": "application/json"}
+
+          def request(path="", sql=None):
+              payload = json.dumps({"sql": sql}).encode() if sql is not None else None
+              try:
+                  with urlopen(Request(endpoint + path, data=payload, headers=headers), timeout=30) as response:
+                      body = json.load(response)
+              except (HTTPError, URLError, TimeoutError, ValueError):
+                  raise SystemExit("Production D1 API request failed; no secret or response body logged.") from None
+              if not body.get("success"):
+                  raise SystemExit("Cloudflare rejected the production D1 request.")
+              return body["result"]
+
+          info = request()
+          if info.get("uuid") != db_id or info.get("name") != name:
+              raise SystemExit("Production D1 UUID/name mismatch.")
+
+          def query(sql):
+              result = request("/query", sql)
+              if len(result) != 1 or not result[0].get("success"):
+                  raise SystemExit("Production D1 query failed.")
+              return result[0]["results"]
+
+          def read_flag():
+              rows = query("SELECT value FROM settings WHERE key='translation_enabled'")
+              if len(rows) != 1 or rows[0]["value"] not in ("true", "false"):
+                  raise SystemExit("Translation feature flag is missing or unexpected; no write performed.")
+              return rows[0]["value"]
+
+          before = read_flag()
+          if before == "false":
+              # One approved settings row only; never touch posts, users, provider limits, or migrations.
+              query("UPDATE settings SET value='true' WHERE key='translation_enabled' AND value='false'")
+          after = read_flag()
+          if after != "true":
+              raise SystemExit("Production translation flag verification failed.")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              print("### Authorized production translation flag", file=summary)
+              print(f"\\n- Database: {name} ({db_id})", file=summary)
+              print(f"- Before: {before}", file=summary)
+              print(f"- After: **{after}**", file=summary)
+              print("- Other settings, posts and users: unchanged", file=summary)
+          print(f"Production translation_enabled: {before} -> {after}")
           PY
 
       - name: Set up Node for Wrangler
