@@ -2253,11 +2253,19 @@ test('a CDN miss on a D1 cache hit backfills direct text without calling Azure a
 });
 
 
-test('preview uses separate CDN translations while production remains on its existing policy',()=>{
+test('production and preview both use separate CDN translations with isolated R2 buckets',()=>{
  const config=JSON.parse(readFileSync('wrangler.jsonc','utf8'));
- assert.equal(config.previews.vars.PUBLIC_TRANSLATION_SEPARATE,'true');
- assert.equal(config.previews.vars.PUBLIC_TRANSLATION_DIRECT,'false');
- assert.notEqual(config.vars?.PUBLIC_TRANSLATION_SEPARATE,'true');
+ for(const vars of [config.vars,config.previews.vars]){
+  assert.equal(vars.PUBLIC_TRANSLATION_SEPARATE,'true');
+  assert.equal(vars.PUBLIC_TRANSLATION_DIRECT,'false');
+  assert.equal(vars.PUBLIC_CONTENT_ENABLED,'true');
+  assert.equal(vars.PUBLIC_CONTENT_READS,'true');
+  assert.equal(vars.PUBLIC_CONTENT_FALLBACK,'true');
+  assert.equal(vars.PUBLIC_CONTENT_PAGE_SIZE,'50');
+ }
+ assert.equal(config.vars.CDN_ZONE_ID,config.previews.vars.CDN_ZONE_ID);
+ assert.equal(config.r2_buckets[0].bucket_name,'spine-community-public-prod');
+ assert.equal(config.previews.r2_buckets[0].bucket_name,'spine-community-public-dev');
 });
 
 test('previously D1-cached English topic becomes a separate Chinese CDN JSON, then revisits never request translate',async t=>{
