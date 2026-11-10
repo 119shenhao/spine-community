@@ -5,8 +5,8 @@
 用户明确同意先解决 Google 能否发现每篇公开帖子、是否无需 JavaScript 即可读取原文的技术问题。仅修改开发分支程序，文档单独提交 main/docs；**未经另行授权不发布生产版本、不修改生产 D1、不同步帖子。**
 
 开发分支：feature/v1-community-build-20261106。
-当前开发提交：0ddb1cf4bf6150cad7d4fd8b53bbd7cb4f49ad5c。
-[完整自动测试](https://github.com/119shenhao/spine-community/actions/runs/42769217413) Success；[预览站真实抓取验证](https://github.com/119shenhao/spine-community/actions/runs/42769217272) Success。
+当前开发提交：d7887800fcf8bbbca43dff35a22642818749dcfe。
+[完整自动测试](https://github.com/119shenhao/spine-community/actions/runs/42769967646) Success（119 项通过）；[此前预览站真实抓取验证](https://github.com/119shenhao/spine-community/actions/runs/42769217272) Success。
 
 ## 审查发现
 
@@ -20,8 +20,8 @@
 
 ### 1. 正式路径与初始 HTML
 
-- 每篇帖子的规范地址为 https://spine.nbn369.com/topic/帖子ID ；旧的 /#/topic/帖子ID 在浏览器启动时自动转换，保留评论查询参数。
-- 前端链接采用普通 HTML href 路径及 History API，后退/前进使用 popstate；内部切换依然是 SPA，不强制整页刷新。
+- 每篇帖子的规范地址为 https://spine.nbn369.com/topic/帖子ID ；**按用户后续明确决定，不保留旧的 /#/topic/帖子ID 路由兼容或自动转换**。旧链接不保证能打开原帖；此前有关旧链接重定向的约定已撤销。
+- 前端链接采用普通 HTML href 路径及 History API，后退/前进使用 popstate；内部切换依然是 SPA，不强制整页刷新。**Google 登录 /api/auth/google 链接必须绕过 SPA 的点击拦截，执行真正的浏览器导航。**
 - Worker 对初始 GET/HEAD 帖子 URL 读取本环境 D1 最新帖子状态，并将公开主帖的**完整原文、独立标题和描述、canonical、Open Graph 元信息**直接输出到服务端 HTML 中。搜索引擎不必等待 JS 执行才可读到正文。
 - HTML 内容经过转义，保持 CSP、反嵌入、referrer 等安全头。首页仍沿用现有静态 HTML 壳，避免给每一次首页浏览新增 D1 读取。
 - Google DiscussionForumPosting 结构化数据只用于原生本站普通用户的公开帖子；系统账号（如 Anonymous 导入帖）不冒充本站原创，不附该结构化数据。结构化数据不是排名或富结果保证。
@@ -52,7 +52,7 @@
 
 ## 自动测试与预览部署
 
-2026-11-10 开发分支通过完整自动验证；测试覆盖：公开 HTML 中有标题/正文/独立 canonical；HTML/XSS 字符转义；HEAD；505 篇帖子 sitemap 分页；隐藏/未发布不出现在 sitemap；404 不泄露内容；已删除占位 200/noindex 且无删掉原文；预览 sitemap 404/noindex；真实用户结构化数据与导入系统账号区分；安全响应头；首页不访问 D1；History API 导航与旧链接兼容。
+2026-11-10 开发分支通过完整自动验证；测试覆盖：公开 HTML 中有标题/正文/独立 canonical；HTML/XSS 字符转义；HEAD；505 篇帖子 sitemap 分页；隐藏/未发布不出现在 sitemap；404 不泄露内容；已删除占位 200/noindex 且无删掉原文；预览 sitemap 404/noindex；真实用户结构化数据与导入系统账号区分；安全响应头；首页不访问 D1；History API 导航及 Google 登录不被拦截。
 
 CI [#42769217413](https://github.com/119shenhao/spine-community/actions/runs/42769217413) Success，119 项测试通过；独立的 GitHub Actions [预览 SEO HTTP 抓取验证 #42769217272](https://github.com/119shenhao/spine-community/actions/runs/42769217272) Success，实测预览 robots.txt、首页 HTML/Canonical、预览 sitemap 404、真实已发布帖子的服务器 HTML/正文/Canonical、无效 ID 的 404。此验证不创建帖子、不修改用户内容。**通过预览 HTTP 验证不等于 Google 已收录**；Google Search Console 的真实抓取和覆盖范围仍需正式发布后检查。
 
@@ -64,3 +64,11 @@ CI [#42769217413](https://github.com/119shenhao/spine-community/actions/runs/427
 4. 在 [Google Search Console](https://search.google.com/search-console) 验证 spine.nbn369.com 的站点所有权，并提交 https://spine.nbn369.com/sitemap.xml 。
 5. 在 Search Console 的「网址检查」测试真实帖子的 Google 抓取/渲染，检查页面索引报告、Sitemap 发现数量、曝光与点击。Google 收录速度及排名不保证，属于上线后的持续运营验收。
 6. 公开患者文字可能被搜索引擎及第三方缓存，应在论坛隐私文案中说明；转载/导入内容必须保持真实授权与来源可追溯，不应伪装成本站用户新写的经历。
+
+## 2026-11-10 后续确认：仅保留 History API 路由
+
+- 用户明确表示项目还在早期推广阶段，**不需要兼容旧 Hash 路由**，同意直接使用正常路径和 History API。
+- 开发分支删除了浏览器启动时执行的 `restoreLegacyRoute()`；保留 `<a href="#main">` 这样的页面内部无障碍锚点，不属于旧 SPA 路由。
+- 修复站内链接拦截误挡 Google OAuth `/api/auth/google` 全页导航的问题。验证正常页面点击、浏览器前进后退、直接访问 URL、登录链接都需保持正确。
+- 代码提交 `d7887800fcf8bbbca43dff35a22642818749dcfe`，GitHub Actions [#42769967646](https://github.com/119shenhao/spine-community/actions/runs/42769967646) 成功，119/119 测试通过。已有真实预览抓取验证属于修改前版本，**本次小幅修改尚未重新逐项进行公网浏览器实测**。
+- 本次不动服务端 SEO HTML 生成、Sitemap 或 R2/CDN，不发布生产、不操作生产 D1。
