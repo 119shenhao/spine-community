@@ -2,7 +2,7 @@ import {Row,lang} from './core';
 import {detectSourceLanguageEvidence} from './source-language';
 
 export type HistoricalLanguageProposal={
- language:string;mode:'legacy'|'auto';reason:'detected'|'existing_provisional'|'site_default';
+ language:string;mode:'legacy'|'auto';reason:'detected'|'existing_provisional'|'unresolved';
  verified:boolean;score:number|null;needsReview:boolean;
 };
 
@@ -19,6 +19,6 @@ export function proposeHistoricalLanguage(row:Row,parts:string[]):HistoricalLang
   return {language:prior,mode:'legacy',reason:'existing_provisional',
    verified:false,score:null,needsReview:true};
  }
- return {language:'en',mode:'legacy',reason:'site_default',
+ return {language:'und',mode:'legacy',reason:'unresolved',
   verified:false,score:null,needsReview:true};
 }
