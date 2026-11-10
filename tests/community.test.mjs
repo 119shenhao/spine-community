@@ -851,7 +851,7 @@ test('production pages are indexable while preview pages and indicators stay iso
  const cfg=JSON.parse(readFileSync('wrangler.jsonc','utf8'));
  assert(!html.includes('name="robots"'));
  assert(!headers.includes('X-Robots-Tag: noindex'));
- assert.deepEqual(cfg.assets.run_worker_first,['/api/*','/','/index.html']);
+ assert.deepEqual(cfg.assets.run_worker_first,['/api/*','/','/index.html','/topic/*','/search','/me','/notifications','/admin','/privacy','/robots.txt','/sitemap.xml','/sitemaps/*']);
  assert.equal(cfg.vars.APP_ENV,'production');
  assert.equal(cfg.previews.vars.APP_ENV,'preview');
  assert(client.includes('badge.hidden=!isPreview()'));
@@ -859,16 +859,16 @@ test('production pages are indexable while preview pages and indicators stay iso
  env.ASSETS={fetch:async()=>new Response('<html>example</html>',{headers:{'content-type':'text/html','X-Robots-Tag':'noindex, nofollow'}})};
  env.APP_ENV='production';
  assert.equal((await call('/api/health')).data.environment,'production');
- for(const p of ['/','/index.html']){
-  const r=await worker.fetch(new Request('https://spine.nbn369.com'+p),env);
-  assert.equal(r.headers.get('X-Robots-Tag'),null);
- }
+ const prod=await worker.fetch(new Request('https://spine.nbn369.com/'),env);
+ assert.equal(prod.status,200);
+ assert.equal(prod.headers.get('X-Robots-Tag'),null);
+ assert.equal((await worker.fetch(new Request('https://spine.nbn369.com/index.html'),env)).status,308);
  env.APP_ENV='preview';
  assert.equal((await call('/api/health')).data.environment,'preview');
- for(const p of ['/','/index.html']){
-  const r=await worker.fetch(new Request('https://preview.test'+p),env);
-  assert.equal(r.headers.get('X-Robots-Tag'),'noindex, nofollow');
- }
+ const preview=await worker.fetch(new Request('https://preview.test/'),env);
+ assert.equal(preview.status,200);
+ assert.equal(preview.headers.get('X-Robots-Tag'),'noindex, nofollow');
+ assert.equal((await worker.fetch(new Request('https://preview.test/index.html'),env)).status,308);
 });
 
 test('visitor language survives a Google login callback and account default English',async()=>{
@@ -2535,4 +2535,157 @@ test('closing a login dialog does not show a focus ring around the entire feed',
  assert.match(html,/<main id="main" tabindex="-1">/);
  assert.match(css,/#main:focus\{outline:none\}/);
  assert.match(css,/button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible\{outline:3px/);
+});
+
+
+test('SEO: published topic has crawler-readable HTML without requiring JavaScript',async()=>{
+ const {env,topic}=await fixture();env.APP_ENV='production';
+ env.ASSETS={fetch:async()=>new Response(readFileSync('public/index.html','utf8'))};
+ const id=await topic('A real <test> experience','Lower-back pain when sitting.\n\nText <script>alert(1)</script> & more.');
+ const url='https://spine.nbn369.com/topic/'+id;
+ const response=await worker.fetch(new Request(url),env);
+ assert.equal(response.status,200);
+ assert.equal(response.headers.get('x-robots-tag'),null);
+ const html=await response.text();
+ assert.match(html,/<link rel="canonical" href="https:\/\/spine\.nbn369\.com\/topic\//);
+ assert.match(html,/<title>A real &lt;test&gt; experience \| Spine Community<\/title>/);
+ assert.match(html,/<h1>A real &lt;test&gt; experience<\/h1>/);
+ assert.match(html,/Lower-back pain when sitting/);
+ assert.match(html,/&lt;script&gt;alert\(1\)&lt;\/script&gt; &amp; more/);
+ assert.doesNotMatch(html,/<script>alert\(1\)<\/script>/);
+ assert.match(html,/<meta property="og:url" content="https:\/\/spine\.nbn369\.com\/topic\//);
+ const head=await worker.fetch(new Request(url,{method:'HEAD'}),env);
+ assert.equal(head.status,200);
+ assert.equal(await head.text(),'');
+ const home=await worker.fetch(new Request('https://spine.nbn369.com/'),env);
+ assert.equal(home.status,200);
+ assert.match(await home.text(),/<link rel="canonical" href="https:\/\/spine\.nbn369\.com\/">/);
+ assert.match((await worker.fetch(new Request('https://spine.nbn369.com/search'),env)).headers.get('x-robots-tag'),/noindex/);
+});
+
+test('SEO: sitemap lists only published topics; hidden and unknown topics return 404',async()=>{
+ const {env,DB,topic}=await fixture();env.APP_ENV='production';
+ env.ASSETS={fetch:async()=>new Response(readFileSync('public/index.html','utf8'))};
+ const id=await topic('Lumbar recovery personal story','Experience shared to test indexing');
+ const hidden=await topic('buy now guaranteed cure https://a.test','This is moderated content');
+ const sitemap=await (await worker.fetch(new Request('https://spine.nbn369.com/sitemap.xml'),env)).text();
+ assert.match(sitemap,/<urlset /);
+ assert(sitemap.includes('https://spine.nbn369.com/topic/'+id));
+ assert(!sitemap.includes(hidden));
+ const robots=await (await worker.fetch(new Request('https://spine.nbn369.com/robots.txt'),env)).text();
+ assert.match(robots,/Sitemap: https:\/\/spine\.nbn369\.com\/sitemap.xml/);
+ assert.doesNotMatch(robots,/Disallow: \/api\//);
+ const blocked=await worker.fetch(new Request('https://spine.nbn369.com/topic/'+hidden),env);
+ assert.equal(blocked.status,404);
+ assert.match(blocked.headers.get('x-robots-tag'),/noindex/);
+ assert.doesNotMatch(await blocked.text(),/guaranteed cure/);
+ DB.db.prepare("UPDATE topics SET status='hidden' WHERE id=?").run(id);
+ assert.equal((await worker.fetch(new Request('https://spine.nbn369.com/topic/'+id),env)).status,404);
+ assert(!(await (await worker.fetch(new Request('https://spine.nbn369.com/sitemap.xml'),env)).text()).includes(id));
+ assert.equal((await worker.fetch(new Request('https://spine.nbn369.com/topic/'+crypto.randomUUID()),env)).status,404);
+});
+
+test('SEO: preview pages are noindex and sitemap is unavailable',async()=>{
+ const {env,topic}=await fixture();env.APP_ENV='preview';
+ env.ASSETS={fetch:async()=>new Response(readFileSync('public/index.html','utf8'))};
+ const id=await topic('Preview content','Draft test data for preview');
+ const origin='https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev';
+ const post=await worker.fetch(new Request(origin+'/topic/'+id),env);
+ assert.equal(post.status,200);
+ assert.match(post.headers.get('x-robots-tag'),/noindex/);
+ assert.match(await (await worker.fetch(new Request(origin+'/robots.txt'),env)).text(),/Disallow: \//);
+ const sitemap=await worker.fetch(new Request(origin+'/sitemap.xml'),env);
+ assert.equal(sitemap.status,404);
+ assert.match(sitemap.headers.get('x-robots-tag'),/noindex/);
+});
+
+test('SEO: all 505 public posts appear in bounded 500-url sitemap pages',async()=>{
+ const {env,DB}=await fixture();env.APP_ENV='production';
+ const insert=DB.db.prepare("INSERT INTO topics(id,author_id,title,body,status) VALUES(?,'alice',?,'Patient experience','published')");
+ for(let i=0;i<505;i++)insert.run('seo-topic-'+i,'Patient topic '+i);
+ const base='https://spine.nbn369.com';
+ const idx=await (await worker.fetch(new Request(base+'/sitemap.xml'),env)).text();
+ assert.match(idx,/<sitemapindex /);
+ assert.match(idx,/\/sitemaps\/topics-1.xml/);
+ assert.match(idx,/\/sitemaps\/topics-2.xml/);
+ const one=await (await worker.fetch(new Request(base+'/sitemaps/topics-1.xml'),env)).text();
+ const two=await (await worker.fetch(new Request(base+'/sitemaps/topics-2.xml'),env)).text();
+ assert.equal((one.match(/<url>/g)||[]).length,501); // 500 topics + canonical home
+ assert.equal((two.match(/<url>/g)||[]).length,5);
+ assert.match(one,/<loc>https:\/\/spine\.nbn369\.com\/<\/loc>/);
+ const allUrls=one+'\n'+two;
+ for(let i=0;i<505;i++)assert(allUrls.includes(base+'/topic/seo-topic-'+i),'Missing public post '+i);
+ assert.equal((await worker.fetch(new Request(base+'/sitemaps/topics-3.xml'),env)).status,404);
+});
+
+test('SEO: History API, canonical links and redirects replace hash-only navigation',()=>{
+ const app=readFileSync('public/app.js','utf8'),html=readFileSync('public/index.html','utf8');
+ const cfg=JSON.parse(readFileSync('wrangler.jsonc','utf8'));
+ assert.match(app,/history\.pushState/);
+ assert.doesNotMatch(app,/restoreLegacyRoute/);
+ assert.doesNotMatch(app,/location\.hash\.startsWith\('#\/'\)/);
+ // SPA navigation must never hijack the full-page Google OAuth redirect.
+ assert.match(app,/!anchor\.getAttribute\('href'\)\.startsWith\('\/api\/'\)/);
+ assert.match(app,/href="\/api\/auth\/google"/);
+ assert.match(app,/addEventListener\('popstate'/);
+ assert.match(app,/href="\/topic\//);
+ assert.doesNotMatch(app,/href="#\/topic\//);
+ assert.doesNotMatch(app,/addEventListener\('hashchange'/);
+ assert.match(html,/class="brand" href="\//);
+ assert(cfg.assets.run_worker_first.includes('/topic/*'));
+});
+
+
+test('SEO: deleted post retains reply placeholder but is noindexed; drafts never leak text',async()=>{
+ const {env,DB,topic,call}=await fixture();env.APP_ENV='production';
+ env.ASSETS={fetch:async()=>new Response(readFileSync('public/index.html','utf8'))};
+ const id=await topic('A post that will be deleted','Sensitive fictional material that must vanish after deletion');
+ assert.equal((await call('/api/topics/'+id,'DELETE',{},'alice')).status,200);
+ const removed=await worker.fetch(new Request('https://spine.nbn369.com/topic/'+id),env);
+ assert.equal(removed.status,200);
+ assert.match(removed.headers.get('x-robots-tag'),/noindex/);
+ const html=await removed.text();
+ assert.match(html,/Post removed/);
+ assert.match(html,/type="module"/);
+ assert.doesNotMatch(html,/Sensitive fictional material/);
+ assert.doesNotMatch(html,/rel="canonical"/);
+ assert(!(await (await worker.fetch(new Request('https://spine.nbn369.com/sitemap.xml'),env)).text()).includes(id));
+ const draft=await topic('A private review example','SECRET PATIENT DETAIL');
+ DB.db.prepare("UPDATE topics SET status='pending_review' WHERE id=?").run(draft);
+ const response=await worker.fetch(new Request('https://spine.nbn369.com/topic/'+draft),env);
+ assert.equal(response.status,404);
+ assert.match(response.headers.get('x-robots-tag'),/noindex/);
+ const shell=await response.text();
+ assert.match(shell,/type="module"/);
+ assert.doesNotMatch(shell,/SECRET PATIENT DETAIL/);
+});
+
+test('SEO: forum structured data is limited to actual users, not imported system posts',async()=>{
+ const {env,DB,topic}=await fixture();env.APP_ENV='production';
+ env.ASSETS={fetch:async()=>new Response(readFileSync('public/index.html','utf8'))};
+ const id=await topic('An original experience','Detailed original text from a forum member');
+ const page=await (await worker.fetch(new Request('https://spine.nbn369.com/topic/'+id),env)).text();
+ const match=page.match(/<script type="application\/ld\+json">([^<]+)<\/script>/);
+ assert(match);
+ const data=JSON.parse(match[1]);
+ assert.equal(data['@type'],'DiscussionForumPosting');
+ assert.equal(data.author.name,'alice');
+ assert.equal(data.headline,'An original experience');
+ assert.equal(data.text,'Detailed original text from a forum member');
+ assert.match(data.datePublished,/^\d{4}-\d{2}-\d{2}T/);
+ DB.db.prepare("INSERT INTO users(id,nickname,is_system) VALUES('seo-system','Anonymous',1)").run();
+ DB.db.prepare("INSERT INTO topics(id,author_id,title,body,status) VALUES('seo-import','seo-system','Imported question','Transcribed external content','published')").run();
+ const imported=await (await worker.fetch(new Request('https://spine.nbn369.com/topic/seo-import'),env)).text();
+ assert.match(imported,/<h1>Imported question<\/h1>/);
+ assert.doesNotMatch(imported,/DiscussionForumPosting/);
+});
+
+test('SEO: generated HTML retains security headers and home causes no D1 work',async()=>{
+ const env={APP_ENV:'production',DB:{prepare(){throw Error('home must not query D1');}},
+  ASSETS:{fetch:async()=>new Response(readFileSync('public/index.html','utf8'))}};
+ const page=await worker.fetch(new Request('https://spine.nbn369.com/'),env);
+ assert.equal(page.status,200);
+ assert.match(page.headers.get('content-security-policy'),/script-src 'self'/);
+ assert.equal(page.headers.get('x-frame-options'),'DENY');
+ assert.match(page.headers.get('cache-control'),/no-store/);
 });

@@ -11,6 +11,7 @@ import {projectionConfig} from './public-projection';
 import {drainPublicContent,requestProjection} from './projection-demand';
 import {projectionAdminRoute} from './projection-admin';
 import {projectionViewerRoute} from './projection-viewer';
+import {seoRoute} from './seo';
 
 function wakeProjection(env:Env,ctx:ExecutionContext|undefined) {
  const config=projectionConfig(env);
@@ -30,18 +31,13 @@ export default {
  async fetch(req:Request,env:Env,ctx?:ExecutionContext):Promise<Response>{
   const url=new URL(req.url),path=url.pathname;
   if(!path.startsWith('/api/')){
-   const asset=await env.ASSETS.fetch(req);
-   if(path==='/'||path==='/index.html'){
-    const headers=new Headers(asset.headers);
-    // The HTML document must always revalidate its asset revision after
-    // deployment; JS/CSS themselves remain on static, content-versioned URLs.
-    headers.set('Cache-Control','no-store, max-age=0');
-    headers.set('Pragma','no-cache');
-    if(env.APP_ENV==='preview')headers.set('X-Robots-Tag','noindex, nofollow');
-    else headers.delete('X-Robots-Tag');
-    return new Response(asset.body,{status:asset.status,statusText:asset.statusText,headers});
+   try{
+    const response=await seoRoute(req,env,path);
+    if(response)return response;
+    return env.ASSETS.fetch(req);
+   }catch{
+    return new Response('Service unavailable',{status:503,headers:{'cache-control':'no-store','x-robots-tag':'noindex, nofollow'}});
    }
-   return asset;
   }
   try{
    if(path==='/api/import'||path.startsWith('/api/import/')){
