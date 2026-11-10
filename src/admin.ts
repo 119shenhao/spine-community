@@ -25,7 +25,7 @@ export async function adminRoute(req:Request,env:Env,user:Row|null,path:string):
     requireRole(u,true);
     if(env.APP_ENV!=='preview')fail(403,'preview_only');
     if(req.method!=='GET'&&req.method!=='POST')fail(405,'method_not_allowed');
-    const b=req.method==='POST'?await body(req):null;
+    const b=req.method==='POST'?await body(req):{};
     const type=req.method==='GET'?url.searchParams.get('type'):b.type;
     if(type!=='topic'&&type!=='comment')fail(400,'invalid_language_target');
     const after=req.method==='GET'?url.searchParams.get('after')||'':b.after||'';
