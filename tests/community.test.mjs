@@ -2476,3 +2476,11 @@ test('topic and feed reply controls check login before opening a composer',()=>{
  assert(app.includes("for(const card of document.querySelectorAll('[data-topic]'))"));
  assert(app.includes("for(const count of card.querySelectorAll('[data-reply-count]'))"));
 });
+
+test('closing a login dialog does not show a focus ring around the entire feed',()=>{
+ const html=readFileSync('public/index.html','utf8');
+ const css=readFileSync('public/styles.css','utf8');
+ assert.match(html,/<main id="main" tabindex="-1">/);
+ assert.match(css,/#main:focus\{outline:none\}/);
+ assert.match(css,/button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible\{outline:3px/);
+});
