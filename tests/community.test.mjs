@@ -2844,3 +2844,62 @@ test('SEO: on-demand production sitemap is canonical and reflects published, syn
  DB.db.prepare("UPDATE topics SET status='pending_review' WHERE id=?").run(synced);
  assert(!(await read()).includes('/topic/'+synced));
 });
+
+
+test('preview historical backfill assigns verified languages or provisional default, never overwrites manual',async()=>{
+ const {DB,env,call}=await fixture();
+ env.APP_ENV='preview';
+ const words='I have had lower back pain for a long time and I am now seeing a physiotherapist after work.';
+ const chinese='我最近一直腰痛，每天久坐会觉得更加难受，后来开始慢慢调整姿势，也尝试康复训练。';
+ for(const [id,title,body,lang,mode] of [
+  ['history-en','A long English back pain account',words,'fr','legacy'],
+  ['history-short','OK','OK','und','legacy'],
+  ['history-preserved','OK','OK','es','legacy'],
+  ['history-manual','Manual','Manual','zh-CN','manual']
+ ]){
+  DB.db.prepare('INSERT INTO topics(id,author_id,title,body,status,source_lang,source_lang_mode) VALUES(?,?,?,?,\'published\',?,?)')
+   .run(id,'bob',title,body,lang,mode);
+ }
+ DB.db.prepare('INSERT INTO comments(id,topic_id,author_id,body,status,source_lang,source_lang_mode) VALUES(?,?,?,?,\'published\',?,?)')
+  .run('history-comment','history-en','bob',chinese,'en','legacy');
+ DB.db.prepare("INSERT INTO topic_translations(topic_id,locale,source_version,title_text,body_text,provider) VALUES('history-en','zh-CN',1,'旧标题','旧翻译','test')").run();
+ const check=await call('/api/admin/historical-language-backfill?type=topic','GET',undefined,'admin');
+ assert.equal(check.status,200,JSON.stringify(check.data));
+ const lookup=Object.fromEntries(check.data.items.map(x=>[x.id,x]));
+ assert.equal(lookup['history-en'].language,'en');
+ assert.equal(lookup['history-en'].verified,true);
+ assert.equal(lookup['history-short'].language,'en');
+ assert.equal(lookup['history-short'].verified,false);
+ assert.equal(lookup['history-short'].mode,'legacy');
+ assert.equal(lookup['history-preserved'].language,'es');
+ assert.equal(lookup['history-preserved'].needsReview,true);
+ assert.equal(lookup['history-manual'],undefined);
+ assert.equal((await call('/api/admin/historical-language-backfill?type=topic','GET',undefined,'mod')).status,403);
+ assert.equal((await call('/api/admin/historical-language-backfill','POST',{type:'topic',preview_confirm:'wrong'},'admin')).status,400);
+ const applied=await call('/api/admin/historical-language-backfill','POST',{type:'topic',preview_confirm:'spine-community-db-preview'},'admin');
+ assert.equal(applied.status,200,JSON.stringify(applied.data));
+ assert.equal(applied.data.detected,1);
+ assert.equal(applied.data.defaulted,1);
+ assert.equal(applied.data.alreadyProvisional,1);
+ const verified=DB.db.prepare("SELECT source_lang,source_lang_mode,content_version FROM topics WHERE id='history-en'").get();
+ assert.equal(verified.source_lang,'en');
+ assert.equal(verified.source_lang_mode,'auto');
+ assert.equal(verified.content_version,2);
+ assert.equal(DB.db.prepare("SELECT language,method,content_version FROM content_language_verifications WHERE content_type='topic' AND content_id='history-en'").get().method,'tinyld-heavy');
+ assert.equal(DB.db.prepare("SELECT count(*) n FROM topic_translations WHERE topic_id='history-en'").get().n,0);
+ const fallback=DB.db.prepare("SELECT source_lang,source_lang_mode,content_version FROM topics WHERE id='history-short'").get();
+ assert.deepEqual(fallback,{source_lang:'en',source_lang_mode:'legacy',content_version:2});
+ assert.equal(DB.db.prepare("SELECT count(*) n FROM content_language_verifications WHERE content_type='topic' AND content_id='history-short'").get().n,0);
+ assert.equal(DB.db.prepare("SELECT source_lang FROM topics WHERE id='history-manual'").get().source_lang,'zh-CN');
+ assert.equal(DB.db.prepare("SELECT content_version FROM topics WHERE id='history-preserved'").get().content_version,1);
+ const again=await call('/api/admin/historical-language-backfill','POST',{type:'topic',preview_confirm:'spine-community-db-preview'},'admin');
+ assert.equal(again.status,200);
+ assert.equal(again.data.updated,0,'repeated backfill is idempotent');
+ const comment=await call('/api/admin/historical-language-backfill','POST',{type:'comment',preview_confirm:'spine-community-db-preview'},'admin');
+ assert.equal(comment.status,200,JSON.stringify(comment.data));
+ assert.equal(DB.db.prepare("SELECT source_lang,source_lang_mode,content_version FROM comments WHERE id='history-comment'").get().source_lang,'zh-CN');
+ assert.equal(DB.db.prepare("SELECT method FROM content_language_verifications WHERE content_type='comment' AND content_id='history-comment'").get().method,'tinyld-heavy');
+ env.APP_ENV='production';
+ assert.equal((await call('/api/admin/historical-language-backfill?type=topic','GET',undefined,'admin')).status,403);
+ assert.equal((await call('/api/admin/historical-language-backfill','POST',{type:'topic',preview_confirm:'spine-community-db-preview'},'admin')).status,403);
+});
