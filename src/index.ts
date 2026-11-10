@@ -56,7 +56,7 @@ export default {
    }
    if(path==='/api/uploads'||path.startsWith('/api/uploads/'))fail(403,'image_feature_disabled');
    if(path==='/api/health'){
-    let ready=false,projectionReady=false,translationEnabled=false,translationCacheAvailable=false,languageSchemaReady=false,trafficEnabled=false;
+    let ready=false,projectionReady=false,translationReady=false,translationEnabled=false,translationCacheAvailable=false,languageSchemaReady=false,trafficEnabled=false;
     const config=projectionConfig(env);
     try{
      const row=env.DB&&await one(env.DB,`SELECT value,EXISTS(SELECT 1 FROM sqlite_master WHERE type='table'
