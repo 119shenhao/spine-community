@@ -1,5 +1,7 @@
-import {Env,Row,body,fail,hash,id,json,now,one,rate,risk,stmt,textField,topicFingerprint} from './core';
+import {Env,Row,body,fail,hash,id,json,lang,now,one,rate,risk,stmt,textField,topicFingerprint} from './core';
 import {UNKNOWN_USER_ID} from './import';
+import {detectSourceLanguageEvidence} from './source-language';
+import {verificationWrite} from './language-state';
 
 // Preview-only Mayo long-thread staging. Each page is a small transaction.
 // The final forum topic and all replies are published in ONE D1 batch.
@@ -32,7 +34,7 @@ function unguard(db:D1Database,sourceId:string){
  return stmt(db,`DELETE FROM collect_finalize_guard WHERE site='mayoclinic' AND source_id=?`,sourceId);
 }
 async function staging(db:D1Database,sourceId:string) {
- return one(db,`SELECT expected_pages,title,body,source_lang,content_hash
+ return one(db,`SELECT expected_pages,title,body,source_lang,source_hint_lang,content_hash
  FROM collector_mayo_stage WHERE source_id=?`,sourceId);
 }
 async function existingTopic(db:D1Database,title:string,content:string,fp:string){
@@ -74,17 +76,20 @@ export async function collectLongRoute(req:Request,env:Env,path:string):Promise<
   const expected=raw.expected_pages;
   if(!Number.isInteger(expected)||expected<1||expected>MAX_PAGES)fail(400,'invalid_mayo_page_count');
   const title=textField(raw.title,1,200,'title'),content=textField(raw.body,1,30000);
-  if(raw.source_lang!=='en')fail(400,'mayo_source_language');
+  // A collector-supplied language is only a hint. The original text is
+  // independently classified at publication, not assumed to be English.
+  const declared=raw.source_lang??'und',sourceHint=lang(declared);
+  if(sourceHint==='und'&&declared!=='und')fail(400,'mayo_source_language');
   const fp=await topicFingerprint(title,content);
   const prior=await staging(db,sourceId);
   if(prior){
-   if(prior.expected_pages!==expected||prior.title!==title||prior.body!==content||prior.source_lang!=='en'||prior.content_hash!==fp)
+   if(prior.expected_pages!==expected||prior.title!==title||prior.body!==content||prior.source_hint_lang!==sourceHint||prior.content_hash!==fp)
     fail(409,'staged_source_changed');
    return json({status:'staging',already_started:true,expected_pages:expected});
   }
   await db.batch([guard(db,sourceId,tokenHash),
-   stmt(db,`INSERT INTO collector_mayo_stage(source_id,expected_pages,title,body,source_lang,content_hash)
-     VALUES(?,?,?,?,?,?)`,sourceId,expected,title,content,'en',fp),unguard(db,sourceId)]);
+   stmt(db,`INSERT INTO collector_mayo_stage(source_id,expected_pages,title,body,source_lang,source_hint_lang,content_hash)
+     VALUES(?,?,?,?,?,?,?)`,sourceId,expected,title,content,'en',sourceHint,fp),unguard(db,sourceId)]);
   return json({status:'staging',already_started:false,expected_pages:expected});
  }
  const stage=await staging(db,sourceId);
@@ -99,7 +104,7 @@ export async function collectLongRoute(req:Request,env:Env,path:string):Promise<
   if(!Number.isInteger(pageNo)||pageNo<1||pageNo>stage.expected_pages)fail(400,'invalid_mayo_page_number');
   if(!Array.isArray(comments)||comments.length<1||comments.length>MAX_PAGE_COMMENTS)
    fail(400,'invalid_mayo_page_items');
-  const parsed:{source:string;parent:string|null;content:string;commentId:string;status:string}[]=[];
+  const parsed:{source:string;parent:string|null;content:string;commentId:string;status:string;sourceLang:string}[]=[];
   const ids=new Set<string>();
   for(const entry of comments){
    const c=shape(entry,['source_comment_id','parent_source_comment_id','body','source_lang']);
@@ -108,10 +113,12 @@ export async function collectLongRoute(req:Request,env:Env,path:string):Promise<
    const parent=c.parent_source_comment_id;
    if(parent!==null&&parent!==undefined&&!(typeof parent==='string'&&/^[0-9]{1,20}$/.test(parent)))
      fail(400,'invalid_mayo_comment_parent');
-   if(c.source_lang!=='en')fail(400,'invalid_mayo_comment_language');
+   const supplied=c.source_lang??'und';
+   if(lang(supplied)==='und'&&supplied!=='und')fail(400,'invalid_mayo_comment_language');
    const content=textField(c.body,1,12000,'reply');
    ids.add(external);
-   parsed.push({source:external,parent:parent??null,content,commentId:id(),status:risk('',content)});
+   parsed.push({source:external,parent:parent??null,content,commentId:id(),status:risk('',content),
+     sourceLang:detectSourceLanguageEvidence(content).language});
   }
   const digest=await hash(JSON.stringify(comments));
   const previous=await one(db,'SELECT content_hash,comment_count FROM collector_mayo_pages WHERE source_id=? AND page_number=?',sourceId,pageNo);
@@ -122,8 +129,8 @@ export async function collectLongRoute(req:Request,env:Env,path:string):Promise<
   const writes=[guard(db,sourceId,tokenHash),
    stmt(db,'INSERT INTO collector_mayo_pages(source_id,page_number,content_hash,comment_count) VALUES(?,?,?,?)',sourceId,pageNo,digest,parsed.length),
    ...parsed.map((c,i)=>stmt(db,`INSERT INTO collector_mayo_comments
-     (source_id,source_comment_id,comment_id,parent_source_comment_id,page_number,position,body,source_lang,status)
-     VALUES(?,?,?,?,?,?,?,?,?)`,sourceId,c.source,c.commentId,c.parent,pageNo,i+1,c.content,'en',c.status)),
+     (source_id,source_comment_id,comment_id,parent_source_comment_id,page_number,position,body,source_lang,detected_lang,status)
+     VALUES(?,?,?,?,?,?,?,?,?,?)`,sourceId,c.source,c.commentId,c.parent,pageNo,i+1,c.content,'en',c.sourceLang,c.status)),
    stmt(db,'UPDATE collector_mayo_stage SET updated_at=unixepoch() WHERE source_id=?',sourceId),
    unguard(db,sourceId)];
   await db.batch(writes);
@@ -148,23 +155,36 @@ export async function collectLongRoute(req:Request,env:Env,path:string):Promise<
  if(!unknown||unknown.is_system!==1||unknown.status!=='active')fail(503,'import_account_unavailable');
  const stable=stage;
  const fp=stable.content_hash,topicId=id();
+ // The provider's English-only input constraint is not proof that a patient's
+ // original words are English. Verify the actual content independently.
+ const topicLanguage=detectSourceLanguageEvidence(stable.title,stable.body);
+ const topicStatus=risk(stable.title,stable.body);
  let duplicate=await existingTopic(db,stable.title,stable.body,fp);
  async function commit(existing:Row|null){
   const chosen=existing?.id||topicId,duplicate=Boolean(existing);
   const writes:D1PreparedStatement[]=[guard(db,sourceId,tokenHash)];
   if(!existing){
-   writes.push(stmt(db,`INSERT INTO topics(id,author_id,title,body,source_lang,status,content_hash)
-     VALUES(?,?,?,?,?,?,?)`,topicId,UNKNOWN_USER_ID,stable.title,stable.body,'en',risk(stable.title,stable.body),fp));
+   writes.push(stmt(db,`INSERT INTO topics(id,author_id,title,body,source_lang,source_lang_mode,status,content_hash)
+     VALUES(?,?,?,?,?,?,?,?)`,topicId,UNKNOWN_USER_ID,stable.title,stable.body,topicLanguage.language,'auto',topicStatus,fp));
+   if(topicStatus==='published'&&topicLanguage.language!=='und')
+    writes.push(verificationWrite(db,'topic',topicId,1,topicLanguage.language,'tinyld-heavy',topicLanguage.score));
    // A single SQL statement inserts the entire verified reply tree from private
    // staging. Parent references are stable UUIDs, never temporary positions.
    writes.push(stmt(db,`INSERT INTO comments
-     (id,topic_id,author_id,parent_comment_id,kind,body,source_lang,status)
+     (id,topic_id,author_id,parent_comment_id,kind,body,source_lang,source_lang_mode,status)
      SELECT sc.comment_id,?,?,
        (SELECT p.comment_id FROM collector_mayo_comments p
         WHERE p.source_id=sc.source_id AND p.source_comment_id=sc.parent_source_comment_id),
-       'regular',sc.body,'en',sc.status
+       'regular',sc.body,sc.detected_lang,'auto',sc.status
      FROM collector_mayo_comments sc WHERE sc.source_id=?
      ORDER BY sc.page_number,sc.position`,topicId,UNKNOWN_USER_ID,sourceId));
+   // Every staged reply was independently classified during page ingestion.
+   // Do not manufacture evidence for short or mixed-language replies (und).
+   writes.push(stmt(db,`INSERT OR IGNORE INTO content_language_verifications
+     (content_type,content_id,content_version,language,method,score)
+     SELECT 'comment',sc.comment_id,1,sc.detected_lang,'tinyld-heavy',NULL
+     FROM collector_mayo_comments sc JOIN comments c ON c.id=sc.comment_id
+     WHERE sc.source_id=? AND sc.detected_lang<>'und' AND c.status='published'`,sourceId));
    writes.push(stmt(db,'INSERT INTO collector_mayo_publish_guard(source_id,topic_id) VALUES(?,?)',sourceId,topicId));
    writes.push(stmt(db,'DELETE FROM collector_mayo_publish_guard WHERE source_id=?',sourceId));
   }
