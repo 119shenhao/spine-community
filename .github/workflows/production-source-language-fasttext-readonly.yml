@@ -1,0 +1,46 @@
+name: Production source-language fastText cross-check (read-only)
+
+on:
+  push:
+    branches: [feature/v1-community-build-20261106]
+    paths:
+      - .github/workflows/production-source-language-fasttext-readonly.yml
+      - scripts/audit-production-language-fasttext.mjs
+      - scripts/fasttext-language-audit.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cross-check:
+    if: github.repository == '119shenhao/spine-community' && github.ref == 'refs/heads/feature/v1-community-build-20261106'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install reproducible local audit dependencies
+        run: |
+          npm ci --no-audit --no-fund
+          python -m pip install --disable-pip-version-check 'numpy<2' 'fasttext-wheel==0.9.2'
+      - name: Download and verify official compressed fastText model
+        run: |
+          curl -fLsS --retry 2 --connect-timeout 12 --max-time 65 \
+            https://dl.fbaipublicfiles.com/fasttext/supervised-models/lid.176.ftz \
+            -o lid.176.ftz
+          echo '8f3472cfe8738a7b6099e8e999c3cbfae0dcd15696aac7d7738a8039db603e83  lid.176.ftz' | sha256sum -c -
+          python scripts/fasttext-language-audit.py --model lid.176.ftz --self-test
+      - name: Query only published legacy originals and cross-check in memory
+        env:
+          CLOUDFLARE_PROD_D1_API_TOKEN: \${{ secrets.CLOUDFLARE_PROD_D1_API_TOKEN }}
+          FASTTEXT_LID_MODEL: lid.176.ftz
+        run: node scripts/audit-production-language-fasttext.mjs
