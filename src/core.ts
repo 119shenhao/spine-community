@@ -3,7 +3,7 @@ export interface Env {
   ADMIN_GOOGLE_SUB?: string; TRANSLATOR_KEY?: string; TRANSLATOR_REGION?: string;
   TRANSLATOR_ENDPOINT?: string; TRANSLATOR_F0_VERIFIED_AT?: string;
   TRANSLATION_ENABLED?: string; TRANSLATION_DAILY_LIMIT?: string; TRANSLATION_MONTHLY_LIMIT?: string;
-  ANALYTICS_SALT?: string; APP_ENV?: string; DEV_AUTH?: string;
+  APP_ENV?: string; DEV_AUTH?: string;
   IMPORT_DB?: D1Database; IMPORT_ENABLED?: string;
   COLLECT_ENABLED?: string;
   PUBLIC_CONTENT_R2?: R2Bucket; PUBLIC_CONTENT_BASE_URL?: string;
@@ -71,3 +71,5 @@ export async function writable(db: D1Database,u: Row|null) {
 export function safeUser(u: Row|null) {return u?{id:u.id,nickname:u.nickname,preferred_locale:u.preferred_locale,preferred_locale_mode:u.preferred_locale_mode,public_region:u.public_region,role:u.role}:null;}
 export function risk(title: string,body: string): string {const s=title+' '+body;const links=(s.match(/https?:\/\//g)||[]).length;if(links>8||/(?:buy now|guaranteed cure|miracle cure).{0,80}(?:https?:|whatsapp|telegram)/i.test(s))return 'blocked';if(links>2||/(?:promo code|discount code|contact.{0,12}whatsapp)/i.test(s))return 'pending_review';return 'published';}
 export const metric = (db: D1Database,field: string) => stmt(db,`INSERT INTO daily_community_metrics(day_utc,${field}) VALUES(date('now'),1) ON CONFLICT(day_utc) DO UPDATE SET ${field}=${field}+1`);
+// Analytics is opt-in per D1 environment; absent setting means disabled.
+export const analyticsEnabled = async (db: D1Database) => (await one(db,"SELECT value FROM settings WHERE key='analytics_enabled'"))?.value==='true';
