@@ -79,3 +79,44 @@ jobs:
           console.log('Sample source-language counts (public feed only):',JSON.stringify(counts));
           console.log('No source text, patient IDs or secrets emitted; no database or API writes.');
           JS
+
+      - name: Verify real English Chinese and German published originals (GET only)
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import {readFileSync} from 'node:fs';
+          import {execFileSync} from 'node:child_process';
+          const base='https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev';
+          const cfg=JSON.parse(readFileSync('wrangler.preview-migrations.jsonc','utf8'));
+          assert.equal(cfg.d1_databases?.[0]?.database_id,'4362537a-5748-4a05-b0c4-219c3db36996');
+          assert.equal(cfg.d1_databases?.[0]?.binding,'PREVIEW_DB');
+          const value=v=>"'"+v.replaceAll("'","''")+"'";
+          const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+          const actual=[];
+          for(const lang of ['en','zh-CN','de']){
+            const sql="SELECT id,title,body,source_lang FROM topics WHERE status='published' AND source_lang="+value(lang)+" ORDER BY created_at DESC LIMIT 1";
+            const data=JSON.parse(execFileSync(process.execPath,[
+              'node_modules/wrangler/bin/wrangler.js','d1','execute','PREVIEW_DB','--remote',
+              '--config','wrangler.preview-migrations.jsonc','--command',sql,'--json','--yes'
+            ],{encoding:'utf8',stdio:['ignore','pipe','pipe'],maxBuffer:3*1024*1024}));
+            assert(data.every(x=>x.success!==false));
+            const row=data.flatMap(x=>x.results||[])[0];
+            assert(row,'No public original in preview for '+lang);
+            const path='/topic/'+encodeURIComponent(row.id);
+            for(const suffix of ['', '?lang=fr']){
+              const response=await fetch(base+path+suffix,{redirect:'error',signal:AbortSignal.timeout(15000)});
+              assert.equal(response.status,200);
+              assert.match(response.headers.get('x-robots-tag')||'',/noindex/);
+              const html=await response.text();
+              assert(html.includes('<html lang="'+lang+'">'),'Unexpected SSR language '+lang);
+              assert(html.includes('<h1>'+esc(row.title)+'</h1>'),'Original title not in SSR '+lang);
+              const first=String(row.body).split(/\\r?\\n{2,}/)[0];
+              const bodyHtml=esc(first).replace(/\\r?\\n/g,'<br>');
+              assert(html.includes(bodyHtml),'Original body not in SSR '+lang);
+              assert(html.includes('<link rel="canonical" href="https://spine.nbn369.com'+path+'">'));
+            }
+            actual.push(lang);
+          }
+          console.log('Live Preview tested original title+body and SSR SEO for:',actual.join(', '));
+          console.log('No patient text or post IDs emitted; all operations read-only.');
+          JS
