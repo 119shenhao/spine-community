@@ -27,7 +27,7 @@ export async function renderLanguageReview(target,api,esc,locale,preview=false) 
  }).join('');
  const backfill=preview?`<section class="admin-row">
   <h3>${t('历史原文语言自动处理（仅开发预览）','Historical language backfill (preview only)')}</h3>
-  <p class="subtle">${t('先读取候选，再自动处理最多20条：可信语言会验证，不确定语言保留合法旧值或暂用英文，继续等待人工复核。','Inspect suggestions first, then process up to 20 items. Uncertain languages remain provisional and await manual review.')}</p>
+  <p class="subtle">${t('先读取候选，再自动处理最多20条：可信语言会验证，不确定语言保留合法旧值或保持未知，继续等待人工复核。','Inspect suggestions first, then process up to 20 items. Uncertain languages remain provisional and await manual review.')}</p>
   <div class="form-actions">
    <button class="button" type="button" data-action="historical-language-scan" data-type="topic">${t('预览主帖建议','Preview topic suggestions')}</button>
    <button class="button primary" type="button" data-action="historical-language-apply" data-type="topic">${t('自动处理下一批主帖','Process next topic batch')}</button>
