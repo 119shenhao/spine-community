@@ -1,4 +1,4 @@
-import {Env,Row,all,one,stmt,now,id,fail,json,body,textField,requireRole,locales} from './core';
+import {Env,Row,all,one,stmt,now,id,fail,json,body,textField,requireRole,locales,analyticsEnabled} from './core';
 import {purge,notify} from './content';
 import {verificationWrite} from './language-state';
 import {AZURE_SITE_MAX_MONTHLY,translationBudgetStatus,translationProvidersStatus} from './translation';
@@ -16,7 +16,7 @@ export async function adminRoute(req:Request,env:Env,user:Row|null,path:string):
       sanctions:await all(env.DB,`SELECT s.*,u.nickname FROM user_sanctions s JOIN users u ON u.id=s.user_id WHERE s.lifted_at IS NULL ORDER BY s.created_at DESC LIMIT 100`),
       privacy:u.role==='admin'?await all(env.DB,"SELECT p.*,u.nickname FROM privacy_requests p JOIN users u ON u.id=p.user_id WHERE p.status IN ('open','processing') ORDER BY p.requested_at LIMIT 100"):[],
       metrics:await all(env.DB,`WITH RECURSIVE days(d,n) AS(SELECT date('now'),1 UNION ALL SELECT date(d,'-1 day'),n+1 FROM days WHERE n<?) SELECT d day_utc,COALESCE(c.new_users,0) new_users,COALESCE(c.new_topics,0) new_topics,COALESCE(c.new_comments,0) new_comments,COALESCE(c.new_reports,0) new_reports,COALESCE(t.uv_estimate,0) uv_estimate,COALESCE(t.pv,0) pv,COALESCE(t.peak_active_5m_estimate,0) peak_active_5m_estimate,t.peak_hour_utc,COALESCE(t.peak_hour_pv,0) peak_hour_pv FROM days LEFT JOIN daily_community_metrics c ON c.day_utc=d LEFT JOIN daily_traffic_metrics t ON t.day_utc=d ORDER BY d DESC`,days),
-      settings:u.role==='admin'?await all(env.DB,'SELECT key,value FROM settings'):[],analyticsConfigured:Boolean(env.ANALYTICS_SALT)});
+      settings:u.role==='admin'?await all(env.DB,'SELECT key,value FROM settings'):[],analyticsEnabled:await analyticsEnabled(env.DB)});
   }
   if(path==='/api/admin/language-review'){
     requireRole(u,true);
@@ -129,9 +129,9 @@ export async function adminRoute(req:Request,env:Env,user:Row|null,path:string):
     writes.push(audit(env,u,'taxonomy',termId,'update',reason));await env.DB.batch(writes);return json({ok:true,id:termId});
   }
   if(path==='/api/admin/settings'){
-    requireRole(u,true);if(b.key!=='translation_enabled'||!['true','false'].includes(b.value))fail(400,'setting_not_available');
-    // Provider credentials and explicit runtime opt-in are still required; this never enables image storage.
-    await env.DB.batch([stmt(env.DB,'UPDATE settings SET value=? WHERE key=?',b.value,b.key),audit(env,u,'setting',b.key,'update',reason)]);return json({ok:true});
+    requireRole(u,true);if(!['translation_enabled','analytics_enabled'].includes(b.key)||!['true','false'].includes(b.value))fail(400,'setting_not_available');
+    // Existing settings table is environment-specific; audit every traffic toggle.
+    await env.DB.batch([stmt(env.DB,'INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',b.key,b.value),audit(env,u,'setting',b.key,'update',reason)]);return json({ok:true});
   }
   if(path==='/api/admin/privacy'){
     requireRole(u,true);const request=await one(env.DB,'SELECT * FROM privacy_requests WHERE id=?',b.id);if(!request)fail(404,'not_found');
