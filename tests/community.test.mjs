@@ -2888,7 +2888,9 @@ test('preview historical backfill assigns verified languages or provisional defa
  assert.equal(DB.db.prepare("SELECT language,method,content_version FROM content_language_verifications WHERE content_type='topic' AND content_id='history-en'").get().method,'tinyld-heavy');
  assert.equal(DB.db.prepare("SELECT count(*) n FROM topic_translations WHERE topic_id='history-en'").get().n,0);
  const fallback=DB.db.prepare("SELECT source_lang,source_lang_mode,content_version FROM topics WHERE id='history-short'").get();
- assert.deepEqual(fallback,{source_lang:'en',source_lang_mode:'legacy',content_version:2});
+ assert.equal(fallback.source_lang,'en');
+ assert.equal(fallback.source_lang_mode,'legacy');
+ assert.equal(fallback.content_version,2);
  assert.equal(DB.db.prepare("SELECT count(*) n FROM content_language_verifications WHERE content_type='topic' AND content_id='history-short'").get().n,0);
  assert.equal(DB.db.prepare("SELECT source_lang FROM topics WHERE id='history-manual'").get().source_lang,'zh-CN');
  assert.equal(DB.db.prepare("SELECT content_version FROM topics WHERE id='history-preserved'").get().content_version,1);
