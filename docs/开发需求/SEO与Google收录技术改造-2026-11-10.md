@@ -5,8 +5,8 @@
 用户明确同意先解决 Google 能否发现每篇公开帖子、是否无需 JavaScript 即可读取原文的技术问题。仅修改开发分支程序，文档单独提交 main/docs；**未经另行授权不发布生产版本、不修改生产 D1、不同步帖子。**
 
 开发分支：feature/v1-community-build-20261106。
-最终开发提交：8725beccb7c1caf13e03542f8b833d935234b157。
-[自动验证记录（119 项测试）](https://github.com/119shenhao/spine-community/actions/runs/42768794025)。
+当前开发提交：0ddb1cf4bf6150cad7d4fd8b53bbd7cb4f49ad5c。
+[完整自动测试](https://github.com/119shenhao/spine-community/actions/runs/42769217413) Success；[预览站真实抓取验证](https://github.com/119shenhao/spine-community/actions/runs/42769217272) Success。
 
 ## 审查发现
 
@@ -38,7 +38,7 @@
 
 ### 3. Sitemap 与 robots
 
-- 生产 https://spine.nbn369.com/sitemap.xml 基于最新 D1 状态生成；公开帖子不超过 500 篇时是单个 sitemap，超过则返回 sitemap index，并使用 /sitemaps/topics-1.xml 等分片（每片最多 500 条）。
+- 生产 https://spine.nbn369.com/sitemap.xml 基于最新 D1 状态生成；公开帖子不超过 500 篇时是单个 sitemap，超过则返回 sitemap index，并使用 /sitemaps/topics-1.xml 等分片（每片最多 500 篇公开主帖，首片另外包含首页 URL）。
 - Sitemap 仅放正式域名上的公开帖子，使用原始更新时间设置 lastmod；非公开或已删帖会从后续生成结果中排除。
 - 生产 robots.txt 声明 sitemap 地址。对需 noindex 的页面允许 Google 访问以读取 HTTP 排除标记；API JSON 设置 X-Robots-Tag noindex，必要的公开 API 不被错误禁止抓取。
 - 预览使用独立 D1、R2，防止将测试帖提交 Google。
@@ -54,7 +54,7 @@
 
 2026-11-10 开发分支通过完整自动验证；测试覆盖：公开 HTML 中有标题/正文/独立 canonical；HTML/XSS 字符转义；HEAD；505 篇帖子 sitemap 分页；隐藏/未发布不出现在 sitemap；404 不泄露内容；已删除占位 200/noindex 且无删掉原文；预览 sitemap 404/noindex；真实用户结构化数据与导入系统账号区分；安全响应头；首页不访问 D1；History API 导航与旧链接兼容。
 
-CI [#42768794025](https://github.com/119shenhao/spine-community/actions/runs/42768794025) Success。Cloudflare Preview 构建状态以该提交的 Workers Builds GitHub Check 为准。**自动测试和构建成功仍不等于 Google 已收录。** 当前会话网络工具未能直接读取 Worker Preview 的公网页面，所以独立浏览器级 SEO 验收还未完成。
+CI [#42769217413](https://github.com/119shenhao/spine-community/actions/runs/42769217413) Success，119 项测试通过；独立的 GitHub Actions [预览 SEO HTTP 抓取验证 #42769217272](https://github.com/119shenhao/spine-community/actions/runs/42769217272) Success，实测预览 robots.txt、首页 HTML/Canonical、预览 sitemap 404、真实已发布帖子的服务器 HTML/正文/Canonical、无效 ID 的 404。此验证不创建帖子、不修改用户内容。**通过预览 HTTP 验证不等于 Google 已收录**；Google Search Console 的真实抓取和覆盖范围仍需正式发布后检查。
 
 ## 生产发布后的操作清单
 
