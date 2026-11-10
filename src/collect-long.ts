@@ -1,4 +1,4 @@
-import {Env,Row,body,fail,hash,id,json,now,one,rate,risk,stmt,textField,topicFingerprint} from './core';
+import {Env,Row,body,fail,hash,id,json,lang,now,one,rate,risk,stmt,textField,topicFingerprint} from './core';
 import {UNKNOWN_USER_ID} from './import';
 import {detectSourceLanguageEvidence} from './source-language';
 import {verificationWrite} from './language-state';
@@ -76,17 +76,20 @@ export async function collectLongRoute(req:Request,env:Env,path:string):Promise<
   const expected=raw.expected_pages;
   if(!Number.isInteger(expected)||expected<1||expected>MAX_PAGES)fail(400,'invalid_mayo_page_count');
   const title=textField(raw.title,1,200,'title'),content=textField(raw.body,1,30000);
-  if(raw.source_lang!=='en')fail(400,'mayo_source_language');
+  // A collector-supplied language is only a hint. The original text is
+  // independently classified at publication, not assumed to be English.
+  const declared=raw.source_lang??'und',sourceHint=lang(declared);
+  if(sourceHint==='und'&&declared!=='und')fail(400,'mayo_source_language');
   const fp=await topicFingerprint(title,content);
   const prior=await staging(db,sourceId);
   if(prior){
-   if(prior.expected_pages!==expected||prior.title!==title||prior.body!==content||prior.source_lang!=='en'||prior.content_hash!==fp)
+   if(prior.expected_pages!==expected||prior.title!==title||prior.body!==content||prior.source_lang!==sourceHint||prior.content_hash!==fp)
     fail(409,'staged_source_changed');
    return json({status:'staging',already_started:true,expected_pages:expected});
   }
   await db.batch([guard(db,sourceId,tokenHash),
    stmt(db,`INSERT INTO collector_mayo_stage(source_id,expected_pages,title,body,source_lang,content_hash)
-     VALUES(?,?,?,?,?,?)`,sourceId,expected,title,content,'en',fp),unguard(db,sourceId)]);
+     VALUES(?,?,?,?,?,?)`,sourceId,expected,title,content,sourceHint,fp),unguard(db,sourceId)]);
   return json({status:'staging',already_started:false,expected_pages:expected});
  }
  const stage=await staging(db,sourceId);
@@ -110,7 +113,8 @@ export async function collectLongRoute(req:Request,env:Env,path:string):Promise<
    const parent=c.parent_source_comment_id;
    if(parent!==null&&parent!==undefined&&!(typeof parent==='string'&&/^[0-9]{1,20}$/.test(parent)))
      fail(400,'invalid_mayo_comment_parent');
-   if(c.source_lang!=='en')fail(400,'invalid_mayo_comment_language');
+   const supplied=c.source_lang??'und';
+   if(lang(supplied)==='und'&&supplied!=='und')fail(400,'invalid_mayo_comment_language');
    const content=textField(c.body,1,12000,'reply');
    ids.add(external);
    parsed.push({source:external,parent:parent??null,content,commentId:id(),status:risk('',content),
