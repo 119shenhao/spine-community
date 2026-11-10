@@ -1,0 +1,63 @@
+name: Preview SEO crawlability smoke (read-only)
+on:
+  push:
+    branches: [feature/v1-community-build-20261106]
+    paths: [.github/workflows/preview-seo-smoke.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  seo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify live preview SSR, routing and noindex (no writes)
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import {setTimeout as delay} from 'node:timers/promises';
+
+          const base='https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev';
+          async function get(path){
+            return fetch(base+path,{redirect:'error',signal:AbortSignal.timeout(15000),headers:{'cache-control':'no-cache'}});
+          }
+          let verified=false;
+          for(let attempt=0;attempt<25;attempt++){
+            try{
+              const robots=await get('/robots.txt');
+              assert.equal(robots.status,200);
+              assert.match(await robots.text(),/Disallow: \/$/m);
+              const home=await get('/');
+              assert.equal(home.status,200);
+              assert.match(home.headers.get('x-robots-tag')||'',/noindex/);
+              const homepage=await home.text();
+              assert.match(homepage,/<link rel="canonical" href="https:\/\/spine\.nbn369\.com\/">/);
+              const sitemap=await get('/sitemap.xml');
+              assert.equal(sitemap.status,404);
+              assert.match(sitemap.headers.get('x-robots-tag')||'',/noindex/);
+              const list=await get('/api/topics?sort=latest');
+              assert.equal(list.status,200);
+              const data=await list.json();
+              const id=data.topics?.find(row=>row.status==='published')?.id;
+              assert(id,'Preview needs one published topic for a real SSR smoke test');
+              const post=await get('/topic/'+encodeURIComponent(id));
+              assert.equal(post.status,200);
+              assert.match(post.headers.get('x-robots-tag')||'',/noindex/);
+              const html=await post.text();
+              assert.match(html,/<link rel="canonical" href="https:\/\/spine\.nbn369\.com\/topic\//);
+              assert.match(html,/<article class="panel"><h1>/);
+              assert.match(html,/<div class="prose">/);
+              const missing=await get('/topic/seo-does-not-exist-000000');
+              assert.equal(missing.status,404);
+              console.log('Preview SEO verified: HTML SSR, canonical, privacy, robots and 404. No content logged.');
+              verified=true;break;
+            }catch(e){
+              console.log('Waiting for Preview SEO deployment ('+(attempt+1)+'/25): '+String(e.message).slice(0,180));
+              await delay(8000);
+            }
+          }
+          assert(verified,'SEO preview smoke failed after waiting for deployment');
+          JS
