@@ -13,7 +13,8 @@
     "db:preview": "wrangler d1 migrations apply PREVIEW_DB --remote --config wrangler.preview-migrations.jsonc",
     "verify": "npm run check && npm test",
     "sync:production": "node scripts/sync-preview-to-production.mjs",
-    "db:backfill-hashes": "node scripts/backfill-topic-fingerprints.mjs"
+    "db:backfill-hashes": "node scripts/backfill-topic-fingerprints.mjs",
+    "audit:languages": "node scripts/audit-original-languages.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261104.1",
