@@ -45,3 +45,12 @@
 - PR #11 后首轮 Cloudflare 生产构建失败：现有测试要求生产 `PUBLIC_TRANSLATION_SEPARATE` 不为 `true`，与本轮已确认的配置策略矛盾；通过 [PR #12](https://github.com/119shenhao/spine-community/pull/12) 调整为核对开发与生产均采用分离式译文 JSON，仍检查生产/预览 R2 桶隔离；开发分支 `verify` 成功。测试调整亦同步开发分支。
 - 为确保更新到正式构建，通过 [PR #13](https://github.com/119shenhao/spine-community/pull/13) 仅重排生产普通变量顺序（不改变值），触发正式配置构建。最终生产提交 `25ba3afbd18cdf4e398000638d87ee9eef2eb59b` 对应 [Cloudflare Workers Build](https://dash.cloudflare.com/289976272520a38732bef34108585e11/workers/services/view/spine-community/production/builds/25960c09-e883-40d0-912e-8e264c35bc60) **Success**，2026-11-10T03:24:27Z 完成。
 - 未执行生产 D1 迁移、数据库写入、真实内容同步、导入或采集操作；当前工具无法直连生产 `/api/health`，因此尚未独立验证生产 D1 `translation_enabled`、Azure 新译文生成、R2/CDN 回源及缓存清理实际响应。
+
+## 2026-11-10 生产 D1 翻译开关开启（用户明确授权）
+
+- 用户当次明确确认：「确认开启生产环境D1翻译开关」。目标仅为生产 `spine-community-db`（D1 UUID `5919ff78-b8fc-46ab-85f0-01fe5e6a41b0`）的 `settings.translation_enabled=true`。
+- 先通过生产 [只读检查 #42750241080](https://github.com/119shenhao/spine-community/actions/runs/42750241080) 确认实际为 `false`，帖子及回复译文缓存行数均为 0。
+- 通过 [PR #15](https://github.com/119shenhao/spine-community/pull/15) 为原有 Production D1 工作流增加严格受控的 `enable-translation` 操作：仅通过明确授权及生产 DB 名称确认的 docs-only 请求触发；再次检查 D1 身份与迁移历史；执行固定 SQL，验证结果；不会修改其它表、额度或预览数据库。
+- [生产写入工作流 #42750794988](https://github.com/119shenhao/spine-community/actions/runs/42750794988) **Success**，实际日志：`Production translation_enabled: false -> true`。
+- 随后独立发起 [只读复核 #42750854757](https://github.com/119shenhao/spine-community/actions/runs/42750854757)，**Success**，生产 D1 实际状态：`translation_enabled=true`；`topic_translations=3`、`comment_translations=2`；2026-11-10 UTC 当前翻译字符预留 3,849；`provider_blocked_at=0`、`cooldown_until=0`。这表明正式数据库已开始产生译文缓存，但**不等于**已从公网验证首页与详情页的译文呈现、Azure 账户真实计费或 CDN 缓存命中。
+- 本次没有发布站点新版本、操作生产用户／帖子／回复、同步预览数据、开启采集导入或改动 Azure 免费额度与 Secret。
