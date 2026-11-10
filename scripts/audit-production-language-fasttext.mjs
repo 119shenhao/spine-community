@@ -74,15 +74,17 @@ for(let i=0;i<list.length;i++){
   if(row.stored==='und'||heavy==='und'||pass(fast)&&!match(row.stored,fast.language))
     candidate.push(row);
 }
-if(candidate.length>250)throw Error('Too many detailed GETs; use a protected D1 read-only audit');
+const fullScan=process.env.FASTTEXT_FULL_PUBLIC_SCAN==='true';
+const selected=fullScan?list:candidate;
+if(selected.length>600)throw Error('Too many detailed GETs; use a protected D1 read-only audit');
 console.log('PUBLIC_SUMMARY_SCREENING '+JSON.stringify({
-  published_legacy:list.length,public_pages:pages,shortlisted: candidate.length,
+  published_legacy:list.length,public_pages:pages,shortlisted: candidate.length,full_scan:fullScan,selected_for_full: selected.length,
   preliminaryCounts,note:'Excerpts only. This is not a complete-text D1 audit; no patient text or IDs logged.'
 }));
 // Stage 2: at most 250 full, published details. Respect the public site's
 // request budget by using serial GETs with a delay and by stopping on 429.
 const full=[];
-for(const row of candidate){
+for(const row of selected){
   await new Promise(resolve=>setTimeout(resolve,1500));
   const detail=await publicGet('/api/topics/'+encodeURIComponent(row.id));
   if(!detail.topic||detail.topic.id!==row.id||detail.topic.status!=='published')
@@ -91,6 +93,7 @@ for(const row of candidate){
     stored:row.stored,title:String(detail.topic.title||''),
     body:String(detail.topic.body||'')
   });
+  if(fullScan&&full.length%100===0)console.log('PUBLIC_FULL_TEXT_GET_PROGRESS '+full.length);
 }
 const verifiedFast=localFastText(full.map(row=>row.title+'\n'+row.body));
 const results={
@@ -121,7 +124,7 @@ for(let i=0;i<full.length;i++){
 assert.equal(results.still_und,results.und_consensus_candidate+results.und_fast_only_candidate+results.und_conflict+results.und_unresolved);
 console.log('PRODUCTION_PUBLIC_FASTTEXT_CROSSCHECK '+JSON.stringify({
   mode:'published_GET_only',model:'pinned_fastText_lid.176.ftz',tinyld:'tinyld-heavy',
-  summary_screened:list.length,full_text_crosschecked:results.full_examined,
+  summary_screened:list.length,full_scan:fullScan,full_text_crosschecked:results.full_examined,
   not_full_text_checked:list.length-results.full_examined,results,
   safeguards:'No D1 or preview database access; no mutations; no patient text or post IDs logged; estimates are not approved corrections; Chinese script subtype must be checked separately.'
 }));
