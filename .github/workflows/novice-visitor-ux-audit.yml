@@ -1,0 +1,162 @@
+name: Novice visitor browser UX audit (read-only)
+on:
+  push:
+    branches: [feature/v1-community-build-20261106]
+    paths: [.github/workflows/novice-visitor-ux-audit.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  browser-journey:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install browser automation in temporary runner directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/spine-ui-audit" --no-package-lock --no-save --ignore-scripts playwright@1.58.2
+          if command -v google-chrome >/dev/null 2>&1; then
+            echo "CHROME_BIN=$(command -v google-chrome)" >> "$GITHUB_ENV"
+          elif command -v google-chrome-stable >/dev/null 2>&1; then
+            echo "CHROME_BIN=$(command -v google-chrome-stable)" >> "$GITHUB_ENV"
+          else
+            node "$RUNNER_TEMP/spine-ui-audit/node_modules/playwright/cli.js" install chromium
+          fi
+          echo "PW_MODULE=$RUNNER_TEMP/spine-ui-audit/node_modules/playwright/index.mjs" >> "$GITHUB_ENV"
+      - name: Test newcomer experience on real production website without signing in
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          const {chromium}=await import(process.env.PW_MODULE);
+          const BASE='https://spine.nbn369.com';
+          const browser=await chromium.launch({
+            headless:true,
+            ...(process.env.CHROME_BIN?{executablePath:process.env.CHROME_BIN}:{}),
+            args:['--no-sandbox','--disable-dev-shm-usage']
+          });
+          const outcomes=[];
+          let errors=[];
+          async function check(label,fn){
+            try{const detail=await fn();outcomes.push({label,pass:true,detail:String(detail||'')});console.log('PASS',label,detail||'');}
+            catch(e){outcomes.push({label,pass:false,detail:String(e.message||e).slice(0,350)});console.log('FAIL',label,String(e.stack||e).slice(0,850));}
+          }
+          const context=await browser.newContext({viewport:{width:1280,height:800},locale:'en-US',serviceWorkers:'block'});
+          const page=await context.newPage();
+          page.on('pageerror',e=>errors.push(String(e.message)));
+          page.setDefaultTimeout(18000);
+          let firstPath='';
+          await check('Home returns 200 and displays real topics',async()=>{
+            const response=await page.goto(BASE+'/',{waitUntil:'domcontentloaded',timeout:25000});
+            assert.equal(response.status(),200);
+            await page.locator('#feed article.topic-card').first().waitFor({timeout:25000});
+            const count=await page.locator('#feed article.topic-card').count();
+            assert(count>0);
+            return count+' cards visible';
+          });
+          await check('First topic link is a normal SEO URL',async()=>{
+            const href=await page.locator('#feed article.topic-card h3 a').first().getAttribute('href');
+            assert.match(href,/^\/topic\/[A-Za-z0-9_-]+$/);
+            firstPath=href;
+            return href;
+          });
+          await check('Click topic opens detail without full reload',async()=>{
+            await page.locator('#feed article.topic-card h3 a').first().click();
+            await page.waitForURL(new RegExp('/topic/'),{timeout:15000});
+            await page.locator('#main h1.article-title').waitFor({timeout:18000});
+            assert.equal(new URL(page.url()).hash,'');
+            return new URL(page.url()).pathname;
+          });
+          await check('Direct opening and refresh show server HTML and hydrated topic',async()=>{
+            assert(firstPath,'missing first topic path');
+            const response=await page.goto(BASE+firstPath,{waitUntil:'domcontentloaded',timeout:25000});
+            assert.equal(response.status(),200);
+            const raw=await response.text();
+            assert.match(raw,/<article class="panel"><h1>/);
+            assert.match(raw,/<link rel="canonical" href="https:\/\/spine\.nbn369\.com\/topic\//);
+            await page.locator('#main h1.article-title').waitFor({timeout:22000});
+            return 'SSR HTML + hydrated article';
+          });
+          await check('Anonymous Reply opens sign-in modal',async()=>{
+            await page.locator('#main button[data-action="reply"][data-type="topic"]').first().click();
+            await page.locator('#modal[open]').waitFor();
+            await page.locator('#modal a[href="/api/auth/google"]').waitFor();
+            assert.equal(await page.locator('#modal form#reply-form').count(),0);
+            return 'Google sign-in link present; no comment created';
+          });
+          await check('Sign-in popup closes normally',async()=>{
+            await page.locator('#modal [data-action="close-modal"]').click();
+            assert.equal(await page.locator('#modal[open]').count(),0);
+          });
+          await check('Anonymous Like requires login, no write',async()=>{
+            await page.locator('#main button[data-action="like"][data-type="topic"]').first().click();
+            await page.locator('#modal[open]').waitFor();
+            await page.locator('#modal [data-action="close-modal"]').click();
+          });
+          await check('Anonymous Bookmark requires login, no write',async()=>{
+            await page.locator('#main button[data-action="bookmark"][data-type="topic"]').first().click();
+            await page.locator('#modal[open]').waitFor();
+            await page.locator('#modal [data-action="close-modal"]').click();
+          });
+          await check('Search page accepts a normal query and uses History API',async()=>{
+            await page.locator('#sidebar a[href="/search"]').click();
+            await page.locator('#search-form input[name="q"]').waitFor();
+            await page.locator('#search-form input[name="q"]').fill('back pain');
+            await page.locator('#search-form button[type="submit"]').click();
+            await page.waitForURL(/\/search\?/, {timeout:15000});
+            assert.equal(new URL(page.url()).searchParams.get('q'),'back pain');
+            await page.locator('#feed').waitFor();
+            return 'search URL='+new URL(page.url()).pathname+new URL(page.url()).search;
+          });
+          await check('Switch language and restore English without reload',async()=>{
+            await page.locator('#language').selectOption('zh-CN');
+            await page.waitForFunction(()=>document.documentElement.lang==='zh-CN');
+            await page.locator('#language').selectOption('en');
+            await page.waitForFunction(()=>document.documentElement.lang==='en');
+            return 'language preference persisted';
+          });
+          await check('My Profile clearly prompts sign-in to visitor',async()=>{
+            await page.locator('#sidebar a[href="/me"]').click();
+            await page.waitForURL(/\/me$/);
+            const btn=page.locator('#main button[data-action="login"]');
+            await btn.waitFor();
+            await btn.click();
+            await page.locator('#modal a[href="/api/auth/google"]').waitFor();
+            await page.locator('#modal [data-action="close-modal"]').click();
+          });
+          await check('Browser Back and Forward restore correct URLs',async()=>{
+            await page.goBack({waitUntil:'domcontentloaded'});
+            assert.match(new URL(page.url()).pathname,/\/search/);
+            await page.goForward({waitUntil:'domcontentloaded'});
+            assert.equal(new URL(page.url()).pathname,'/me');
+          });
+          await check('Mobile viewport can load home, topic and sign-in dialog',async()=>{
+            const mobile=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true,locale:'en-US',serviceWorkers:'block'});
+            const m=await mobile.newPage();
+            m.on('pageerror',e=>errors.push('mobile '+e.message));
+            try{
+              const response=await m.goto(BASE+'/',{waitUntil:'domcontentloaded',timeout:25000});
+              assert.equal(response.status(),200);
+              await m.locator('#feed article.topic-card').first().waitFor({timeout:25000});
+              await m.locator('#feed article.topic-card h3 a').first().click();
+              await m.locator('#main h1.article-title').waitFor({timeout:22000});
+              await m.locator('#main button[data-action="reply"][data-type="topic"]').first().click();
+              await m.locator('#modal[open]').waitFor();
+              await m.locator('#modal a[href="/api/auth/google"]').waitFor();
+              return '390px browser navigation and Google sign-in entry';
+            }finally{await mobile.close();}
+          });
+          await check('No uncaught JavaScript exception in tested journeys',async()=>{
+            assert.deepEqual(errors,[]);
+          });
+          await browser.close();
+          const passed=outcomes.filter(x=>x.pass).length;
+          console.log('NOVICE_BROWSER_AUDIT_SUMMARY',JSON.stringify({passed,total:outcomes.length,outcomes}));
+          if(passed!==outcomes.length)process.exitCode=1;
+          JS
