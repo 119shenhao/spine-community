@@ -54,7 +54,7 @@ jobs:
         with:
           # Commit used by successful production sync run 42375764551.
           # Pinning avoids executing future unreviewed feature-branch code with production D1 access.
-          ref: 4580263f1ec66feed1d1f2d2722873068455f2bb
+          ref: f529f3b3ac913a409577de96a68c56f0811b7e8b
           persist-credentials: false
       - name: Set up Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
