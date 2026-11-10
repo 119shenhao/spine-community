@@ -2574,7 +2574,7 @@ test('SEO: sitemap lists only published topics; hidden and unknown topics return
  assert(!sitemap.includes(hidden));
  const robots=await (await worker.fetch(new Request('https://spine.nbn369.com/robots.txt'),env)).text();
  assert.match(robots,/Sitemap: https:\/\/spine\.nbn369\.com\/sitemap.xml/);
- assert.match(robots,/Disallow: \/api\//);
+ assert.doesNotMatch(robots,/Disallow: \/api\//);
  const blocked=await worker.fetch(new Request('https://spine.nbn369.com/topic/'+hidden),env);
  assert.equal(blocked.status,404);
  assert.match(blocked.headers.get('x-robots-tag'),/noindex/);
