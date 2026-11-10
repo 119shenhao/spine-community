@@ -15,6 +15,7 @@ const $=(s,root=document)=>root.querySelector(s),$$=(s,root=document)=>[...root.
 let locale=initialLocale(localStorage,navigator.language,languages);
 const state={user:null,google:false,health:null,terms:[],next:null,feed:[],highlights:[],topic:null,comments:[],notificationItems:[],unread:0,admin:null};
 let sequence=0,observer,toastTimer,translations;
+const historicalLanguageAfter={topic:'',comment:''};
 const t=k=>dictionaries[locale][k]||k;
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const svg={home:'<path d="m3 9 9-7 9 7v12H3Z"/><path d="M9 21v-8h6v8"/>',search:'<circle cx="10.5" cy="10.5" r="7"/><path d="m16 16 5 5"/>',neck:'<path d="M9 3c-2 3 0 5 1 7s-2 4-3 5-1 4-1 6M15 3c-2 3 0 5 1 7s-2 4-3 5-1 4-1 6M9 5h6M10 10h6M7 16h6M6 21h6"/>',story:'<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 7h8M8 11h8M8 15h5"/>',user:'<circle cx="12" cy="8" r="4"/><path d="M4 21c0-9 16-9 16 0"/>',bell:'<path d="M5 17h14l-2-4V9a5 5 0 0 0-10 0v4ZM10 21h4"/>',heart:'<path d="M20 5c-3-3-7-1-8 1-1-2-5-4-8-1-4 4 2 10 8 15 6-5 12-11 8-15Z"/>',chat:'<path d="M21 11a9 9 0 0 1-9 9H4l-2 2V11a9 9 0 0 1 19 0Z"/>',bookmark:'<path d="M6 3h12v19l-6-4-6 4Z"/>',follow:'<path d="M6 17c-6-6 3-14 6-5 3-9 12-1 6 5l-6 5Z"/><path d="M12 2v4M2 5l3 3M22 5l-3 3"/>',leaf:'<path d="M5 19C-2 5 15 2 21 3c0 13-7 19-16 16Zm0 0L17 7"/>',check:'<path d="m4 12 5 5L20 6"/>',arrow:'<path d="M4 12h16m-5-5 5 5-5 5"/>',shield:'<path d="m12 2 9 4v7c-2 5-5 7-9 9-4-2-7-4-9-9V6Z"/><path d="m8 12 3 3 5-6"/>',plus:'<path d="M12 4v16M4 12h16"/>',globe:'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c-6 6-6 12 0 18 6-6 6-12 0-18Z"/>'};
@@ -136,7 +137,7 @@ async function showAdmin(n,params){if(!state.user||!['admin','moderator'].includ
  const tab=params.get('tab')||'moderation';const tabs=['moderation','reports','users','analytics','logs',...(state.user.role==='admin'?['taxonomy','settings','translationProviders','languageReview','publicProjection']:[])];
  $('#main').innerHTML=`<h1 class="page-title">${t('admin')}</h1><nav class="tabs">${tabs.map(v=>`<a href="/admin?tab=${v}" class="button ${v===tab?'active':''}">${v==='publicProjection'?(['zh-CN','zh-TW'].includes(locale)?'D1 / R2 一致性':'D1 / R2 consistency'):t(v)}</a>`).join('')}</nav><section class="panel" id="admin-content"><div class="loading"><span class="spinner"></span></div></section>`;
  if(tab==='languageReview'&&state.user.role==='admin'){
-  await renderLanguageReview($('#admin-content'),api,esc,locale);
+  await renderLanguageReview($('#admin-content'),api,esc,locale,isPreview());
   return;
  }
  if(tab==='translationProviders'&&state.user.role==='admin'){
@@ -182,6 +183,39 @@ async function refreshUnread(){if(!state.user)return;try{const r=await api('/api
 async function clicked(el,event){const action=el.dataset.action,{id,type,active}=el.dataset;
  if(action==='login')return showLogin();if(action==='close-modal')return closeModal();if(action==='retry')return render();if(action==='compose')return composer();if(action==='privacy'){return navigate('/privacy');}
  if(action==='load-more')return loadMore();
+ if(action==='historical-language-scan'||action==='historical-language-apply'){
+  if(!isPreview()||state.user?.role!=='admin'||!['topic','comment'].includes(type))
+   throw new Error('preview_only');
+  const after=historicalLanguageAfter[type];
+  const area=$('#historical-language-status');
+  if(after===null){
+   if(area)area.textContent=locale.startsWith('zh')?'已处理完本轮候选。其余未确定记录继续等待人工复核。':'This scan has reached the end; unresolved provisional items remain for manual review.';
+   return;
+  }
+  if(action==='historical-language-scan'){
+   const result=await api('/api/admin/historical-language-backfill?type='+type+'&after='+encodeURIComponent(after));
+   const confident=result.items.filter(item=>item.verified).length;
+   const provisional=result.items.length-confident;
+   if(area)area.textContent=(locale.startsWith('zh')?'下一批候选：':'Next candidate batch: ')+result.items.length+
+    (locale.startsWith('zh')?'条；可确认：':' items; detected: ')+confident+
+    (locale.startsWith('zh')?'，待复核：':' , provisional: ')+provisional+'.';
+   return;
+  }
+  if(!window.confirm(locale.startsWith('zh')
+    ?'确认只在开发预览库自动处理最多20条历史内容？不会写生产数据库，且临时语言仍需复核。'
+    :'Process up to 20 historical items in preview D1 only? Provisional languages remain pending review.'))return;
+  const result=await send('/api/admin/historical-language-backfill',{
+   type,after,preview_confirm:'spine-community-db-preview'
+  });
+  historicalLanguageAfter[type]=result.next;
+  await renderLanguageReview($('#admin-content'),api,esc,locale,isPreview());
+  const current=$('#historical-language-status');
+  if(current)current.textContent=(locale.startsWith('zh')?'本批自动更新：':'Updated in preview: ')+result.updated+
+   (locale.startsWith('zh')?'条；已确认语言：':' items; verified: ')+result.detected+
+   (locale.startsWith('zh')?'，临时值：':' , provisional values: ')+result.defaulted+
+   (locale.startsWith('zh')?'，保留旧临时值：':' , kept provisional: ')+result.alreadyProvisional+'.';
+  return;
+ }
  if(action.startsWith('projection-')){
   const target=$('#admin-content');
   await projectionAdminAction(el,target,send,locale);
@@ -217,7 +251,7 @@ document.addEventListener('submit',async event=>{const form=event.target;if(!(fo
   if(form.classList.contains('language-review-form')){
    await send('/api/admin/language-review',{type:form.dataset.type,id:form.dataset.id,source_lang:v.source_lang,reason:v.reason});
    toast(t('success'));
-   await renderLanguageReview($('#admin-content'),api,esc,locale);
+   await renderLanguageReview($('#admin-content'),api,esc,locale,isPreview());
    return;
   }
   if(form.id==='translation-provider-form'){
