@@ -2610,8 +2610,11 @@ test('SEO: all 505 public posts appear in bounded 500-url sitemap pages',async()
  assert.match(idx,/\/sitemaps\/topics-2.xml/);
  const one=await (await worker.fetch(new Request(base+'/sitemaps/topics-1.xml'),env)).text();
  const two=await (await worker.fetch(new Request(base+'/sitemaps/topics-2.xml'),env)).text();
- assert.equal((one.match(/<url>/g)||[]).length,500);
+ assert.equal((one.match(/<url>/g)||[]).length,501); // 500 topics + canonical home
  assert.equal((two.match(/<url>/g)||[]).length,5);
+ assert.match(one,/<loc>https:\/\/spine\.nbn369\.com\/<\/loc>/);
+ const allUrls=one+'\n'+two;
+ for(let i=0;i<505;i++)assert(allUrls.includes(base+'/topic/seo-topic-'+i),'Missing public post '+i);
  assert.equal((await worker.fetch(new Request(base+'/sitemaps/topics-3.xml'),env)).status,404);
 });
 
