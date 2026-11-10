@@ -36,9 +36,56 @@ async function select(statement){
     throw Error('Unexpected D1 response structure');
   return result[0].results;
 }
-const info=await remote('','GET');
-assert.equal(info.uuid,DB_ID,'Refusing wrong production D1 database ID');
-assert.equal(info.name,DB_NAME,'Refusing wrong production D1 database name');
+let mode='D1_SELECT_only';
+try {
+  const info=await remote('','GET');
+  assert.equal(info.uuid,DB_ID,'Refusing wrong production D1 database ID');
+  assert.equal(info.name,DB_NAME,'Refusing wrong production D1 database name');
+}catch(error){
+  // The public fallback is not a production D1 audit: it cannot inspect
+  // non-public source rows or versioned language proofs.
+  if(!String(error).includes('HTTP 401'))throw error;
+  mode='PUBLIC_GET_only';
+  console.log('PRODUCTION_D1_AUTH_UNAVAILABLE; using published public GET endpoints only');
+}
+async function publicGet(path) {
+  const resp=await fetch('https://spine.nbn369.com'+path,{
+    method:'GET',redirect:'error',
+    headers:{'cache-control':'no-cache','user-agent':'Spine-Source-Language-ReadOnly-Audit/1.0'},
+    signal:AbortSignal.timeout(20000)
+  });
+  if(resp.status!==200)throw Error('Public read failed with HTTP '+resp.status);
+  return resp.json();
+}
+async function publicRows(){
+  const summary=[];
+  let offset=0;
+  for(let i=0;i<500;i++){
+    const page=await publicGet('/api/topics?sort=latest&offset='+offset);
+    if(!Array.isArray(page.topics))throw Error('Unexpected public list schema');
+    for(const row of page.topics){
+      if(row.status!=='published')throw Error('Unexpected non-public row');
+      if(row.source_lang_mode==='legacy')summary.push(row);
+    }
+    if(page.next==null)break;
+    if(!Number.isInteger(page.next)||page.next<=offset||page.next>10000)throw Error('Pagination failed');
+    offset=page.next;
+  }
+  if(summary.length>1000)throw Error('Unexpected public audit size');
+  const records=[];
+  for(let i=0;i<summary.length;i+=4){
+    const section=summary.slice(i,i+4);
+    const details=await Promise.all(section.map(item=>publicGet('/api/topics/'+encodeURIComponent(item.id))));
+    for(let j=0;j<section.length;j++){
+      const original=details[j].topic;
+      if(!original||original.id!==section[j].id||original.status!=='published')
+        throw Error('Public topic changed during audit');
+      records.push({...section[j],title:original.title,body:original.body,proof_language:null});
+    }
+    await new Promise(resolve=>setTimeout(resolve,200));
+  }
+  return records;
+}
 
 // The production original-language detector is kept byte-for-byte identical
 // to the app version checked out in this exact workflow run.
@@ -56,8 +103,9 @@ const baseLang=value=>{
   return /^zh(?:-|$)/.test(v)?'zh':v.split('-')[0];
 };
 const agrees=(a,b)=>a!=='und'&&b!=='und'&&baseLang(a)===baseLang(b);
-const eligible=[],allLegacyModes={};
+const eligible=[];
 let publishedLegacy=0,currentProof=0,provisionalKnown=0,provisionalUnknown=0;
+const publishedPublicRows=mode==='PUBLIC_GET_only'?await publicRows():null;
 for(let offset=0;offset<10000;offset+=20){
   const sql="SELECT t.id,t.title,t.body,t.source_lang,t.source_lang_mode,t.content_version,"+
     "v.language proof_language,v.method proof_method FROM topics t "+
@@ -65,7 +113,7 @@ for(let offset=0;offset<10000;offset+=20){
     "AND v.content_id=t.id AND v.content_version=t.content_version "+
     "WHERE t.status='published' AND t.source_lang_mode='legacy' "+
     "ORDER BY t.id LIMIT 20 OFFSET "+offset;
-  const rows=await select(sql);
+  const rows=publishedPublicRows?publishedPublicRows.slice(offset,offset+20):await select(sql);
   assert(rows.length<=20);
   for(const row of rows){
     publishedLegacy++;
@@ -125,9 +173,9 @@ for(let i=0;i<eligible.length;i++){
 assert.equal(counts.und_need_check,counts.und_tiny_fast_consensus+counts.und_fast_only_candidate+counts.und_tiny_fast_conflict+counts.und_still_uncertain);
 assert.equal(counts.legacy_known_need_check,counts.legacy_known_fast_supports_existing+counts.legacy_known_fast_disagrees+counts.legacy_known_fast_uncertain);
 console.log('PRODUCTION_FASTTEXT_CROSSCHECK_READ_ONLY '+JSON.stringify({
-  version:1,database:DB_NAME,mode:'SELECT_only',model:'fastText-lid.176.ftz',
+  version:1,database:mode==='D1_SELECT_only'?DB_NAME:'published_public_API',mode,model:'fastText-lid.176.ftz',
   tinyld:'tinyld-heavy',minimum_fasttext_letters:40,minimum_score:0.85,minimum_margin:0.25,
-  published_legacy:publishedLegacy,legacy_with_current_proof:currentProof,
+  published_legacy:publishedLegacy,legacy_with_current_proof:mode==='D1_SELECT_only'?currentProof:null,
   provisional_known:provisionalKnown,provisional_unknown:provisionalUnknown,
   selected_for_crosscheck:eligible.length,counts,language_groups:perLang,
   warning:'These are candidates, not automatic corrections. zh script subtype requires manual review. No original text, IDs, or private data output; no DB writes.'
