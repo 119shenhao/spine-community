@@ -1,5 +1,7 @@
 import {Env,Row,body,textField,lang,one,stmt,id,fail,json,hash,rate,risk,now,topicFingerprint} from './core';
 import {terms} from './content';
+import {importedSourceLanguage} from './source-language';
+import {verificationWrite} from './language-state';
 
 export const UNKNOWN_USER_ID='system-unknown-import';
 const PREVIEW_ORIGIN='https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev';
@@ -74,9 +76,10 @@ export async function importRoute(req:Request,env:Env,path:string):Promise<Respo
  const addReply=async(raw:unknown,topicId:string,parent:string|null,path:string,depth:number,standalone=false):Promise<void>=>{
   if(depth>8)fail(400,'reply_depth_exceeded');
   const r=object(raw,standalone?['topic_id','parent_comment_id','body','source_lang','replies']:['body','source_lang','replies']);
-  const text=textField(r.body,1,12000),commentId=id(),status=risk('',text);
+  const text=textField(r.body,1,12000),commentId=id(),status=risk('',text),language=importedSourceLanguage(r.source_lang,text);
   push({path,type:'comment',id:commentId,topic_id:topicId,parent_comment_id:parent,status});
-  writes.push(stmt(db,"INSERT INTO comments(id,topic_id,author_id,parent_comment_id,kind,body,source_lang,status) VALUES(?,?,?,?,'regular',?,?,?)",commentId,topicId,UNKNOWN_USER_ID,parent,text,lang(r.source_lang),status));
+  writes.push(stmt(db,"INSERT INTO comments(id,topic_id,author_id,parent_comment_id,kind,body,source_lang,source_lang_mode,status) VALUES(?,?,?,?,'regular',?,?,?,?)",commentId,topicId,UNKNOWN_USER_ID,parent,text,language.label,language.mode,status));
+  if(language.mode==='auto'&&status==='published')writes.push(verificationWrite(db,'comment',commentId,1,language.label,'tinyld-heavy',language.score));
   const children=array(r.replies);
   for(let i=0;i<children.length;i++)await addReply(children[i],topicId,commentId,`${path}.replies[${i}]`,depth+1);
  };
@@ -93,10 +96,11 @@ export async function importRoute(req:Request,env:Env,path:string):Promise<Respo
    seenTopics.set(contentHash,existing);
    continue;
   }
-  const topicId=id(),status=risk(title,text);
+  const topicId=id(),status=risk(title,text),language=importedSourceLanguage(t.source_lang,title,text);
   seenTopics.set(contentHash,{id:topicId,status});
   push({path:`topics[${i}]`,type:'topic',id:topicId,topic_id:topicId,status});
-  writes.push(stmt(db,'INSERT INTO topics(id,author_id,title,body,source_lang,status,symptom_duration_days,content_hash) VALUES(?,?,?,?,?,?,?,?)',topicId,UNKNOWN_USER_ID,title,text,lang(t.source_lang),status,duration,contentHash));
+  writes.push(stmt(db,'INSERT INTO topics(id,author_id,title,body,source_lang,source_lang_mode,status,symptom_duration_days,content_hash) VALUES(?,?,?,?,?,?,?,?,?)',topicId,UNKNOWN_USER_ID,title,text,language.label,language.mode,status,duration,contentHash));
+  if(language.mode==='auto'&&status==='published')writes.push(verificationWrite(db,'topic',topicId,1,language.label,'tinyld-heavy',language.score));
   for(const tag of tags)writes.push(stmt(db,'INSERT INTO topic_terms(topic_id,term_id) VALUES(?,?)',topicId,tag));
   const replies=array(t.comments);
   for(let j=0;j<replies.length;j++)await addReply(replies[j],topicId,null,`topics[${i}].comments[${j}]`,1);

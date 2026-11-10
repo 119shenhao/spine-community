@@ -10,7 +10,7 @@ export function applyReplyResult(state,result,editing=false){
  if(c.kind==='progress'){
   const previous=state.progress||[];
   const next=previous.filter(p=>p.id!==c.id);
-  if(c.status==='published')next.push({id:c.id,body:c.body,source_lang:c.source_lang,content_version:c.content_version,progress_seq:c.progress_seq,created_at:c.created_at});
+  if(c.status==='published')next.push({id:c.id,body:c.body,source_lang:c.source_lang,source_lang_mode:c.source_lang_mode,content_version:c.content_version,progress_seq:c.progress_seq,created_at:c.created_at});
   state.progress=next.sort((a,b)=>b.progress_seq-a.progress_seq).slice(0,2);
  }
  return {comment:c,insert:at<0};

@@ -4,9 +4,12 @@ export async function communityRoute(req:Request,env:Env,u:Row|null,path:string)
   const method=req.method,url=new URL(req.url);
   if(path==='/api/me'&&method==='GET')return json({user:safeUser(u),googleConfigured:Boolean(env.GOOGLE_CLIENT_ID&&env.GOOGLE_CLIENT_SECRET),imageUploadsEnabled:false});
   if(path==='/api/me'&&method==='PATCH'){
-    const user=requireUser(u),b=await body(req),nickname=textField(b.nickname,1,80,'nickname'),locale=lang(b.preferred_locale);if(!locales.includes(locale))fail(400,'invalid_locale');
+    const user=requireUser(u),b=await body(req),nickname=textField(b.nickname,1,80,'nickname');
+     const mode=b.preferred_locale==='auto'?'auto':'manual';
+     const locale=mode==='auto'?user.preferred_locale:lang(b.preferred_locale);
+     if(!locales.includes(locale))fail(400,'invalid_locale');
     const region=typeof b.public_region==='string'?b.public_region.trim().slice(0,80):null;
-    await stmt(env.DB,'UPDATE users SET nickname=?,preferred_locale=?,public_region=?,updated_at=? WHERE id=?',nickname,locale,region,now(),user.id).run();return json({ok:true});
+    await stmt(env.DB,'UPDATE users SET nickname=?,preferred_locale=?,preferred_locale_mode=?,public_region=?,updated_at=? WHERE id=?',nickname,locale,mode,region,now(),user.id).run();return json({ok:true});
   }
   if(path==='/api/me/content'&&method==='GET'){
     const user=requireUser(u),kind=url.searchParams.get('kind')||'topics',offset=Math.max(0,Math.min(10000,Number(url.searchParams.get('offset'))||0));

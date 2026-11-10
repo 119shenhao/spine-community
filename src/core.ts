@@ -1,10 +1,15 @@
 export interface Env {
   ASSETS: Fetcher; DB: D1Database; GOOGLE_CLIENT_ID?: string; GOOGLE_CLIENT_SECRET?: string;
   ADMIN_GOOGLE_SUB?: string; TRANSLATOR_KEY?: string; TRANSLATOR_REGION?: string;
+  TRANSLATOR_ENDPOINT?: string; TRANSLATOR_F0_VERIFIED_AT?: string;
   TRANSLATION_ENABLED?: string; TRANSLATION_DAILY_LIMIT?: string; TRANSLATION_MONTHLY_LIMIT?: string;
   ANALYTICS_SALT?: string; APP_ENV?: string; DEV_AUTH?: string;
   IMPORT_DB?: D1Database; IMPORT_ENABLED?: string;
   COLLECT_ENABLED?: string;
+  PUBLIC_CONTENT_R2?: R2Bucket; PUBLIC_CONTENT_BASE_URL?: string;
+  PUBLIC_TRANSLATION_DIRECT?: string; PUBLIC_TRANSLATION_SEPARATE?: string; PUBLIC_CONTENT_PAGE_SIZE?: string;
+  PUBLIC_CONTENT_ENABLED?: string; PUBLIC_CONTENT_READS?: string; PUBLIC_CONTENT_FALLBACK?: string; PUBLIC_CONTENT_ON_DEMAND?: string;
+  CDN_ZONE_ID?: string; CDN_PURGE_API_TOKEN?: string;
 }
 export type Row = Record<string, any>;
 export const locales = ['en','zh-CN','zh-TW','es','pt-BR','de','fr','ja'];
@@ -63,6 +68,6 @@ export async function writable(db: D1Database,u: Row|null) {
   const user=requireUser(u);const active=await one(db,`SELECT sanction_type FROM user_sanctions WHERE user_id=? AND lifted_at IS NULL AND starts_at<=? AND (ends_at IS NULL OR ends_at>?) LIMIT 1`,user.id,now(),now());
   if(active)fail(403,active.sanction_type==='ban'?'account_banned':'account_muted');return user;
 }
-export function safeUser(u: Row|null) {return u?{id:u.id,nickname:u.nickname,preferred_locale:u.preferred_locale,public_region:u.public_region,role:u.role}:null;}
+export function safeUser(u: Row|null) {return u?{id:u.id,nickname:u.nickname,preferred_locale:u.preferred_locale,preferred_locale_mode:u.preferred_locale_mode,public_region:u.public_region,role:u.role}:null;}
 export function risk(title: string,body: string): string {const s=title+' '+body;const links=(s.match(/https?:\/\//g)||[]).length;if(links>8||/(?:buy now|guaranteed cure|miracle cure).{0,80}(?:https?:|whatsapp|telegram)/i.test(s))return 'blocked';if(links>2||/(?:promo code|discount code|contact.{0,12}whatsapp)/i.test(s))return 'pending_review';return 'published';}
 export const metric = (db: D1Database,field: string) => stmt(db,`INSERT INTO daily_community_metrics(day_utc,${field}) VALUES(date('now'),1) ON CONFLICT(day_utc) DO UPDATE SET ${field}=${field}+1`);

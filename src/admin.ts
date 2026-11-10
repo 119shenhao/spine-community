@@ -1,5 +1,7 @@
 import {Env,Row,all,one,stmt,now,id,fail,json,body,textField,requireRole,locales} from './core';
 import {purge,notify} from './content';
+import {verificationWrite} from './language-state';
+import {AZURE_SITE_MAX_MONTHLY,translationBudgetStatus,translationProvidersStatus} from './translation';
 const audit=(env:Env,u:Row,type:string,target:string,action:string,reason:string)=>stmt(env.DB,'INSERT INTO moderation_actions(id,actor_id,target_type,target_id,action,reason) VALUES(?,?,?,?,?,?)',id(),u.id,type,target,action,reason);
 export async function adminRoute(req:Request,env:Env,user:Row|null,path:string):Promise<Response|null>{
   if(!path.startsWith('/api/admin/'))return null;
@@ -15,6 +17,71 @@ export async function adminRoute(req:Request,env:Env,user:Row|null,path:string):
       privacy:u.role==='admin'?await all(env.DB,"SELECT p.*,u.nickname FROM privacy_requests p JOIN users u ON u.id=p.user_id WHERE p.status IN ('open','processing') ORDER BY p.requested_at LIMIT 100"):[],
       metrics:await all(env.DB,`WITH RECURSIVE days(d,n) AS(SELECT date('now'),1 UNION ALL SELECT date(d,'-1 day'),n+1 FROM days WHERE n<?) SELECT d day_utc,COALESCE(c.new_users,0) new_users,COALESCE(c.new_topics,0) new_topics,COALESCE(c.new_comments,0) new_comments,COALESCE(c.new_reports,0) new_reports,COALESCE(t.uv_estimate,0) uv_estimate,COALESCE(t.pv,0) pv,COALESCE(t.peak_active_5m_estimate,0) peak_active_5m_estimate,t.peak_hour_utc,COALESCE(t.peak_hour_pv,0) peak_hour_pv FROM days LEFT JOIN daily_community_metrics c ON c.day_utc=d LEFT JOIN daily_traffic_metrics t ON t.day_utc=d ORDER BY d DESC`,days),
       settings:u.role==='admin'?await all(env.DB,'SELECT key,value FROM settings'):[],analyticsConfigured:Boolean(env.ANALYTICS_SALT)});
+  }
+  if(path==='/api/admin/language-review'){
+    requireRole(u,true);
+    if(req.method==='GET'){
+      // Only unresolved published content is listed; confirmed cached
+      // language records are excluded without altering original content.
+      const items=await all(env.DB,`SELECT * FROM (
+        SELECT t.id,'topic' type,substr(t.title,1,160) title,
+          substr(t.body,1,200) preview,t.source_lang,t.source_lang_mode,t.content_version,t.created_at
+        FROM topics t LEFT JOIN content_language_verifications v
+          ON v.content_type='topic' AND v.content_id=t.id AND v.content_version=t.content_version
+        WHERE t.status='published' AND (t.source_lang_mode='legacy' OR t.source_lang='und') AND v.language IS NULL
+        UNION ALL
+        SELECT c.id,'comment' type,'' title,substr(c.body,1,200) preview,
+          c.source_lang,c.source_lang_mode,c.content_version,c.created_at
+        FROM comments c LEFT JOIN content_language_verifications v
+          ON v.content_type='comment' AND v.content_id=c.id AND v.content_version=c.content_version
+        WHERE c.status='published' AND (c.source_lang_mode='legacy' OR c.source_lang='und') AND v.language IS NULL
+        ) ORDER BY created_at DESC LIMIT 100`);
+      return json({items});
+    }
+    if(req.method!=='POST')fail(405,'method_not_allowed');
+    const b=await body(req),reason=textField(b.reason,3,500,'reason');
+    if(b.type!=='topic'&&b.type!=='comment')fail(400,'invalid_language_target');
+    if(typeof b.id!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(b.id)||
+      typeof b.source_lang!=='string'||!locales.includes(b.source_lang))fail(400,'invalid_source_language');
+    const table=b.type==='topic'?'topics':'comments';
+    const previous=await one(env.DB,`SELECT content_version FROM ${table} WHERE id=? AND status='published'`,b.id);
+    if(!previous)fail(404,'not_found');
+    const updated=await one(env.DB,`UPDATE ${table} SET source_lang=?,source_lang_mode='manual',
+      content_version=content_version+1,updated_at=unixepoch()
+      WHERE id=? AND status='published' AND content_version=? RETURNING content_version`,
+      b.source_lang,b.id,previous.content_version);
+    if(!updated)fail(409,'content_changed');
+    await verificationWrite(env.DB,b.type,b.id,updated.content_version,b.source_lang,'admin-manual',null).run();
+    await audit(env,u,b.type,b.id,'correct_language',
+      b.type+': '+b.source_lang+' ('+reason+')').run();
+    return json({ok:true,version:updated.content_version});
+  }
+  if(path==='/api/admin/translation-budget'&&req.method==='GET'){
+    requireRole(u,true);
+    return json(await translationBudgetStatus(env));
+  }
+  if(path==='/api/admin/translation-providers'){
+    requireRole(u,true);
+    if(req.method==='GET')return json(await translationProvidersStatus(env));
+    if(req.method!=='POST')fail(405,'method_not_allowed');
+    const input=await body(req);
+    // Aliyun is a catalogue placeholder, not a ready-to-use adapter.
+    // Never silently route its requests to Azure or accept unbounded limits.
+    if(input.provider!=='azure'||input.active_provider!=='azure')fail(400,'translation_provider_not_integrated');
+    const daily=input.daily_limit,monthly=input.monthly_limit;
+    if(!Number.isSafeInteger(daily)||!Number.isSafeInteger(monthly)||
+      daily<1||monthly<1||daily>monthly||monthly>AZURE_SITE_MAX_MONTHLY)fail(400,'invalid_translation_budget');
+    await env.DB.batch([
+      stmt(env.DB,`INSERT INTO settings(key,value) VALUES('translation_active_provider','azure')
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value`),
+      stmt(env.DB,`INSERT INTO settings(key,value) VALUES('translation_azure_daily_limit',?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value`,String(daily)),
+      stmt(env.DB,`INSERT INTO settings(key,value) VALUES('translation_azure_monthly_limit',?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value`,String(monthly)),
+      audit(env,u,'setting','translation_azure_budget','update',
+        'Azure daily '+daily+' / monthly '+monthly)
+    ]);
+    return json(await translationProvidersStatus(env));
   }
   if(req.method!=='POST')fail(405,'method_not_allowed');
   const b=await body(req),reason=textField(b.reason,1,2000,'reason');
