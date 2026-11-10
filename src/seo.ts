@@ -96,20 +96,34 @@ async function htmlPage(req:Request,env:Env,path:string):Promise<Response> {
   if(!ID.test(id)||!env.DB)return forbiddenPage(req,env);
   // A fresh D1 status check is intentional: never serve deleted/hidden/draft medical
   // content from a stale public projection or cache.
-  record=await one(env.DB,"SELECT t.id,t.title,t.body,t.source_lang,t.created_at,t.updated_at,u.nickname FROM topics t JOIN users u ON u.id=t.author_id WHERE t.id=? AND t.status='published'",id);
+  // Read status first. Only published text is eligible for server-rendered indexing.
+  // Deleted topics retain their reply placeholder; drafts stay author-accessible
+  // in the client app but never reveal any private text in the HTTP response.
+  record=await one(env.DB,"SELECT t.id,t.status,CASE WHEN t.status='published' THEN t.title END title,CASE WHEN t.status='published' THEN t.body END body,CASE WHEN t.status='published' THEN t.source_lang END source_lang,t.created_at,t.updated_at FROM topics t WHERE t.id=?",id);
   if(!record)return forbiddenPage(req,env);
  }
  const original=await indexShell(req,env);
  if(!original)return forbiddenPage(req,env,503);
  const isPrivate=PRIVATE_PAGES.has(path);
  let html=original;
- if(topic&&record){
+ if(topic&&record&&record.status==='published'){
   const canonical=CANONICAL_ORIGIN+'/topic/'+encodeURIComponent(record.id);
   const title=String(record.title||'Spine Community')+' | Spine Community';
   html=injectMetadata(html,canonical,title,description(record.body),true,/^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})?$/.test(record.source_lang)?record.source_lang:'en');
   const main='<main id="main" tabindex="-1"><a href="/" class="back-link">← All discussions</a><article class="panel"><h1>'+escapeHtml(record.title)+'</h1><div class="prose">'+renderPostBody(String(record.body))+'</div><p class="subtle">Shared experience, not medical advice.</p></article></main>';
   if(!/<main id="main" tabindex="-1">[\s\S]*?<\/main>/.test(html))return forbiddenPage(req,env,503);
   html=html.replace(/<main id="main" tabindex="-1">[\s\S]*?<\/main>/,main);
+ }else if(topic&&record){
+  // Keep the SPA shell for authors and reply placeholders, but publish no removed
+  // or unapproved text to crawlers. Genuine removed posts are 200/noindex;
+  // private pending/hidden posts are 404/noindex and hydrate for their author.
+  const removed=record.status==='deleted';
+  html=html.replace(/<title>[^<]*<\/title>/i,
+    '<title>'+(removed?'Post removed':'Post unavailable')+' — Spine Community</title>');
+  html=html.replace('</head>','<meta name="robots" content="noindex, nofollow"></head>');
+  if(removed)html=html.replace(/<main id="main" tabindex="-1">[\s\S]*?<\/main>/,
+    '<main id="main" tabindex="-1"><article class="panel"><h1>Post removed</h1><p>The original post is no longer available. Replies may remain accessible.</p></article></main>');
+  return new Response(req.method==='HEAD'?null:html,{status:removed?200:404,headers:pageHeaders(env,false)});
  }else if(!isPrivate){
   html=injectMetadata(html,CANONICAL_ORIGIN+'/', 'Spine Community — Real spine recovery experiences',
    'Read and share personal neck, lumbar spine and back pain experiences, recovery progress and peer support.');
