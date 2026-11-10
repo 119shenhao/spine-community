@@ -2466,7 +2466,7 @@ test('topic detail reply opens login/composer instead of re-navigating the same 
  assert.match(app,/function actions\(c,type='topic',inDetail=false\)/);
  assert.match(app,/type==='topic'\?\(inDetail\?`<button[^\`]+data-action="reply"/);
  assert.match(app,/\$\{translationShell\('topic',c\)\}\$\{actions\(c,'topic',true\)\}/);
- assert.match(app,/if\(action==='reply'\)return replyModal\(/);
+ assert.match(app,/if\(action==='reply'\)return replyModal\(type==='topic'\?null:findContent\('comment',id\)\)/);
  assert.match(app,/function replyModal\([^\n]+if\(!needUser\(\)\)return/);
  assert.match(app,/function needUser\(\)\{if\(state.user\)return true;showLogin\(\);return false;\}/);
 });
