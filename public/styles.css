@@ -105,3 +105,6 @@ dialog #modal-content {
 @media(max-width:700px) {
   dialog #modal-content { padding:0 22px 27px; }
 }
+
+/* Keep the programmatically focusable main region free of Safari's blue outline when a modal closes. */
+#main:focus{outline:none}

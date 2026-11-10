@@ -1,4 +1,4 @@
-import {Env,Row,all,one,stmt,now,id,fail,json,body,textField,lang,locales,requireUser,writable,rate,hash,randomToken,cookie,safeUser} from './core';
+import {Env,Row,all,one,stmt,now,id,fail,json,body,textField,lang,locales,requireUser,writable,rate,hash,randomToken,cookie,safeUser,analyticsEnabled} from './core';
 import {getContent,decorate,purge,notify} from './content';
 export async function communityRoute(req:Request,env:Env,u:Row|null,path:string):Promise<Response|null>{
   const method=req.method,url=new URL(req.url);
@@ -59,9 +59,10 @@ export async function communityRoute(req:Request,env:Env,u:Row|null,path:string)
   if(path==='/api/pageview'&&method==='POST'){
     const agent=req.headers.get('user-agent')||'';if(/bot|spider|crawl|headless/i.test(agent))return json({ok:true,recorded:false});
     const b=await body(req);if(typeof b.path!=='string'||b.path.length>300)fail(400,'invalid_pageview');
+    if(!await analyticsEnabled(env.DB))return json({ok:true,recorded:false,reason:'analytics_disabled'});
     let token=cookie(req,'sc_visitor');if(!/^[A-Za-z0-9_-]{43}$/.test(token))token=randomToken();
-    if(!env.ANALYTICS_SALT)return json({ok:true,recorded:false,reason:'analytics_not_configured'});
-    const day=new Date().toISOString().slice(0,10),visitor=await hash(env.ANALYTICS_SALT+day+token);
+    // A cryptographically random 256-bit cookie is the secret; a daily hash prevents stored cross-day identifiers.
+    const day=new Date().toISOString().slice(0,10),visitor=await hash('spine-traffic-v1:'+day+':'+token);
     await rate(env.DB,'pv:'+visitor,300,86400);await rate(env.DB,'pv-global:'+day,10000,86400);
     const seen=await one(env.DB,'SELECT 1 FROM traffic_visitors WHERE day_utc=? AND visitor_hash=?',day,visitor),hour=Math.floor(now()/3600)*3600;
     await env.DB.batch([
