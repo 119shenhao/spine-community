@@ -1,0 +1,71 @@
+name: Preview multilingual browser UX (read-only)
+on:
+  push:
+    branches: [feature/v1-community-build-20261106]
+    paths: [.github/workflows/preview-multilingual-browser.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  browser:
+    if: github.repository == '119shenhao/spine-community' && github.ref == 'refs/heads/feature/v1-community-build-20261106'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install isolated browser automation
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/spine-preview-browser" --no-package-lock --no-save --ignore-scripts playwright@1.58.2
+          if command -v google-chrome >/dev/null 2>&1; then
+            echo "CHROME_BIN=$(command -v google-chrome)" >> "$GITHUB_ENV"
+          elif command -v google-chrome-stable >/dev/null 2>&1; then
+            echo "CHROME_BIN=$(command -v google-chrome-stable)" >> "$GITHUB_ENV"
+          else
+            node "$RUNNER_TEMP/spine-preview-browser/node_modules/playwright/cli.js" install chromium
+          fi
+          echo "PW_MODULE=$RUNNER_TEMP/spine-preview-browser/node_modules/playwright/index.mjs" >> "$GITHUB_ENV"
+      - name: Switch preview language on a hydrated topic without full reload
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          const {chromium}=await import(process.env.PW_MODULE);
+          const BASE='https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev';
+          const browser=await chromium.launch({headless:true,...(process.env.CHROME_BIN?{executablePath:process.env.CHROME_BIN}:{}),
+            args:['--no-sandbox','--disable-dev-shm-usage']});
+          const context=await browser.newContext({viewport:{width:1280,height:800},locale:'en-US',serviceWorkers:'block'});
+          const page=await context.newPage();
+          const errors=[];
+          page.on('pageerror',e=>errors.push(String(e.message)));
+          // Translation requests are stubbed here to prevent Azure usage, charges,
+          // new translation cache rows or any other accidental data writes.
+          await page.route('**/api/translate**',route=>route.fulfill({
+            status:200,contentType:'application/json',
+            body:JSON.stringify({items:[],translated:false,reason:'preview_read_only_browser_probe'})
+          }));
+          try{
+            const home=await page.goto(BASE+'/',{waitUntil:'domcontentloaded',timeout:25000});
+            assert.equal(home.status(),200);
+            await page.locator('#feed article.topic-card').first().waitFor({timeout:25000});
+            await page.locator('#feed article.topic-card h3 a').first().click();
+            await page.locator('#main h1.article-title').waitFor({timeout:25000});
+            const pathname=new URL(page.url()).pathname;
+            assert.match(pathname,/^\/topic\//);
+            await page.evaluate(()=>window.__spineBrowserMarker='no-full-reload');
+            await page.locator('#language').selectOption('zh-CN');
+            await page.waitForFunction(()=>document.documentElement.lang==='zh-CN',{timeout:12000});
+            assert.equal(new URL(page.url()).pathname,pathname);
+            assert.equal(await page.evaluate(()=>window.__spineBrowserMarker),'no-full-reload');
+            await page.locator('#language').selectOption('en');
+            await page.waitForFunction(()=>document.documentElement.lang==='en',{timeout:12000});
+            assert.equal(await page.evaluate(()=>window.__spineBrowserMarker),'no-full-reload');
+            assert.equal(new URL(page.url()).pathname,pathname);
+            assert.deepEqual(errors,[]);
+            console.log('Preview browser PASS: hydrated topic, en -> zh-CN -> en language switch, History URL and no full reload.');
+            console.log('All translation HTTP calls intercepted; no production or preview data writes intended.');
+          }finally{await browser.close();}
+          JS
