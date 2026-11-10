@@ -99,7 +99,7 @@ async function htmlPage(req:Request,env:Env,path:string):Promise<Response> {
   // Read status first. Only published text is eligible for server-rendered indexing.
   // Deleted topics retain their reply placeholder; drafts stay author-accessible
   // in the client app but never reveal any private text in the HTTP response.
-  record=await one(env.DB,"SELECT t.id,t.status,CASE WHEN t.status='published' THEN t.title END title,CASE WHEN t.status='published' THEN t.body END body,CASE WHEN t.status='published' THEN t.source_lang END source_lang,t.created_at,t.updated_at FROM topics t WHERE t.id=?",id);
+  record=await one(env.DB,"SELECT t.id,t.status,CASE WHEN t.status='published' THEN t.title END title,CASE WHEN t.status='published' THEN t.body END body,CASE WHEN t.status='published' THEN t.source_lang END source_lang,t.created_at,t.updated_at,t.reply_count,u.nickname,u.is_system FROM topics t JOIN users u ON u.id=t.author_id WHERE t.id=?",id);
   if(!record)return forbiddenPage(req,env);
  }
  const original=await indexShell(req,env);
@@ -110,7 +110,22 @@ async function htmlPage(req:Request,env:Env,path:string):Promise<Response> {
   const canonical=CANONICAL_ORIGIN+'/topic/'+encodeURIComponent(record.id);
   const title=String(record.title||'Spine Community')+' | Spine Community';
   html=injectMetadata(html,canonical,title,description(record.body),true,/^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})?$/.test(record.source_lang)?record.source_lang:'en');
-  const main='<main id="main" tabindex="-1"><a href="/" class="back-link">← All discussions</a><article class="panel"><h1>'+escapeHtml(record.title)+'</h1><div class="prose">'+renderPostBody(String(record.body))+'</div><p class="subtle">Shared experience, not medical advice.</p></article></main>';
+  // Google DiscussionForumPosting applies to first-party community members,
+  // not imported/synthetic system-author posts. No claimed author profile URLs.
+  if(record.is_system===0&&record.nickname&&Number(record.created_at)>0){
+   const published=new Date(Number(record.created_at)*1000).toISOString();
+   const entry:Record<string,unknown>={
+    '@context':'https://schema.org','@type':'DiscussionForumPosting',
+    url:canonical,headline:String(record.title),text:String(record.body),
+    author:{'@type':'Person',name:String(record.nickname)},datePublished:published,
+    commentCount:Number(record.reply_count)||0
+   };
+   if(Number(record.updated_at)>Number(record.created_at))
+    entry.dateModified=new Date(Number(record.updated_at)*1000).toISOString();
+   html=html.replace('</head>','<script type="application/ld+json">'+JSON.stringify(entry).replace(/</g,'\\u003c')+'</script></head>');
+  }
+  const byline=record.is_system===0?'<p class="subtle">Shared by '+escapeHtml(record.nickname)+'</p>':'';
+  const main='<main id="main" tabindex="-1"><a href="/" class="back-link">← All discussions</a><article class="panel"><h1>'+escapeHtml(record.title)+'</h1>'+byline+'<div class="prose">'+renderPostBody(String(record.body))+'</div><p class="subtle">Shared experience, not medical advice.</p></article></main>';
   if(!/<main id="main" tabindex="-1">[\s\S]*?<\/main>/.test(html))return forbiddenPage(req,env,503);
   html=html.replace(/<main id="main" tabindex="-1">[\s\S]*?<\/main>/,main);
  }else if(topic&&record){
