@@ -162,6 +162,21 @@ function verifyComments(id,comments){
  }
  if(expected.size)throw Error('Missing '+expected.size+' production replies for '+id+'; preview receipt NOT written');
 }
+function verifyWrittenLanguageEvidence(topic,comments){
+ const expected=[['topic',topic],...comments.map(c=>['comment',c])].filter(([,row])=>resolveSyncLanguage(row).method);
+ if(!expected.length)return;
+ const ids=[...new Set(expected.map(([,row])=>row.id))];
+ const rows=query(PRODUCTION,'SELECT content_type,content_id,content_version,language,method,score FROM content_language_verifications WHERE content_version=1 AND content_id IN ('+
+  ids.map(sqlValue).join(',')+')');
+ for(const [type,content] of expected){
+  const language=resolveSyncLanguage(content);
+  const match=rows.find(r=>r.content_type===type&&r.content_id===content.id);
+  if(!match||match.language!==language.label||match.method!==language.method||
+     match.content_version!==1||
+     (language.score!=null&&Math.abs(match.score-language.score)>1e-7))
+   throw Error('Production language proof mismatch: '+type+'/'+content.id+'; preview receipt NOT written');
+ }
+}
 function markPreview(topic,targetId,hash,commentCount){
  if(!apply)return;
  // The source title/body must still equal the snapshot; otherwise retry rather than marking stale content.
@@ -209,6 +224,7 @@ function run(){
   const inserted=verifyTopic(topic,hash);
   if(!inserted||inserted.id!==topic.id)throw Error('Production topic was not created: '+topic.id);
   verifyComments(topic.id,comments);
+  verifyWrittenLanguageEvidence(topic,comments);
   markPreview(topic,topic.id,hash,comments.length);counts.marked++;
  }
  console.log(JSON.stringify({mode:apply?'apply':'dry_run',...counts},null,2));
