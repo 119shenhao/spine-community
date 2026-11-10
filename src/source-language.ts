@@ -87,12 +87,13 @@ export function sourceLanguage(input:Row,parts:string[],previous?:Row) {
 }
 
 // Imported third-party source labels are weak hints, never a manual author claim.
-// Unknown content remains legacy until a first-view Heavy/Azure verification.
+// If independent detection is uncertain, do not publish the unverified hint
+// as the original-language label used by SEO and readers.
 export function importedSourceLanguage(hint:unknown,...parts:string[]){
  const evidence=detectSourceLanguageEvidence(...parts);
  if(evidence.language!=='und')
   return {label:evidence.language,mode:'auto',method:LANGUAGE_DETECTOR,score:evidence.score};
- return {label:lang(hint),mode:'legacy',method:'legacy-hint',score:null};
+ return {label:'und',mode:'legacy',method:'legacy-hint',score:null};
 }
 
 export function sameLanguage(source:string,target:string) {
