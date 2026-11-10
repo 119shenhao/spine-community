@@ -69,7 +69,7 @@ jobs:
             current_proof:0,proof_conflict:0,legacy_proof:0,
             unknown:0,unknown_detected:0,unknown_inconclusive:0,
             legacy_known:0,legacy_agree:0,legacy_suspect:0,legacy_inconclusive:0,
-            stored_suspect_languages:{},detected_suspect_languages:{},
+            stored_suspect_languages:{},detected_suspect_languages:{},inconclusive_by_stored_language:{},
             note:'Possible language mismatches, not confirmed mistakes. No text, post identifiers, or personal data logged.'};
           const pageSize=20;
           for(let offset=0;offset<10000;offset+=pageSize){
@@ -100,7 +100,7 @@ jobs:
                 else result.unknown_detected++;
               }else{
                 result.legacy_known++;
-                if(detected==='und')result.legacy_inconclusive++;
+                if(detected==='und'){result.legacy_inconclusive++;result.inconclusive_by_stored_language[stored]=(result.inconclusive_by_stored_language[stored]||0)+1;}
                 else if(detected===stored)result.legacy_agree++;
                 else{
                   result.legacy_suspect++;
@@ -113,5 +113,7 @@ jobs:
           }
           assert(result.topics<10000,'Audit hit pagination limit');
           assert.equal(result.legacy_known,result.legacy_agree+result.legacy_suspect+result.legacy_inconclusive);
+          const conflicts=await select("SELECT t.source_lang stored,t.source_lang_mode mode,v.language verified,v.method method,COUNT(*) count FROM topics t JOIN content_language_verifications v ON v.content_type='topic' AND v.content_id=t.id AND v.content_version=t.content_version WHERE t.status='published' AND v.language<>t.source_lang GROUP BY t.source_lang,t.source_lang_mode,v.language,v.method");
+          console.log('PRODUCTION_LANGUAGE_PROOF_CONFLICT_GROUPS '+JSON.stringify(conflicts));
           console.log('PRODUCTION_D1_READONLY_LANGUAGE_AUDIT '+JSON.stringify(result));
           JS
