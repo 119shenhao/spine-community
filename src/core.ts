@@ -18,7 +18,7 @@ export const id = () => crypto.randomUUID();
 export class HttpError extends Error { constructor(public status: number, message: string) { super(message); } }
 export function fail(status: number, message: string): never { throw new HttpError(status,message); }
 export function json(data: unknown, status=200, headers: Record<string,string>={}) {
-  return new Response(JSON.stringify(data), {status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff',...headers}});
+  return new Response(JSON.stringify(data), {status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff','x-robots-tag':'noindex, nofollow',...headers}});
 }
 export const stmt = (db: D1Database, sql: string, ...args: any[]) => db.prepare(sql).bind(...args);
 export const one = <T=Row>(db: D1Database, sql: string, ...args: any[]) => stmt(db,sql,...args).first<T>();
