@@ -1,10 +1,7 @@
 {
   "repository": "119shenhao/spine-community",
-  "operation": "enable-translation",
+  "operation": "inspect",
   "migration_sha": "0b50d5eb35e7b7b8d071c3a7a6132041bed8eaea",
   "production_db_id": "5919ff78-b8fc-46ab-85f0-01fe5e6a41b0",
-  "setting": "translation_enabled",
-  "value": "true",
-  "confirmation": "spine-community-db",
-  "user_authorized": true
+  "confirmation": ""
 }
