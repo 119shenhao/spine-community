@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {readFileSync,writeFileSync,mkdirSync,readdirSync} from 'node:fs';
 import ts from 'typescript';
+import {spawnSync} from 'node:child_process';
 mkdirSync('.test-build',{recursive:true});
 for(const file of readdirSync('src').filter(f=>f.endsWith('.ts'))){const source=readFileSync('src/'+file,'utf8');const js=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText.replace(/from '(\.\/[^']+)'/g,"from '$1.js'");writeFileSync('.test-build/'+file.replace('.ts','.js'),js);}
 const {default:worker}=await import('../.test-build/index.js');
@@ -491,6 +492,39 @@ test('one-time sync publishes only manually confirmed or current-version verifie
  assert.equal(DB.db.prepare('PRAGMA foreign_key_check').all().length,0);
 });
 
+test('Mayo staged content accepts non-English hints and verifies the published original',async()=>{
+ const {collect,claim,DB}=await collectFixture();
+ const source='multilingual-long-test';
+ const token=(await claim('mayoclinic',[source])).data.results[0].lease_token;
+ const call=(action,extra={})=>collect('/api/collect/long/'+action,{
+  site:'mayoclinic',source_id:source,lease_token:token,...extra
+ });
+ const title='我的腰椎疼痛康复过程';
+ const body='这个腰椎疼痛困扰我很多年，后来开始康复训练，现在慢慢恢复了正常活动。';
+ const start=await call('start',{expected_pages:1,title,body,source_lang:'zh-CN'});
+ assert.equal(start.status,200,JSON.stringify(start.data));
+ const reply='我也是腰椎疼痛的患者，之前久坐会加重，现在经过治疗有所缓解。';
+ const page=await call('page',{page_number:1,comments:[{source_comment_id:'1',parent_source_comment_id:null,body:reply,source_lang:'zh-CN'}]});
+ assert.equal(page.status,200,JSON.stringify(page.data));
+ const result=await call('finish');
+ assert.equal(result.status,200,JSON.stringify(result.data));
+ const topic=DB.db.prepare('SELECT source_lang,source_lang_mode FROM topics WHERE id=?').get(result.data.topic_id);
+ assert.equal(topic.source_lang,'zh-CN');
+ assert.equal(topic.source_lang_mode,'auto');
+ const row=DB.db.prepare('SELECT id,source_lang,source_lang_mode FROM comments WHERE topic_id=?').get(result.data.topic_id);
+ assert.equal(row.source_lang,'zh-CN');assert.equal(row.source_lang_mode,'auto');
+ const proof=DB.db.prepare('SELECT method FROM content_language_verifications WHERE content_id=?').get(result.data.topic_id);
+ assert.equal(proof.method,'tinyld-heavy');
+});
+
+test('language audit CLI is explicit and read-only by default',()=>{
+ const help=spawnSync(process.execPath,['scripts/audit-original-languages.mjs','--help'],{encoding:'utf8'});
+ assert.equal(help.status,0,help.stderr);
+ assert.match(help.stdout,/read-only/);
+ const invalid=spawnSync(process.execPath,['scripts/audit-original-languages.mjs','--target=other'],{encoding:'utf8'});
+ assert.notEqual(invalid.status,0);
+ assert.match(invalid.stderr,/Select exactly one audit target/);
+});
 // Collection coordination test fixtures never access the network or production database.
 async function collectFixture(){
  const f=await importFixture();
