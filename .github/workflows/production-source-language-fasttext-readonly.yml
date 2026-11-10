@@ -42,4 +42,5 @@ jobs:
       - name: Read only published public originals and cross-check offline
         env:
           FASTTEXT_LID_MODEL: lid.176.ftz
+          FASTTEXT_FULL_PUBLIC_SCAN: 'true'
         run: node scripts/audit-production-language-fasttext.mjs
