@@ -154,7 +154,7 @@ export async function seoRoute(req:Request,env:Env,path:string):Promise<Response
  if(req.method!=='GET'&&req.method!=='HEAD')return new Response(null,{status:405,headers:{allow:'GET, HEAD'}});
  if(path==='/robots.txt'){
   const robots=isPreview(env)?'User-agent: *\nDisallow: /\n':
-   'User-agent: *\nAllow: /\nDisallow: /admin\nDisallow: /me\nDisallow: /notifications\nDisallow: /search\nSitemap: '+CANONICAL_ORIGIN+'/sitemap.xml\n';
+   'User-agent: *\nAllow: /\nSitemap: '+CANONICAL_ORIGIN+'/sitemap.xml\n';
   const h=new Headers({'content-type':'text/plain; charset=utf-8','cache-control':'no-store, max-age=0'});
   if(isPreview(env))h.set('x-robots-tag','noindex, nofollow');
   return new Response(req.method==='HEAD'?null:robots,{status:200,headers:h});
