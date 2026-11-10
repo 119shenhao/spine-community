@@ -100,6 +100,16 @@
 
 2026-11-07 首次生产迁移已按此流程验证，完成 `0001` 至 `0005`。后续发布使用对应的发布提交，首次运行的 SHA 仅供追溯。 [只读检查](https://github.com/119shenhao/spine-community/actions/runs/42365305326) · [迁移执行与恢复点](https://github.com/119shenhao/spine-community/actions/runs/42365746245) · [正式发布记录](implementation-v1-2026-11-06.md#v1-正式发布记录2026-11-07)
 
+### 单独开启生产翻译开关（必须当次授权）
+
+本操作不同于数据库 schema 迁移，也不同于「从开发环境同步帖子」；不需要新增 SQL 迁移文件，不复制数据。仅针对生产 D1 `spine-community-db` 的 `settings.translation_enabled`。
+
+- 用户当次明确批准后，复用现有 `Production D1` 工作流的 `enable-translation` 操作，不创建另一套 GitHub Actions。GitHub 入口仍是 `main/docs/release-requests/production-d1.json` 的 docs-only 提交，由已有自动转发流程调用 `workflow_dispatch`，不要求用户点击 Run workflow。
+- 请求必须包含：`repository='119shenhao/spine-community'`、`operation='enable-translation'`、`migration_sha` 为已核实的 `main` 完整 40 位 SHA、`production_db_id='5919ff78-b8fc-46ab-85f0-01fe5e6a41b0'`、`setting='translation_enabled'`、`value='true'`、`confirmation='spine-community-db'`、`user_authorized=true`。提交消息必须是 `chatgpt-release-d1 enable-translation <migration_sha>`。
+- 工作流在使用生产 D1 Secret 前验证请求，核对目标数据库名称与 UUID、迁移状态及现有标记；仅固定执行 `UPDATE settings SET value='true' WHERE key='translation_enabled' AND value='false'`，然后独立读取并验证为 `true`。操作具有幂等性，不能传入任意 SQL。
+- 完成后将请求恢复为 `operation='inspect'`，再运行一次只读复核，确认 `translation_enabled=true` 并查看翻译缓存与预算摘要。两次运行结果记录到 `main/docs/release-records/`。
+- 以上是**执行流程**，不是持续的生产写入授权；今后再次修改生产设置，仍需用户当次明确授权。不要将生产的关闭或开启操作默认为由开发环境自动同步。
+
 ## “发布版本（Release Version）”任务的完整范围
 
 **发布版本不是单纯迁移 D1 表结构，也不是把整个开发数据库复制到生产库。** 它应当作为一个完整的发布流程，包含以下三类变更：
