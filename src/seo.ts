@@ -15,7 +15,16 @@ const xmlDate=(timestamp:unknown)=>{
 };
 const isPreview=(env:Env)=>env.APP_ENV!=='production';
 const pageHeaders=(env:Env,indexable:boolean):Headers=>{
- const headers=new Headers({'content-type':'text/html; charset=utf-8','cache-control':'no-store, max-age=0','pragma':'no-cache','x-content-type-options':'nosniff','referrer-policy':'no-referrer'});
+ const headers=new Headers({
+  'content-type':'text/html; charset=utf-8',
+  'cache-control':'no-store, max-age=0',
+  'pragma':'no-cache',
+  'x-content-type-options':'nosniff',
+  'referrer-policy':'no-referrer',
+  'x-frame-options':'DENY',
+  'permissions-policy':'camera=(), microphone=(), geolocation=()',
+  'content-security-policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://spine-data-dev.nbn369.com https://spine-data.nbn369.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
+ });
  if(isPreview(env)||!indexable)headers.set('x-robots-tag','noindex, nofollow');
  return headers;
 };
@@ -97,7 +106,7 @@ async function htmlPage(req:Request,env:Env,path:string):Promise<Response> {
  if(topic&&record){
   const canonical=CANONICAL_ORIGIN+'/topic/'+encodeURIComponent(record.id);
   const title=String(record.title||'Spine Community')+' | Spine Community';
-  html=injectMetadata(html,canonical,title,description(record.body),true,ID.test(record.source_lang)?record.source_lang:'en');
+  html=injectMetadata(html,canonical,title,description(record.body),true,/^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})?$/.test(record.source_lang)?record.source_lang:'en');
   const main='<main id="main" tabindex="-1"><a href="/" class="back-link">← All discussions</a><article class="panel"><h1>'+escapeHtml(record.title)+'</h1><div class="prose">'+renderPostBody(String(record.body))+'</div><p class="subtle">Shared experience, not medical advice.</p></article></main>';
   if(!/<main id="main" tabindex="-1">[\s\S]*?<\/main>/.test(html))return forbiddenPage(req,env,503);
   html=html.replace(/<main id="main" tabindex="-1">[\s\S]*?<\/main>/,main);
