@@ -2622,7 +2622,11 @@ test('SEO: History API, canonical links and redirects replace hash-only navigati
  const app=readFileSync('public/app.js','utf8'),html=readFileSync('public/index.html','utf8');
  const cfg=JSON.parse(readFileSync('wrangler.jsonc','utf8'));
  assert.match(app,/history\.pushState/);
- assert.match(app,/restoreLegacyRoute\(\)/);
+ assert.doesNotMatch(app,/restoreLegacyRoute/);
+ assert.doesNotMatch(app,/location\.hash\.startsWith\('#\/'\)/);
+ // SPA navigation must never hijack the full-page Google OAuth redirect.
+ assert.match(app,/!anchor\.getAttribute\('href'\)\.startsWith\('\/api\/'\)/);
+ assert.match(app,/href="\/api\/auth\/google"/);
  assert.match(app,/addEventListener\('popstate'/);
  assert.match(app,/href="\/topic\//);
  assert.doesNotMatch(app,/href="#\/topic\//);
