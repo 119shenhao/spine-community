@@ -36,7 +36,7 @@ export async function adminRoute(req:Request,env:Env,user:Row|null,path:string):
     if(req.method==='POST'&&b.preview_confirm!=='spine-community-db-preview')
       fail(400,'preview_confirmation_required');
     const table=type==='topic'?'topics':'comments';
-    const rows=await all(env.DB,`SELECT c.id,c.title,c.body,c.source_lang,c.source_lang_mode,
+    const rows=await all(env.DB,`SELECT c.id,${type==='topic'?'c.title':'NULL title'},c.body,c.source_lang,c.source_lang_mode,
         c.content_version FROM ${table} c LEFT JOIN content_language_verifications v
         ON v.content_type=? AND v.content_id=c.id AND v.content_version=c.content_version
         WHERE c.status='published' AND c.id>? AND c.source_lang_mode<>'manual'
