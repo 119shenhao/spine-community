@@ -110,8 +110,8 @@ jobs:
               const html=await response.text();
               assert(html.includes('<html lang="'+lang+'">'),'Unexpected SSR language '+lang);
               assert(html.includes('<h1>'+esc(row.title)+'</h1>'),'Original title not in SSR '+lang);
-              const first=String(row.body).split(/\\r?\\n{2,}/)[0];
-              const bodyHtml=esc(first).replace(/\\r?\\n/g,'<br>');
+              const first=String(row.body).split(/\r?\n{2,}/)[0];
+              const bodyHtml=esc(first).replace(/\r?\n/g,'<br>');
               assert(html.includes(bodyHtml),'Original body not in SSR '+lang);
               assert(html.includes('<link rel="canonical" href="https://spine.nbn369.com'+path+'">'));
             }
