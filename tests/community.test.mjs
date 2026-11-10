@@ -21,7 +21,7 @@ class Prepared {
  async run(){return this.all();}
 }
 async function fixture(){const DB=new D1();for(const uid of ['alice','bob','carol','admin','mod']){DB.db.prepare('INSERT INTO users(id,nickname) VALUES(?,?)').run(uid,uid);DB.db.prepare('INSERT INTO user_sessions(id,user_id,token_hash,expires_at) VALUES(?,?,?,?)').run(uid,uid,await hash(uid+'-token'),now()+3600);}DB.db.exec("INSERT INTO user_roles(user_id,role) VALUES('admin','admin'),('mod','moderator')");
- const env={DB,ASSETS:{fetch:async()=>new Response('static')},ANALYTICS_SALT:'test-only-salt'};
+ const env={DB,ASSETS:{fetch:async()=>new Response('static')}};
  const call=async(path,method='GET',data,user='alice',extra={},ctx)=>{const headers={origin:'https://preview.test','user-agent':'Test Browser',...extra};if(user)headers.cookie='sc_session='+user+'-token';if(data!==undefined)headers['content-type']='application/json';const req=new Request('https://preview.test'+path,{method,headers,body:data===undefined?undefined:JSON.stringify(data)});const r=await worker.fetch(req,env,ctx);return {status:r.status,data:await r.json(),headers:r.headers};};
  const topic=async(title='A story of lower back pain',body='Pain when sitting and morning stiffness',user='alice',extra={})=>{const r=await call('/api/topics','POST',{title,body,source_lang:'en',...extra},user);assert.equal(r.status,201,JSON.stringify(r));return r.data.id;};
  return {DB,env,call,topic};
@@ -160,7 +160,59 @@ test('translation provider editor renders independent Azure budget and unavailab
 });
 
 test('translation reservation hard limit and race with deletion',async()=>{const {call,topic,env,DB}=await fixture();const id=await topic('A title','A longer body for translating');Object.assign(env,{TRANSLATION_ENABLED:'true',TRANSLATOR_KEY:'test',TRANSLATOR_F0_VERIFIED_AT:new Date(Date.now()-60000).toISOString(),TRANSLATION_DAILY_LIMIT:'60',TRANSLATION_MONTHLY_LIMIT:'60'});DB.db.exec("UPDATE settings SET value='true' WHERE key='translation_enabled'");const original=globalThis.fetch;let requests=0;globalThis.fetch=async()=>{requests++;await call('/api/topics/'+id,'DELETE',{},'alice');return Response.json([{translations:[{text:'标题'}]},{translations:[{text:'正文'}]}]);};try{const r=await call('/api/translate','POST',{type:'topic',id,locale:'zh-CN'});assert.equal(r.data.translated,false);assert.equal(DB.db.prepare('SELECT count(*) n FROM topic_translations').get().n,0);const id2=await topic('Another title','Enough text to hit monthly limit');const result=await call('/api/translate','POST',{type:'topic',id:id2,locale:'zh-CN'});assert.equal(result.data.reason,'translation_quota_reached');assert.equal(requests,1);}finally{globalThis.fetch=original;}});
-test('pageview metrics exclude ordinary API requests; privacy export and requests',async()=>{const {call,topic,DB}=await fixture();await topic();await call('/api/topics');assert.equal(DB.db.prepare('SELECT count(*) n FROM daily_traffic_metrics').get().n,0);await call('/api/pageview','POST',{path:'/'});assert.equal(DB.db.prepare('SELECT pv FROM daily_traffic_metrics').get().pv,1);assert.equal(DB.db.prepare('SELECT uv_estimate FROM daily_traffic_metrics').get().uv_estimate,1);assert.equal((await call('/api/me/export')).data.profile.id,'alice');assert.equal((await call('/api/privacy-requests','POST',{type:'account_delete'})).status,201);assert.equal((await call('/api/privacy-requests')).data.items.length,1);});
+test('pageview metrics require site-owner opt-in and exclude ordinary API requests',async()=>{
+ const {call,topic,DB}=await fixture();
+ await topic();await call('/api/topics');
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM daily_traffic_metrics').get().n,0);
+ const disabled=await call('/api/pageview','POST',{path:'/'});
+ assert.equal(disabled.status,200);
+ assert.equal(disabled.data.recorded,false);
+ assert.equal(disabled.data.reason,'analytics_disabled');
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM daily_traffic_metrics').get().n,0);
+ assert.equal((await call('/api/health')).data.analyticsEnabled,false);
+ assert.equal((await call('/api/admin/overview','GET',undefined,'admin')).data.analyticsEnabled,false);
+ const payload={key:'analytics_enabled',value:'true',reason:'Enable traffic stats in admin UI'};
+ assert.equal((await call('/api/admin/settings','POST',payload,'alice')).status,403);
+ assert.equal((await call('/api/admin/settings','POST',payload,'mod')).status,403);
+ assert.equal((await call('/api/admin/settings','POST',{...payload,value:'yes'},'admin')).status,400);
+ assert.equal((await call('/api/admin/settings','POST',{...payload,key:'unknown'},'admin')).status,400);
+ assert.equal((await call('/api/admin/settings','POST',payload,'admin')).status,200);
+ assert.equal((await call('/api/health')).data.analyticsEnabled,true);
+ assert.equal((await call('/api/admin/overview','GET',undefined,'admin')).data.analyticsEnabled,true);
+ const first=await call('/api/pageview','POST',{path:'/'});
+ assert.equal(first.status,200,JSON.stringify(first));
+ assert.equal(first.data.recorded,true);
+ const visitorCookie=first.headers.get('set-cookie')?.match(/sc_visitor=([^;]+)/)?.[1];
+ assert(visitorCookie);
+ const second=await call('/api/pageview','POST',{path:'/topic/example'},'alice',{cookie:'sc_session=alice-token; sc_visitor='+visitorCookie});
+ assert.equal(second.data.recorded,true);
+ assert.equal(DB.db.prepare('SELECT pv FROM daily_traffic_metrics').get().pv,2);
+ assert.equal(DB.db.prepare('SELECT uv_estimate FROM daily_traffic_metrics').get().uv_estimate,1);
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM traffic_visitors').get().n,1);
+ assert.equal((await call('/api/admin/settings','POST',{key:'analytics_enabled',value:'false',reason:'Disable traffic stats'},'admin')).status,200);
+ assert.equal((await call('/api/health')).data.analyticsEnabled,false);
+ assert.equal((await call('/api/pageview','POST',{path:'/topic/example'})).data.recorded,false);
+ assert.equal(DB.db.prepare('SELECT pv FROM daily_traffic_metrics').get().pv,2);
+ assert.equal((await call('/api/admin/overview','GET',undefined,'admin')).data.metrics[0].pv,2);
+ assert.equal(DB.db.prepare("SELECT count(*) n FROM moderation_actions WHERE target_id='analytics_enabled'").get().n,2);
+ assert.equal((await call('/api/me/export')).data.profile.id,'alice');
+ assert.equal((await call('/api/privacy-requests','POST',{type:'account_delete'})).status,201);
+ assert.equal((await call('/api/privacy-requests')).data.items.length,1);
+});
+
+test('traffic switch is available in community analytics with client/server off gates',()=>{
+ const app=readFileSync('public/app.js','utf8');
+ const server=readFileSync('src/community.ts','utf8');
+ const locale=readFileSync('public/i18n.js','utf8');
+ assert.match(app,/data-action="toggle-analytics"/);
+ assert.match(app,/state\.user\.role==='admin'\?/);
+ assert.match(app,/if\(action==='toggle-analytics'\)/);
+ assert.match(app,/state\.health\?\.analyticsEnabled===true\)send\('\/api\/pageview'/);
+ assert.match(server,/if\(!await analyticsEnabled\(env.DB\)\)return json\(\{ok:true,recorded:false,reason:'analytics_disabled'\}\)/);
+ assert.doesNotMatch(server,/ANALYTICS_SALT/);
+ assert.match(locale,/analyticsToggle:/);
+ assert.match(locale,/analyticsEnable:/);
+});
 test('notification focus can reach comments after page one and progress-only pagination works',async()=>{const {call,topic,DB}=await fixture();const id=await topic();for(let i=0;i<55;i++)DB.db.prepare("INSERT INTO comments(id,topic_id,author_id,body,status) VALUES(?,?,'bob',?,'published')").run('c'+i,id,'Reply '+i);const r=await call('/api/topics/'+id+'?focus=c54');assert.equal(r.status,200);assert(r.data.comments.some(c=>c.id==='c54'));});
 test('Google JWT signature, audience, nonce and expiration verification',async()=>{const pair=await crypto.subtle.generateKey({name:'RSASSA-PKCS1-v1_5',modulusLength:2048,publicExponent:new Uint8Array([1,0,1]),hash:'SHA-256'},true,['sign','verify']);const jwk=await crypto.subtle.exportKey('jwk',pair.publicKey);const encode=o=>Buffer.from(JSON.stringify(o)).toString('base64url');const make=async extra=>{const h=encode({alg:'RS256',kid:'test'}),p=encode({iss:'https://accounts.google.com',aud:'client',sub:'google-user',nonce:'nonce',iat:now(),exp:now()+300,...extra});const sig=await crypto.subtle.sign('RSASSA-PKCS1-v1_5',pair.privateKey,new TextEncoder().encode(h+'.'+p));return h+'.'+p+'.'+Buffer.from(sig).toString('base64url');};const original=globalThis.fetch;globalThis.fetch=async()=>Response.json({keys:[{...jwk,kid:'test'}]});try{assert.equal((await verifyGoogle(await make({}),'client','nonce')).sub,'google-user');await assert.rejects(()=>verifyGoogle(makeToken,'client','bad'));const bad=await make({aud:'evil'});await assert.rejects(()=>verifyGoogle(bad,'client','nonce'));const expired=await make({exp:now()-1});await assert.rejects(()=>verifyGoogle(expired,'client','nonce'));const nonce=await make({nonce:'wrong'});await assert.rejects(()=>verifyGoogle(nonce,'client','nonce'));}finally{globalThis.fetch=original;}var makeToken='invalid';});
 test('owner fulfils deletion request: source/cache removal, sessions revoked, other replies intact',async()=>{const {call,topic,DB}=await fixture();const id=await topic('My test data','A private detail','bob');const c=await call('/api/topics/'+id+'/comments','POST',{body:'Another person reply'},'carol');await call('/api/privacy-requests','POST',{type:'account_delete'},'bob');const p=DB.db.prepare("SELECT id FROM privacy_requests WHERE user_id='bob'").get().id;const r=await call('/api/admin/privacy','POST',{id:p,status:'fulfill',reason:'Test user request'},'admin');assert.equal(r.status,200,JSON.stringify(r));assert.equal((await call('/api/me','GET',undefined,'bob')).data.user,null);const detail=await call('/api/topics/'+id,'GET',undefined,null);assert.equal(detail.data.topic.body,null);assert(detail.data.comments.some(x=>x.id===c.data.id));assert.equal(DB.db.prepare('PRAGMA foreign_key_check').all().length,0);});
