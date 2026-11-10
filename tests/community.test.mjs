@@ -2846,7 +2846,7 @@ test('SEO: on-demand production sitemap is canonical and reflects published, syn
 });
 
 
-test('preview historical backfill assigns verified languages or provisional default, never overwrites manual',async()=>{
+test('preview historical backfill retains und when unverified and never overwrites manual',async()=>{
  const {DB,env,call}=await fixture();
  env.APP_ENV='preview';
  const words='I have had lower back pain for a long time and I am now seeing a physiotherapist after work.';
@@ -2868,7 +2868,7 @@ test('preview historical backfill assigns verified languages or provisional defa
  const lookup=Object.fromEntries(check.data.items.map(x=>[x.id,x]));
  assert.equal(lookup['history-en'].language,'en');
  assert.equal(lookup['history-en'].verified,true);
- assert.equal(lookup['history-short'].language,'en');
+ assert.equal(lookup['history-short'].language,'und');
  assert.equal(lookup['history-short'].verified,false);
  assert.equal(lookup['history-short'].mode,'legacy');
  assert.equal(lookup['history-preserved'].language,'es');
@@ -2879,8 +2879,8 @@ test('preview historical backfill assigns verified languages or provisional defa
  const applied=await call('/api/admin/historical-language-backfill','POST',{type:'topic',preview_confirm:'spine-community-db-preview'},'admin');
  assert.equal(applied.status,200,JSON.stringify(applied.data));
  assert.equal(applied.data.detected,1);
- assert.equal(applied.data.defaulted,1);
- assert.equal(applied.data.alreadyProvisional,1);
+ assert.equal(applied.data.defaulted,0);
+ assert.equal(applied.data.alreadyProvisional,2);
  const verified=DB.db.prepare("SELECT source_lang,source_lang_mode,content_version FROM topics WHERE id='history-en'").get();
  assert.equal(verified.source_lang,'en');
  assert.equal(verified.source_lang_mode,'auto');
@@ -2888,9 +2888,9 @@ test('preview historical backfill assigns verified languages or provisional defa
  assert.equal(DB.db.prepare("SELECT language,method,content_version FROM content_language_verifications WHERE content_type='topic' AND content_id='history-en'").get().method,'tinyld-heavy');
  assert.equal(DB.db.prepare("SELECT count(*) n FROM topic_translations WHERE topic_id='history-en'").get().n,0);
  const fallback=DB.db.prepare("SELECT source_lang,source_lang_mode,content_version FROM topics WHERE id='history-short'").get();
- assert.equal(fallback.source_lang,'en');
+ assert.equal(fallback.source_lang,'und');
  assert.equal(fallback.source_lang_mode,'legacy');
- assert.equal(fallback.content_version,2);
+ assert.equal(fallback.content_version,1);
  assert.equal(DB.db.prepare("SELECT count(*) n FROM content_language_verifications WHERE content_type='topic' AND content_id='history-short'").get().n,0);
  assert.equal(DB.db.prepare("SELECT source_lang FROM topics WHERE id='history-manual'").get().source_lang,'zh-CN');
  assert.equal(DB.db.prepare("SELECT content_version FROM topics WHERE id='history-preserved'").get().content_version,1);
