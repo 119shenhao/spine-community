@@ -27,7 +27,7 @@ ASK39_LISTS = (
 SPINE = re.compile(
     r"颈椎|腰椎|腰突|腰痛|腰疼|腰部|椎间盘|椎管|坐骨神经|腰[1-5]|"
     r"\b(?:lumbar|cervical|stenosis|sciatica|spine|spinal|ACDF|L[1-5]|S1|"
-    r"lower back|herniated disc|laminectomy|discectomy|microdiscectomy)\b", re.I
+    r"lower back|scoliosis|radiculopathy|spondylosis|herniated disc|laminectomy|discectomy|microdiscectomy)\b", re.I
 )
 IDENTIFIER = re.compile(
     r"(?<!\d)(?:1[3-9]\d{9}|\d{17}[\dXx])(?!\d)|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|"
@@ -38,11 +38,36 @@ INCOMPLETE = re.compile(
     r"见(?:附件|附图|下图)|图片已隐藏|内容已隐藏|仅医生可见|登录后查看|点击查看全文"
 )
 
+# Conservative ad filter for imported 39健康问答 user-generated title,
+# question and replies only. Sidebar/sitewide advertisements are never copied.
+# Never rewrite a patient's words: reject advertised topics and omit only
+# clearly promotional replies; keep normal treatment discussions untouched.
+ASK39_AD = re.compile(
+    r"(?:加|添加|联系|私聊|扫码|扫描|关注|搜索|咨询|进)(?:我|一下|这个|我们的|官方|客服|专业|医生|团队|的|请|就)?"
+    r"(?:微信|微\s*信|V\s*信|vx|wx|QQ|Q\s*Q|公众号|交流群|群聊|客服)"
+    r"|(?:微信|微\s*信|V\s*信|vx|wx|QQ|Q\s*Q|公众号|交流群|群聊|客服).{0,10}"
+    r"(?:添加|联系|私聊|咨询|扫码|进群|购买|下单|领取)"
+    r"|(?:https?://|www[.])[^\s<>]+"
+    r"|(?:免费领取|限时优惠|限时促销|限时折扣|扫码领取|点击购买|立即下单|优惠券领取|"
+    r"代理加盟|推广合作|广告合作|包治百病|保证治愈|专业引流|私信购买|加群领资料)",
+    re.I
+)
+
+
+def ask39_has_ad(text):
+    """True only for explicit promotions/contact solicitation, not medical terms."""
+    return isinstance(text, str) and bool(ASK39_AD.search(text))
+
+
 
 def source_id(site, url):
     if not isinstance(url, str) or not 1 <= len(url) <= 300:
         raise ValueError("invalid_candidate_url")
     address = urlsplit(url)
+    if site == "patientinfo" and address.scheme == "https" and address.netloc == "community.patient.info" and not (address.query or address.fragment):
+        modern = re.fullmatch(r"/t/[a-z0-9-]+/([0-9]{1,20})/?", address.path, re.I)
+        if modern:
+            return modern.group(1)
     host, pattern = SOURCE_URLS[site]
     match = re.fullmatch(pattern, address.path, re.I)
     if address.scheme != "https" or address.netloc != host or address.query or address.fragment or not match:
@@ -152,13 +177,10 @@ def parse_ask39(markup):
     unique_extra = re.sub(r"[\s，。？！、：；,.?!:;]", "", extra)
     if unique_extra and unique_extra not in (unique_title, unique_body):
         body += "\n" + extra
-    personal_context = re.search(
-        r"我|本人|家人|父亲|母亲|[0-9一二三四五六七八九十]+[年月周天岁]|术后|复发|诊断|检查", body
-    )
-    if len(re.sub(r"\s+", "", body)) < 24:
+    if len(re.sub(r"[\s，。？！、：；,.?!:;]", "", body)) < 24:
         raise ValueError("patient_narrative_too_short")
-    if not personal_context:
-        raise ValueError("patient_narrative_unverified")
+    if ask39_has_ad(title_text) or ask39_has_ad(body):
+        raise ValueError("advertising_in_topic")
 
     comments = []
     ids = set()
@@ -177,9 +199,14 @@ def parse_ask39(markup):
         if any(re.fullmatch(r"展开.*|查看全部.*|加载更多.*|追问.*", html_text(link))
                for link in wrapper.select("a, button") if html_text(link)):
             raise ValueError("answer_structure_unverified")
+        # Drop promotional replies, never edit their text or copy advertisements.
+        if ask39_has_ad(body_text):
+            continue
         comments.append({"body": body_text, "source_lang": "zh-CN"})
-    if not comments or len(comments) != len(page.select(".sele_all p.sele_txt")):
-        raise ValueError("answer_count_unverified")
+    # A single complete non-advertising public reply qualifies; the old
+    # equality check included non-answer layout elements on some pages.
+    if not comments:
+        raise ValueError("no_nonadvertising_replies")
     return {"title": title_text, "body": body, "source_lang": "zh-CN", "comments": comments}
 
 
@@ -230,6 +257,168 @@ def parse_healthunlocked(markup, expected_id):
             "source_lang": "en", "comments": roots}
 
 
+def mayo_page_count(markup, expected_id):
+    """Inspect official pagination; refuse oversized threads before importing."""
+    from urllib.parse import parse_qs
+    page = BeautifulSoup(markup, "html.parser")
+    canonical = page.select_one('link[rel="canonical"][href]')
+    if canonical and source_id("mayoclinic", canonical["href"]) != expected_id:
+        raise ValueError("unexpected_source_redirect")
+    pages = [1]
+    for link in page.select(".chv4-comment-pagination a[href]"):
+        target = urlsplit(link["href"])
+        if target.netloc not in ("", "connect.mayoclinic.org") or target.path not in (
+                "", f"/discussion/{expected_id}/"):
+            raise ValueError("mayoclinic_unexpected_page_link")
+        values = parse_qs(target.query).get("pg", [])
+        if values:
+            if len(values) != 1 or not re.fullmatch(r"[0-9]{1,3}", values[0]):
+                raise ValueError("mayoclinic_invalid_pagination")
+            pages.append(int(values[0]))
+    return max(pages)
+
+
+
+def parse_mayoclinic_stage_page(markup, expected_id, page_number, expected_pages):
+    """Parse one official page with stable comment and parent IDs.
+
+    This flat representation is staged privately before a single atomic commit.
+    Embedded quotes are not independent comments.
+    """
+    page = BeautifulSoup(markup, "html.parser")
+    canonical = page.select_one('link[rel="canonical"][href]')
+    if canonical and source_id("mayoclinic", canonical["href"]) != expected_id:
+        raise ValueError("unexpected_source_redirect")
+    title = page.select_one("h1.chv4-discussion-title")
+    content = page.select_one(".discussion-content .single-discussion-body")
+    container = page.select_one(".comment-container")
+    if not title or not content or not container:
+        raise ValueError("mayoclinic_thread_structure_unverified")
+    if mayo_page_count(markup, expected_id) != expected_pages:
+        raise ValueError("mayoclinic_pagination_changed")
+    control = page.select_one(".chv4-comment-pagination")
+    if expected_pages > 1 and (not control or f"page-{page_number}" not in control.get("class", [])):
+        raise ValueError("mayoclinic_page_order_unverified")
+    title_text, body_text = source_text(title), source_text(content)
+    if IDENTIFIER.search(title_text + " " + body_text) or INCOMPLETE.search(title_text + " " + body_text):
+        raise ValueError("possible_identifier_or_missing_material")
+    if not SPINE.search(title_text + " " + body_text):
+        raise ValueError("topic_relevance_unverified")
+    rows = container.select(".comment-individual-row")
+    if not 1 <= len(rows) <= 30:
+        raise ValueError("mayoclinic_page_reply_limit")
+    comments = []
+    for row in rows:
+        match = re.fullmatch(r"comment-([0-9]{1,20})", row.get("id", ""))
+        if not match:
+            raise ValueError("mayoclinic_unverified_comment_id")
+        bodies = [node for node in row.select(".single-comment-body")
+                  if not node.find_parent(class_="in-reply-to-container")]
+        if len(bodies) != 1:
+            raise ValueError("mayoclinic_reply_count_mismatch")
+        reply = source_text(bodies[0])
+        if not reply or len(reply) > 12000 or IDENTIFIER.search(reply) or INCOMPLETE.search(reply):
+            raise ValueError("mayoclinic_reply_content_unverified")
+        quoted = row.select(".in-reply-to-container")
+        parent_id = None
+        if quoted:
+            if len(quoted) != 1:
+                raise ValueError("mayoclinic_ambiguous_parent")
+            ids = set()
+            for link in quoted[0].select("a[href]"):
+                location = urlsplit(link["href"])
+                parent = re.fullmatch(r"/comment/([0-9]{1,20})/?", location.path)
+                if parent and location.netloc in ("", "connect.mayoclinic.org"):
+                    ids.add(parent[1])
+            if len(ids) != 1:
+                raise ValueError("mayoclinic_parent_id_unverified")
+            parent_id, = ids
+        comments.append({"source_comment_id": match[1],
+                         "parent_source_comment_id": parent_id,
+                         "body": reply, "source_lang": "en"})
+    return {"title": title_text, "body": body_text, "source_lang": "en", "comments": comments}
+
+
+def parse_mayoclinic_pages(markups, expected_id):
+    """Assemble every public page exactly once; retain only verified reply parents."""
+    if not 1 <= len(markups) <= 5:
+        raise ValueError("mayoclinic_page_limit")
+    title = body = None
+    items = {}
+    sequence = []
+    for page_no, markup in enumerate(markups, start=1):
+        page = BeautifulSoup(markup, "html.parser")
+        title_node = page.select_one("h1.chv4-discussion-title")
+        body_node = page.select_one(".discussion-content .single-discussion-body")
+        container = page.select_one(".comment-container")
+        if not title_node or not body_node or not container:
+            raise ValueError("mayoclinic_thread_structure_unverified")
+        if mayo_page_count(markup, expected_id) != len(markups):
+            raise ValueError("mayoclinic_pagination_changed")
+        controls = page.select_one(".chv4-comment-pagination")
+        if controls and f"page-{page_no}" not in controls.get("class", []):
+            raise ValueError("mayoclinic_page_order_unverified")
+        head = source_text(title_node)
+        original = source_text(body_node)
+        if title is None:
+            title, body = head, original
+        elif title != head or body != original:
+            raise ValueError("mayoclinic_cross_page_content_changed")
+        rows = container.select(".comment-individual-row")
+        if not rows or len(items) + len(rows) > 49:
+            raise ValueError("mayoclinic_reply_limit")
+        for row in rows:
+            row_id = row.get("id", "")
+            match = re.fullmatch(r"comment-([0-9]{1,20})", row_id)
+            if not match or match[1] in items:
+                raise ValueError("mayoclinic_duplicate_or_unverified_comment")
+            # Quote previews of the parent have .single-comment-body too; do not
+            # accidentally count them as independent responses.
+            bodies = [node for node in row.select(".single-comment-body")
+                      if not node.find_parent(class_="in-reply-to-container")]
+            if len(bodies) != 1:
+                raise ValueError("mayoclinic_reply_count_mismatch")
+            content = source_text(bodies[0])
+            if not content:
+                raise ValueError("mayoclinic_empty_reply")
+            quoted = row.select(".in-reply-to-container")
+            parent_id = None
+            if quoted:
+                if len(quoted) != 1:
+                    raise ValueError("mayoclinic_ambiguous_parent")
+                links = set()
+                for link in quoted[0].select("a[href]"):
+                    href = urlsplit(link["href"])
+                    m = re.fullmatch(r"/comment/([0-9]{1,20})/?", href.path)
+                    if m and href.netloc in ("", "connect.mayoclinic.org"):
+                        links.add(m[1])
+                if len(links) != 1:
+                    raise ValueError("mayoclinic_parent_id_unverified")
+                parent_id, = links
+            items[match[1]] = ({"body": content, "source_lang": "en"}, parent_id)
+            sequence.append(match[1])
+    roots = []
+    positions = {comment_id: pos for pos, comment_id in enumerate(sequence)}
+    for comment_id in sequence:
+        comment, parent_id = items[comment_id]
+        if parent_id is None:
+            roots.append(comment)
+        elif parent_id not in positions:
+            raise ValueError("mayoclinic_missing_reply_parent")
+        elif positions[parent_id] >= positions[comment_id]:
+            # A missing/forward parent could create a cycle or a false hierarchy.
+            raise ValueError("mayoclinic_reply_parent_order_unverified")
+        else:
+            parent, _ = items[parent_id]
+            parent.setdefault("replies", []).append(comment)
+    return {"title": title, "body": body, "source_lang": "en", "comments": roots}
+
+
+def parse_mayoclinic(markup, expected_id):
+    """Backward-compatible single-page entry point."""
+    return parse_mayoclinic_pages([markup], expected_id)
+
+
 def read_topic(site, identifier, url, get, render):
     if site == "120ask":
         return parse_120ask(get(url))
@@ -239,9 +428,31 @@ def read_topic(site, identifier, url, get, render):
         return parse_ask39(get(url))
     if site == "healthunlocked":
         return parse_healthunlocked(get(url), identifier)
+    if site == "mayoclinic":
+        # Bind follow-up pages to the same validated canonical source ID.
+        page1 = get(url)
+        total = mayo_page_count(page1, identifier)
+        # Metadata-only diagnostic; no patient body or reply text enters Actions logs.
+        print(json.dumps({"event": "mayo_page_count", "site": "mayoclinic",
+                          "source_id": identifier, "pages": total}), flush=True)
+        if total > 5:
+            raise ValueError("mayoclinic_page_limit")
+        from urllib.parse import urlunsplit
+        base = urlsplit(url)
+        root = urlunsplit((base.scheme, base.netloc, base.path, "", ""))
+        pages = [page1]
+        for number in range(2, total + 1):
+            import time
+            time.sleep(1)
+            pages.append(get(f"{root}?pg={number}"))
+        return parse_mayoclinic_pages(pages, identifier)
     if site != "patientinfo":
         raise ValueError("unsupported_direct_source")
-    slug = urlsplit(url).path.split("/")[-1].rsplit("-", 1)[0]
+    address = urlsplit(url)
+    if address.netloc == "community.patient.info":
+        slug = address.path.strip("/").split("/")[-2]
+    else:
+        slug = address.path.split("/")[-1].rsplit("-", 1)[0]
     return parse_patientinfo(
         json.loads(get(f"https://community.patient.info/t/{slug}/{identifier}.json")), identifier
     )
