@@ -851,7 +851,7 @@ test('production pages are indexable while preview pages and indicators stay iso
  const cfg=JSON.parse(readFileSync('wrangler.jsonc','utf8'));
  assert(!html.includes('name="robots"'));
  assert(!headers.includes('X-Robots-Tag: noindex'));
- assert.deepEqual(cfg.assets.run_worker_first,['/api/*','/','/index.html']);
+ assert.deepEqual(cfg.assets.run_worker_first,['/api/*','/','/index.html','/topic/*','/search','/me','/notifications','/admin','/privacy','/robots.txt','/sitemap.xml','/sitemaps/*']);
  assert.equal(cfg.vars.APP_ENV,'production');
  assert.equal(cfg.previews.vars.APP_ENV,'preview');
  assert(client.includes('badge.hidden=!isPreview()'));
@@ -859,16 +859,16 @@ test('production pages are indexable while preview pages and indicators stay iso
  env.ASSETS={fetch:async()=>new Response('<html>example</html>',{headers:{'content-type':'text/html','X-Robots-Tag':'noindex, nofollow'}})};
  env.APP_ENV='production';
  assert.equal((await call('/api/health')).data.environment,'production');
- for(const p of ['/','/index.html']){
-  const r=await worker.fetch(new Request('https://spine.nbn369.com'+p),env);
-  assert.equal(r.headers.get('X-Robots-Tag'),null);
- }
+ const prod=await worker.fetch(new Request('https://spine.nbn369.com/'),env);
+ assert.equal(prod.status,200);
+ assert.equal(prod.headers.get('X-Robots-Tag'),null);
+ assert.equal((await worker.fetch(new Request('https://spine.nbn369.com/index.html'),env)).status,308);
  env.APP_ENV='preview';
  assert.equal((await call('/api/health')).data.environment,'preview');
- for(const p of ['/','/index.html']){
-  const r=await worker.fetch(new Request('https://preview.test'+p),env);
-  assert.equal(r.headers.get('X-Robots-Tag'),'noindex, nofollow');
- }
+ const preview=await worker.fetch(new Request('https://preview.test/'),env);
+ assert.equal(preview.status,200);
+ assert.equal(preview.headers.get('X-Robots-Tag'),'noindex, nofollow');
+ assert.equal((await worker.fetch(new Request('https://preview.test/index.html'),env)).status,308);
 });
 
 test('visitor language survives a Google login callback and account default English',async()=>{
