@@ -187,7 +187,7 @@ test('pageview metrics require site-owner opt-in and exclude ordinary API reques
  const second=await call('/api/pageview','POST',{path:'/topic/example'},'alice',{cookie:'sc_session=alice-token; sc_visitor='+visitorCookie});
  assert.equal(second.data.recorded,true);
  assert.equal(DB.db.prepare('SELECT pv FROM daily_traffic_metrics').get().pv,2);
- assert.equal(DB.db.prepare('SELECT uv_estimate FROM daily_traffic_metrics').get().uv_estimate,1);
+ assert.equal(DB.db.prepare('SELECT uv_estimate FROM daily_traffic_metrics').get().uv_estimate,1,JSON.stringify({visitorCookie,firstSetCookie:first.headers.get('set-cookie'),secondSetCookie:second.headers.get('set-cookie'),visitors:DB.db.prepare('SELECT * FROM traffic_visitors').all(),day:DB.db.prepare('SELECT * FROM daily_traffic_metrics').all()}));
  assert.equal(DB.db.prepare('SELECT count(*) n FROM traffic_visitors').get().n,1);
  assert.equal((await call('/api/admin/settings','POST',{key:'analytics_enabled',value:'false',reason:'Disable traffic stats'},'admin')).status,200);
  assert.equal((await call('/api/health')).data.analyticsEnabled,false);
