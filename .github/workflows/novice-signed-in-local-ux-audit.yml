@@ -1,0 +1,164 @@
+name: Isolated newcomer signed-in UI test (no production writes)
+on:
+  push:
+    branches: [feature/v1-community-build-20261106]
+    paths: [.github/workflows/novice-signed-in-local-ux-audit.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  signed-in-local:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Prepare local-only database and browser tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npm install --prefix "$RUNNER_TEMP/spine-ui-audit" --no-package-lock --no-save --ignore-scripts playwright@1.58.2
+          if command -v google-chrome >/dev/null 2>&1; then
+            echo "CHROME_BIN=$(command -v google-chrome)" >> "$GITHUB_ENV"
+          else
+            node "$RUNNER_TEMP/spine-ui-audit/node_modules/playwright/cli.js" install chromium
+          fi
+          echo "PW_MODULE=$RUNNER_TEMP/spine-ui-audit/node_modules/playwright/index.mjs" >> "$GITHUB_ENV"
+          npm run db:local
+          HASH1=$(node -e "console.log(require('node:crypto').createHash('sha256').update('novice-ui-local-only-token').digest('hex'))")
+          HASH2=$(node -e "console.log(require('node:crypto').createHash('sha256').update('peer-ui-local-only-token').digest('hex'))")
+          SQL="INSERT INTO users(id,nickname) VALUES ('qa-novice-ui','Novice Visitor'),('qa-peer-ui','Friendly Peer'); INSERT INTO user_sessions(id,user_id,token_hash,expires_at) VALUES ('qa-session-novice','qa-novice-ui','$HASH1',2147483647),('qa-session-peer','qa-peer-ui','$HASH2',2147483647);"
+          node_modules/.bin/wrangler d1 execute DB --local --config wrangler.local.jsonc --command "$SQL"
+      - name: Start isolated local Worker and verify health
+        shell: bash
+        run: |
+          set -euo pipefail
+          node_modules/.bin/wrangler dev --config wrangler.local.jsonc --ip 127.0.0.1 --port 8787 > "$RUNNER_TEMP/spine-local-worker.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/spine-local-worker.pid"
+          for i in $(seq 1 45); do
+            if curl -fsS 'http://127.0.0.1:8787/api/health' > "$RUNNER_TEMP/spine-local-health.json" 2>/dev/null; then
+              cat "$RUNNER_TEMP/spine-local-health.json"
+              exit 0
+            fi
+            sleep 2
+          done
+          tail -100 "$RUNNER_TEMP/spine-local-worker.log"
+          exit 1
+      - name: Test full signed-in journey against isolated local database
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          const {chromium}=await import(process.env.PW_MODULE);
+          const BASE='http://127.0.0.1:8787';
+          const browser=await chromium.launch({headless:true,...(process.env.CHROME_BIN?{executablePath:process.env.CHROME_BIN}:{}),args:['--no-sandbox']});
+          const outcomes=[],errors=[];
+          const step=async(name,fn)=>{
+            try{const detail=await fn();outcomes.push({name,pass:true,detail:String(detail??'')});console.log('PASS',name,detail??'');}
+            catch(e){outcomes.push({name,pass:false,detail:String(e.message||e)});console.log('FAIL',name,String(e.stack||e).slice(0,1200));}
+          };
+          const newVisitor=async(token)=>{
+            const c=await browser.newContext({viewport:{width:1280,height:800},locale:'en-US'});
+            await c.addCookies([{name:'sc_session',value:token,url:BASE}]);
+            return c;
+          };
+          const user=await newVisitor('novice-ui-local-only-token');
+          const page=await user.newPage();page.setDefaultTimeout(16000);
+          page.on('pageerror',e=>errors.push(e.message));
+          let postURL='';
+          await step('Simulated logged-in visitor appears as member',async()=>{
+            const r=await page.goto(BASE+'/',{waitUntil:'domcontentloaded'});
+            assert.equal(r.status(),200);
+            await page.locator('#account-actions .nickname').waitFor();
+            assert.match(await page.locator('#account-actions .nickname').innerText(),/Novice Visitor/);
+            return 'session accepted by Worker/D1, no Google credentials used';
+          });
+          await step('Create a topic with normal UI',async()=>{
+            await page.locator('[data-action="compose"]').first().click();
+            await page.locator('#compose-form input[name="title"]').fill('Novice browser QA - first recovery diary');
+            await page.locator('#compose-form textarea[name="body"]').fill('I am testing how easy it is to post a first recovery experience.');
+            await page.locator('#compose-form button[type="submit"]').click();
+            await page.waitForURL(/\/topic\/[A-Za-z0-9_-]+/,{timeout:20000});
+            await page.locator('#main h1.article-title').waitFor();
+            assert.match(await page.locator('#main h1.article-title').innerText(),/Novice browser QA/);
+            postURL=new URL(page.url()).pathname;
+            return postURL;
+          });
+          await step('Post a root reply and see local update without page reload',async()=>{
+            await page.locator('#root-reply textarea[name="body"]').fill('My first reply as a new member.');
+            await page.locator('#root-reply button[type="submit"]').click();
+            await page.locator('#comments .comment').filter({hasText:'My first reply as a new member.'}).waitFor({timeout:16000});
+            return 'root comment inserted immediately';
+          });
+          await step('Write a nested reply in modal',async()=>{
+            await page.locator('#comments .comment [data-action="reply"]').first().click();
+            await page.locator('#modal[open] #reply-form textarea[name="body"]').fill('My nested reply to the first comment.');
+            await page.locator('#modal #reply-form button[type="submit"]').click();
+            await page.locator('#comments .comment').filter({hasText:'My nested reply to the first comment.'}).waitFor({timeout:16000});
+            return 'nested reply rendered';
+          });
+          await step('Like and unlike topic via UI',async()=>{
+            const btn=page.locator('#main button[data-action="like"][data-type="topic"]').first();
+            await btn.click();await page.waitForFunction(()=>document.querySelector('button[data-action="like"][data-type="topic"]')?.getAttribute('aria-pressed')==='true');
+            await btn.click();await page.waitForFunction(()=>document.querySelector('button[data-action="like"][data-type="topic"]')?.getAttribute('aria-pressed')==='false');
+          });
+          await step('Bookmark topic and find it in My Space',async()=>{
+            await page.locator('#main button[data-action="bookmark"]').first().click();
+            await page.waitForFunction(()=>document.querySelector('button[data-action="bookmark"]')?.getAttribute('aria-pressed')==='true');
+            await page.locator('#sidebar a[href="/me"]').click();
+            await page.locator('#main a[href="/me?kind=bookmarks"]').click();
+            await page.locator('#my-content article.topic-card').filter({hasText:'Novice browser QA'}).first().waitFor();
+            return 'bookmarks list contains test topic';
+          });
+          await step('Profile settings can update nickname',async()=>{
+            await page.locator('#main a[href="/me?kind=settings"]').click();
+            await page.locator('#profile-form input[name="nickname"]').fill('Novice Updated');
+            await page.locator('#profile-form button[type="submit"]').click();
+            await page.waitForFunction(()=>document.querySelector('#account-actions .nickname')?.textContent==='Novice Updated',{timeout:16000});
+            return 'updated display name shown';
+          });
+          await step('Peer replies and member receives notification',async()=>{
+            assert(postURL,'missing created topic URL');
+            const peer=await newVisitor('peer-ui-local-only-token');
+            const peerPage=await peer.newPage();peerPage.setDefaultTimeout(16000);
+            try{
+              await peerPage.goto(BASE+'/');
+              await peerPage.locator('#account-actions .nickname').waitFor();
+              // Click from home to preserve local SPA navigation without relying on any production D1.
+              await peerPage.locator('#feed article.topic-card a[href="'+postURL+'"]').first().click();
+              await peerPage.locator('#root-reply textarea[name="body"]').fill('Friendly peer test response.');
+              await peerPage.locator('#root-reply button[type="submit"]').click();
+              await peerPage.locator('#comments .comment').filter({hasText:'Friendly peer test response.'}).waitFor();
+            }finally{await peer.close();}
+            await page.locator('#account-actions a[href="/notifications"]').click();
+            await page.locator('#main .notification').first().waitFor({timeout:16000});
+            return 'author receives peer reply notification';
+          });
+          await step('Search discovers own published topic',async()=>{
+            await page.locator('#sidebar a[href="/search"]').click();
+            await page.locator('#search-form input[name="q"]').fill('Novice browser QA');
+            await page.locator('#search-form button[type="submit"]').click();
+            await page.locator('#feed article.topic-card').filter({hasText:'Novice browser QA'}).first().waitFor({timeout:16000});
+          });
+          await step('Logout removes session from visible UI',async()=>{
+            await page.locator('#account-actions details.account-menu summary').click();
+            await page.locator('#account-actions [data-action="logout"]').click();
+            await page.waitForFunction(()=>!!document.querySelector('#account-actions button[data-action="login"]'),{timeout:16000});
+            return 'account menu replaced by login button';
+          });
+          await step('No uncaught browser JavaScript exceptions',async()=>{assert.deepEqual(errors,[]);});
+          await user.close();await browser.close();
+          console.log('SIGNED_IN_LOCAL_AUDIT_SUMMARY',JSON.stringify({passed:outcomes.filter(x=>x.pass).length,total:outcomes.length,outcomes}));
+          if(outcomes.some(x=>!x.pass))process.exitCode=1;
+          JS
+      - name: Display local Worker log when a step fails
+        if: failure()
+        shell: bash
+        run: |
+          tail -120 "$RUNNER_TEMP/spine-local-worker.log" || true
