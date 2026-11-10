@@ -1,0 +1,51 @@
+name: Production public language inventory (GET-only)
+on:
+  push:
+    branches: [feature/v1-community-build-20261106]
+    paths: [.github/workflows/production-public-language-inventory.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  public-inventory:
+    if: github.repository == '119shenhao/spine-community' && github.ref == 'refs/heads/feature/v1-community-build-20261106'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Read only publicly published topic language metadata
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          const base='https://spine.nbn369.com';
+          let offset=0,pages=0,count=0;
+          const lang={},mode={},unknown=[];
+          let priorCount=-1;
+          while(pages<500){
+            const url=base+'/api/topics?sort=latest&offset='+offset;
+            const response=await fetch(url,{method:'GET',redirect:'error',signal:AbortSignal.timeout(15000),
+              headers:{'cache-control':'no-cache','user-agent':'Spine-ReadOnly-Language-Inventory/1.0'}});
+            assert.equal(response.status,200,'Public listing is unavailable');
+            const result=await response.json();
+            assert(Array.isArray(result.topics),'Missing public topics');
+            if(!result.topics.length){assert(result.next===null);break;}
+            for(const row of result.topics){
+              assert.equal(row.status,'published','Private topic unexpectedly listed');
+              const language=String(row.source_lang||'und');
+              const provenance=String(row.source_lang_mode||'(null)');
+              lang[language]=(lang[language]||0)+1;
+              mode[provenance]=(mode[provenance]||0)+1;
+              count++;
+            }
+            pages++;
+            if(result.next===null)break;
+            assert(Number.isInteger(result.next)&&result.next>offset&&result.next<=10000);
+            assert(result.next!==priorCount,'Pagination not advancing');
+            priorCount=result.next;offset=result.next;
+          }
+          const published={pages,topics:count,languages:lang,source_modes:mode,unknown_language:lang.und||0,
+            note:'Public published topic list only; no proof table, hidden content or reply inventory; GET-only; no database writes.'};
+          console.log('PRODUCTION_PUBLIC_LANGUAGE_INVENTORY',JSON.stringify(published));
+          assert(pages>0&&count>0,'No public topics were readable');
+          JS
