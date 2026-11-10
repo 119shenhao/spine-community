@@ -2905,3 +2905,19 @@ test('preview historical backfill retains und when unverified and never overwrit
  assert.equal((await call('/api/admin/historical-language-backfill?type=topic','GET',undefined,'admin')).status,403);
  assert.equal((await call('/api/admin/historical-language-backfill','POST',{type:'topic',preview_confirm:'spine-community-db-preview'},'admin')).status,403);
 });
+
+
+test('production fastText audit uses public GET only and never exposes a D1 edit token',()=>{
+ const code=readFileSync('scripts/audit-production-language-fasttext.mjs','utf8');
+ const workflow=readFileSync('.github/workflows/production-source-language-fasttext-readonly.yml','utf8');
+ const cli=readFileSync('scripts/fasttext-language-audit.py','utf8');
+ assert.match(code,/published_GET_only/);
+ assert.match(code,/source-language/);
+ assert.doesNotMatch(code,/CLOUDFLARE_PROD_D1_API_TOKEN|\/query|Bearer\s|db\.prepare/);
+ assert.doesNotMatch(workflow,/CLOUDFLARE_PROD_D1_API_TOKEN|secrets\./);
+ assert.match(workflow,/sha256sum -c/);
+ assert.match(cli,/--self-test/);
+ assert.doesNotMatch(cli,/print\(text\)|print\(data\)/);
+ const syntax=spawnSync(process.execPath,['--check','scripts/audit-production-language-fasttext.mjs'],{encoding:'utf8'});
+ assert.equal(syntax.status,0,syntax.stderr);
+});
