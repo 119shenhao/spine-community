@@ -2460,3 +2460,13 @@ test('separate locale CDN pages keep 19 cached translations when replies grow 19
  assert.equal(localized.items.find(x=>x.id==='split-reply-8').body,'已修改的中文译文 8');
  assert.equal(localized.items.length,19);
 });
+
+test('topic detail reply opens login/composer instead of re-navigating the same topic',()=>{
+ const app=readFileSync('public/app.js','utf8');
+ assert.match(app,/function actions\(c,type='topic',inDetail=false\)/);
+ assert.match(app,/type==='topic'\?\(inDetail\?`<button[^\`]+data-action="reply"/);
+ assert.match(app,/\$\{translationShell\('topic',c\)\}\$\{actions\(c,'topic',true\)\}/);
+ assert.match(app,/if\(action==='reply'\)return replyModal\(/);
+ assert.match(app,/function replyModal\([^\n]+if\(!needUser\(\)\)return/);
+ assert.match(app,/function needUser\(\)\{if\(state.user\)return true;showLogin\(\);return false;\}/);
+});
