@@ -225,6 +225,29 @@ jobs:
                   print(f"\n- {label}: {', '.join(values) or '(none)'}", file=summary)
               if blocking_reason:
                   print(f"\n**Migration blocked:** {blocking_reason}", file=summary)
+          # Read-only, narrow diagnostic: only non-secret translation feature flags
+          # and aggregate cache/budget state. No post content or user records.
+          if os.environ["OPERATION"] == "inspect" and "settings" in tables:
+              flags = {r["key"]: r["value"] for r in query(
+                  "SELECT key,value FROM settings WHERE key IN "
+                  "('translation_enabled','translation_active_provider',"
+                  "'translation_azure_daily_limit','translation_azure_monthly_limit')")}
+              cache_counts = {}
+              for table in ("topic_translations", "comment_translations"):
+                  if table in tables:
+                      cache_counts[table] = query(f"SELECT COUNT(*) AS n FROM {table}")[0]["n"]
+              budget = (query("SELECT day_utc,month_utc,day_chars,month_chars,"
+                  "cooldown_until,provider_blocked_at FROM translation_budget WHERE id=1")
+                  if "translation_budget" in tables else [])
+              diagnostic = {"settings": flags, "cached_rows": cache_counts, "budget": budget}
+              print("Production translation diagnostic (read-only): " + json.dumps(diagnostic, sort_keys=True))
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+                  print("\\n### Translation configuration (read-only)\\n", file=summary)
+                  print("Generated from production D1; no content or secrets read.", file=summary)
+                  print("\\n```json", file=summary)
+                  print(json.dumps(diagnostic, sort_keys=True, indent=2), file=summary)
+                  print("```", file=summary)
+
           if blocking_reason and os.environ["OPERATION"] == "apply":
               raise SystemExit(blocking_reason)
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
