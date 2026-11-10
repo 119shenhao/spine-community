@@ -149,7 +149,7 @@ export function buildInserts(topic,comments,terms,hash){
   if(choice.method)lines.push('INSERT OR IGNORE INTO content_language_verifications(content_type,content_id,content_version,language,method,score) VALUES('+
    ['comment',c.id,1,choice.label,choice.method,choice.score].map(sqlValue).join(',')+');');
  }
- return lines.join('\\n')+'\\n';
+ return lines.join('\n')+'\n';
 }
 function verifyComments(id,comments){
  const expected=new Set(comments.map(c=>c.id));
