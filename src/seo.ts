@@ -65,7 +65,7 @@ async function sitemap(req:Request,env:Env,path:string):Promise<Response> {
  if(index>Math.ceil(Number(count?.n||0)/TOPICS_PER_SITEMAP))return forbiddenPage(req,env);
  const rows=await all(env.DB,"SELECT id,updated_at,created_at FROM topics WHERE status='published' ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?",TOPICS_PER_SITEMAP,(index-1)*TOPICS_PER_SITEMAP);
  if(!rows.length)return forbiddenPage(req,env);
- return xmlResponse(req,env,pageXml(rows));
+ return xmlResponse(req,env,pageXml(rows,index===1));
 }
 function renderPostBody(body:string):string {
  return body.split(/\r?\n{2,}/).map(part=>'<p>'+escapeHtml(part).replace(/\r?\n/g,'<br>')+'</p>').join('\n');
