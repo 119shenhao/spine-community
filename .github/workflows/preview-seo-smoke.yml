@@ -61,3 +61,41 @@ jobs:
           }
           assert(verified,'SEO preview smoke failed after waiting for deployment');
           JS
+
+  production-sitemap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Probe production sitemap crawlability (read-only, no data writes)
+        run: |
+          node --input-type=module <<'JS'
+          import {lookup} from 'node:dns/promises';
+          import assert from 'node:assert/strict';
+          const hosts=['spine.nbn369.com','spine-community.119shenhao.workers.dev'];
+          for(const host of hosts){
+            try {
+              const ip=await lookup(host);
+              console.log('Host DNS',host,ip.address);
+            }catch(e){console.log('Host DNS ERROR',host,String(e.code||e.message));}
+            for(const path of ['/robots.txt','/sitemap.xml','/api/health']){
+              try{
+                const r=await fetch('https://'+host+path,{redirect:'manual',signal:AbortSignal.timeout(12000),headers:{'cache-control':'no-cache'}});
+                const body=await r.text();
+                console.log(host+path,'HTTP',r.status,'type',r.headers.get('content-type'),'location',r.headers.get('location'),'length',body.length,'start',body.slice(0,220).replace(/\s+/g,' '));
+                if(host===hosts[0]&&path==='/sitemap.xml'){
+                  assert.equal(r.status,200);
+                  assert.match(r.headers.get('content-type')||'',/xml/);
+                  assert.match(body,/<(?:urlset|sitemapindex)\b/);
+                  assert.doesNotMatch(r.headers.get('x-robots-tag')||'',/noindex/);
+                }
+                if(host===hosts[0]&&path==='/robots.txt'){
+                  assert.equal(r.status,200);
+                  assert.match(body,/Sitemap:\s+https:\/\/spine\.nbn369\.com\/sitemap\.xml/);
+                }
+              }catch(e){
+                console.log('PROBE ERROR',host+path,String(e.message));
+                if(host===hosts[0])process.exitCode=1;
+              }
+            }
+          }
+          JS
