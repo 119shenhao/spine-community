@@ -1,6 +1,6 @@
 // Administrator-only language evidence review, with versioned manual corrections.
 // Never expose this to public or moderator users; server separately checks role.
-export async function renderLanguageReview(target,api,esc,locale) {
+export async function renderLanguageReview(target,api,esc,locale,preview=false) {
  const zh=locale==='zh-CN'||locale==='zh-TW';
  const t=(cn,en)=>zh?cn:en;
  const {items=[]}=await api('/api/admin/language-review');
@@ -25,7 +25,18 @@ export async function renderLanguageReview(target,api,esc,locale) {
    </form>
   </div>`;
  }).join('');
- target.innerHTML=`<h2>${t('原文语言核对','Source-language review')}</h2>
+ const backfill=preview?`<section class="admin-row">
+  <h3>${t('历史原文语言自动处理（仅开发预览）','Historical language backfill (preview only)')}</h3>
+  <p class="subtle">${t('先读取候选，再自动处理最多20条：可信语言会验证，不确定语言保留合法旧值或暂用英文，继续等待人工复核。','Inspect suggestions first, then process up to 20 items. Uncertain languages remain provisional and await manual review.')}</p>
+  <div class="form-actions">
+   <button class="button" type="button" data-action="historical-language-scan" data-type="topic">${t('预览主帖建议','Preview topic suggestions')}</button>
+   <button class="button primary" type="button" data-action="historical-language-apply" data-type="topic">${t('自动处理下一批主帖','Process next topic batch')}</button>
+   <button class="button" type="button" data-action="historical-language-scan" data-type="comment">${t('预览回复建议','Preview reply suggestions')}</button>
+   <button class="button primary" type="button" data-action="historical-language-apply" data-type="comment">${t('自动处理下一批回复','Process next reply batch')}</button>
+  </div>
+  <p id="historical-language-status" class="subtle" role="status" aria-live="polite"></p>
+ </section>`:'';
+ target.innerHTML=`${backfill}<h2>${t('原文语言核对','Source-language review')}</h2>
   <p class="subtle">${t('仅列出最近100条尚未确认语言的内容。纠正会使译文缓存失效，并按需刷新 CDN 原文。','Shows up to 100 recent unverified items. Corrections invalidate old translations and queue original CDN refresh.')}</p>
   ${rows||`<p class="subtle">${t('暂无待处理内容','No unresolved items')}</p>`}`;
 }
