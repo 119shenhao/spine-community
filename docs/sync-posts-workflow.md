@@ -1,5 +1,20 @@
 # 固定任务：同步帖子，从开发环境到生产环境
 
+## 当前生效：新版语言校验同步已完成生产验收（2026-11-11，北京时间）
+
+本节覆盖下方旧状态及旧作业入口。**不要重跑旧语言未校验版本的同步作业，也不要把旧 inspect 运行的成功当作新版验收。**
+
+- 现有 `main/.github/workflows/sync-posts.yml` 已通过 [PR #22](https://github.com/119shenhao/spine-community/pull/22) 受控升级，锁定实现 SHA：`f529f3b3ac913a409577de96a68c56f0811b7e8b`；未重写同步脚本或工作流。
+- 新版只读验收：[运行 #42913429987](https://github.com/119shenhao/spine-community/actions/runs/42913429987)，**Success**；实际 checkout 为上述锁定 SHA，Node 测试 **124/124** 通过，预检查 examined=82、new=82、existing=0、comments=360、marked=0，无生产写入。
+- 用户明确授权并手动派发的新版正式同步：[运行 #42914905237](https://github.com/119shenhao/spine-community/actions/runs/42914905237)，作业 ID **130174740986**，**Success**；北京时间 2026-11-11 06:45 完成。实际 mode=sync，确认字段为精确的生产 D1 名称，124/124 测试、只读预检查、生产 Time Travel 恢复点步骤全部通过。
+- 正式日志第一批：`examined=82,new=82,existing=0,comments=360,marked=82`；第二批：`examined=0,new=0,existing=0,comments=0,marked=0`。因此确认本轮新增 **82 篇主帖、360 条回复、82 条源端回执**，本轮结束时符合条件的待同步主帖为 **0**。
+- 写入后沿用脚本对正文、作者映射、回复父子关系、原文语言模式和适用的当前版本语言证明进行回读校验，成功后才写回执。已有回执的主帖永久跳过；已有生产指纹不补回复；生产端人工语言修正不覆盖。没有执行历史语言修复、结构迁移或发布新版本。
+- **今后 ChatGPT 的默认入口：**先核对本文、工作流和锁定实现是否有变化及本次授权，再用 GitHub 连接器 `rerun_workflow_job` 重跑已验证的新版同步作业 **130174740986**（运行 **42914905237**），无需用户每次点击 Run workflow。重跑使用远程 D1 当前的无回执队列，不会重播旧帖子。触发接受不代表完成，仍需检查实际最新 attempt 的作业及日志，核对每批 `marked=examined` 和最终 `examined=0`。
+- 若版本升级、权限变化、GitHub 重跑期限/限制导致该入口不可用，应说明实际阻碍并重新完成受控验收，不能回退重跑旧 SHA。连接器当前没有首次 `workflow_dispatch` 派发工具；本次用户手动启动的是新版首次正式同步，并不表示以后每次都需手动启动。
+- 一个失败的 sync [#42914673637](https://github.com/119shenhao/spine-community/actions/runs/42914673637) 因 confirmation 前导空格在第一道检查处退出，所有数据步骤均跳过；不要重跑这个参数错误的记录。后续以成功的 **42914905237** 为准。
+
+## 以下为历史流程与验收演进记录
+
 > **固定名称（2026-11-07 用户确认）：同步帖子，从开发环境到生产环境**
 > 与 [发布新版本，从开发环境到生产环境](release-version-workflow.md) **严格区分**：本任务只同步论坛内容，不发布程序代码、数据库结构或系统基础数据。
 > 任务实现状态：重复执行工作流已经通过 [PR #4](https://github.com/119shenhao/spine-community/pull/4) 合并到 `main`；Cloudflare 构建排除路径 `.github/workflows/sync-posts.yml` 已由用户配置并提供截图。**在 ChatGPT 中执行本任务不要求用户每次打开 GitHub 点击 Run workflow：优先使用已连接的 GitHub 工具重跑上次成功的同步作业。**
