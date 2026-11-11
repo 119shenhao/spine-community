@@ -2921,3 +2921,68 @@ test('production fastText audit uses public GET only and never exposes a D1 edit
  const syntax=spawnSync(process.execPath,['--check','scripts/audit-production-language-fasttext.mjs'],{encoding:'utf8'});
  assert.equal(syntax.status,0,syntax.stderr);
 });
+
+
+test('content statistics separate imports and frontend replies, count nested replies once and enforce roles',async()=>{
+ const {imp,call,topic,DB}=await importFixture();
+ const payload={title:'Imported statistics fixture',body:'Fictional back recovery story',comments:[{body:'Root reply',replies:[{body:'Child one'},{body:'Child two'},{body:'Child three'}]}]};
+ const imported=await imp('/api/import/topics',payload);assert.equal(imported.status,201);
+ const tid=imported.data.results[0].id;
+ await imp('/api/import/topics',payload); // replay must not create another origin
+ await topic('Frontend statistics fixture','A fictional user story');
+ await call('/api/topics/'+tid+'/comments','POST',{body:'User reply on imported thread'},'bob');
+ // Names have no bearing on origin, including a real user named Anonymous.
+ DB.db.exec("UPDATE users SET nickname='Anonymous' WHERE id='bob'; UPDATE users SET nickname='Renamed import account' WHERE id='system-unknown-import'");
+ const a=(await call('/api/admin/overview?days=7','GET',undefined,'admin')).data;
+ assert.deepEqual(a.contentTotals,{topics:2,comments:5,imported_topics:1,imported_comments:4,user_topics:1,user_comments:1,unknown_topics:0,unknown_comments:0});
+ assert.equal(a.metrics[0].imported_topics,1);assert.equal(a.metrics[0].imported_comments,4);
+ assert.equal(a.metrics[0].user_topics,1);assert.equal(a.metrics[0].user_comments,1);
+ assert.deepEqual((await call('/api/admin/overview?days=30','GET',undefined,'mod')).data.contentTotals,a.contentTotals);
+ assert.equal((await call('/api/admin/overview','GET',undefined,null)).status,401);
+ assert.equal((await call('/api/admin/overview','GET',undefined,'alice')).status,403);
+ const parent=imported.data.results.find(r=>r.type==='comment').id;
+ await call('/api/admin/content','POST',{type:'comment',id:parent,action:'delete',reason:'Fixture deletion'},'admin');
+ assert.equal((await call('/api/admin/overview','GET',undefined,'admin')).data.contentTotals.imported_comments,3);
+ await call('/api/admin/content','POST',{type:'topic',id:tid,action:'hide',reason:'Fixture hiding'},'admin');
+ const hidden=(await call('/api/admin/overview','GET',undefined,'admin')).data.contentTotals;
+ assert.equal(hidden.topics,1);assert.equal(hidden.comments,0);
+ await call('/api/admin/content','POST',{type:'topic',id:tid,action:'publish',reason:'Fixture restore'},'admin');
+ assert.equal((await call('/api/admin/overview','GET',undefined,'admin')).data.contentTotals.comments,4);
+ // New counts describe first entry, unaffected by deletion, edits or moderation.
+ assert.equal((await call('/api/admin/overview','GET',undefined,'admin')).data.metrics[0].new_comments,5);
+});
+
+test('unchanged SQL sync writer is counted at local entry time and retry is idempotent',async()=>{
+ const {DB,call}=await fixture();
+ const insert="INSERT OR IGNORE INTO topics(id,author_id,title,body,status,created_at) VALUES('sync-fixture','system-unknown-import','Fictional synced topic','Fictional synced body','published',1000000)";
+ DB.db.exec(insert);DB.db.exec(insert);
+ DB.db.exec("INSERT INTO comments(id,topic_id,author_id,body,status,created_at) VALUES('sync-reply','sync-fixture','system-unknown-import','Synced reply','published',1000000)");
+ const origin=DB.db.prepare("SELECT * FROM content_origins WHERE content_id='sync-fixture'").get();
+ assert.equal(origin.source,'imported');assert(origin.entered_at>=now()-10);
+ const a=(await call('/api/admin/overview','GET',undefined,'admin')).data;
+ assert.equal(a.contentTotals.imported_topics,1);assert.equal(a.metrics[0].imported_topics,1);assert.equal(a.metrics[0].imported_comments,1);
+ DB.db.exec("UPDATE topics SET title='Edited synced title' WHERE id='sync-fixture'");
+ assert.equal(DB.db.prepare("SELECT entered_at FROM content_origins WHERE content_id='sync-fixture'").get().entered_at,origin.entered_at);
+});
+
+test('origin migration backfills stable writer evidence, skips duplicate receipts and preserves unknown dates',()=>{
+ const db=new DatabaseSync(':memory:');db.exec('PRAGMA foreign_keys=ON');
+ for(const file of readdirSync('migrations/v1').filter(f=>f.endsWith('.sql')&&!f.startsWith('0014')).sort())db.exec(readFileSync('migrations/v1/'+file,'utf8'));
+ db.exec("INSERT INTO users(id,nickname) VALUES('legacy-user','Anonymous'); INSERT INTO topics(id,author_id,title,body,status,created_at) VALUES('legacy-web','legacy-user','Web fixture','Fictional body','published',1000000),('legacy-sync','system-unknown-import','Sync fixture','Fictional body','published',1000000),('legacy-import','system-unknown-import','Import fixture','Fictional body','published',1000000)");
+ db.prepare('INSERT INTO import_batches(request_hash,result_json,created_at) VALUES(?,?,?)').run('batch',JSON.stringify({results:[{type:'topic',id:'legacy-import'},{type:'topic',id:'legacy-sync',skipped:true}]}),2000000);
+ db.exec(readFileSync('migrations/v1/0014_content_origin_statistics.sql','utf8'));
+ const origin=id=>db.prepare('SELECT * FROM content_origins WHERE content_id=?').get(id);
+ assert.equal(origin('legacy-web').source,'user');assert.equal(origin('legacy-web').entered_at,1000000);
+ assert.equal(origin('legacy-import').source,'imported');assert.equal(origin('legacy-import').entered_at,2000000);
+ assert.equal(origin('legacy-sync').source,'imported');assert.equal(origin('legacy-sync').entered_at,null);
+ assert.equal(db.prepare('PRAGMA foreign_key_check').all().length,0);db.close();
+});
+
+test('statistics UI presents all six counts with separate period labels in every language',async()=>{
+ const {renderContentStats}=await import('../public/content-stats-ui.js');
+ const {dictionaries}=await import('../public/i18n.js');
+ for(const d of Object.values(dictionaries))for(const key of ['importedContent','userContent','allContent','currentContent','periodContent','periodTopics','periodComments','topicCount','commentCount','unknownSource','undatedContent','contentCountNote'])assert(d[key],key);
+ const html=renderContentStats({contentTotals:{topics:41,comments:42,imported_topics:11,imported_comments:12,user_topics:30,user_comments:30},contentUndated:{topics:0,comments:0},metrics:[]},k=>dictionaries['zh-CN'][k],String);
+ for(const n of [41,42,11,12,30])assert(html.includes('>'+n+'</td>'));
+ assert(!html.includes('我的帖子'));assert(html.includes('期间新增帖子'));
+});

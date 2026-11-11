@@ -1,5 +1,19 @@
 /** Shared Traditional Chinese interface for Taiwan, Hong Kong and Macau. */
 export const traditionalChinese = {
+contentSource:"來源",
+importedContent:"匯入內容",
+userContent:"使用者前台發布",
+allContent:"全站總量",
+currentContent:"目前已發布內容",
+periodContent:"期間新增內容（UTC）",
+periodTopics:"期間新增貼文",
+periodComments:"期間新增留言",
+topicCount:"貼文數",
+commentCount:"留言數",
+unknownSource:"來源待核實",
+undatedContent:"本環境入庫日期待核實的歷史記錄（貼文／留言）；包含在目前總量，不計入期間新增",
+contentCountNote:"僅統計目前公開內容；樓中樓逐條計數。切換期間不影響目前總量。",
+
   "preview": "開發環境",
   "home": "全部討論",
   "search": "尋找相似經歷",
@@ -163,3 +177,4 @@ export const traditionalChinese = {
   "analyticsSetup": "流量統計尚未設定。",
   "privacyText": "此開發預覽僅供虛構測試資料使用。公開貼文與回覆可由任何人閱讀，請使用暱稱。內容刪除後，正文會從公開頁面、譯文及搜尋結果中移除，但可能保留佔位以維持其他使用者的回覆。Google 僅用於登入。內容翻譯會保持停用，直到翻譯服務及隱私條款設定完成。圖片上傳、電子郵件通知及付費服務目前均未開放。你可以在帳號頁面申請資料匯出或刪除。正式公開前仍需完成隱私政策及資料保留規範。"
 };
+

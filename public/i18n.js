@@ -1,6 +1,20 @@
 import {traditionalChinese} from './i18n-zh-tw.js';
 export const languages=['en','zh-CN','zh-TW','es','pt-BR','de','fr','ja'];
 const rows={
+contentSource:["Source", "来源", "Origen", "Origem", "Quelle", "Source", "投稿元"],
+importedContent:["Imported content", "导入内容", "Contenido importado", "Conteúdo importado", "Importierte Inhalte", "Contenu importé", "インポート"],
+userContent:["User posts", "用户前台发布", "Publicaciones de usuarios", "Publicações de usuários", "Nutzerbeiträge", "Publications des utilisateurs", "ユーザー投稿"],
+allContent:["Site total", "全站总量", "Total del sitio", "Total do site", "Gesamt", "Total du site", "サイト合計"],
+currentContent:["Current published content", "当前已发布内容", "Contenido publicado actual", "Conteúdo publicado atual", "Aktuell veröffentlichte Inhalte", "Contenu actuellement publié", "現在の公開コンテンツ"],
+periodContent:["New content in selected period (UTC)", "期间新增内容（UTC）", "Contenido nuevo del período (UTC)", "Novo conteúdo no período (UTC)", "Neue Inhalte im Zeitraum (UTC)", "Nouveau contenu de la période (UTC)", "期間内の新規投稿（UTC）"],
+periodTopics:["New topics in period", "期间新增帖子", "Temas nuevos", "Novos tópicos", "Neue Themen", "Nouveaux sujets", "期間内の新規トピック"],
+periodComments:["New comments in period", "期间新增评论", "Comentarios nuevos", "Novos comentários", "Neue Kommentare", "Nouveaux commentaires", "期間内の新規コメント"],
+topicCount:["Topics", "帖子数", "Temas", "Tópicos", "Themen", "Sujets", "トピック数"],
+commentCount:["Comments", "评论数", "Comentarios", "Comentários", "Kommentare", "Commentaires", "コメント数"],
+unknownSource:["Source pending verification", "来源待核实", "Origen por verificar", "Origem a verificar", "Quelle ungeklärt", "Source à vérifier", "投稿元未確認"],
+undatedContent:["Historical records with unverified local entry dates (topics / comments); included in current totals, excluded from period counts", "本环境入库日期待核实的历史记录（帖子／评论）；包含在当前总量，不计入期间新增", "Registros sin fecha local verificada (temas / comentarios); solo en totales actuales", "Histórico sem data local confirmada (tópicos / comentários); apenas nos totais atuais", "Historische Einträge ohne bestätigtes Eingangsdatum (Themen / Kommentare); nur im Bestand", "Historique sans date locale vérifiée (sujets / commentaires) ; inclus uniquement dans les totaux actuels", "入庫日未確認の過去データ（トピック／コメント）：現在の合計に含み、期間集計から除外"],
+contentCountNote:["Published content only. Each nested reply counts once. Current totals do not change with the period filter.", "仅统计当前公开内容；楼中楼逐条计数。切换期间不影响当前总量。", "Solo contenido público. Cada respuesta cuenta una vez. El período no cambia los totales actuales.", "Apenas conteúdo público. Cada resposta conta uma vez. O período não altera o total atual.", "Nur öffentliche Inhalte. Jede Antwort zählt einmal. Der Zeitraum ändert den Bestand nicht.", "Contenu public uniquement. Chaque réponse compte une fois. La période ne modifie pas le total actuel.", "公開中の内容のみ。各返信を1件として集計。期間を変えても現在の合計は変わりません。"],
+
 preview:['Development preview','开发环境','Vista de desarrollo','Prévia de desenvolvimento','Entwicklungsvorschau','Aperçu de développement','開発プレビュー'],
 home:['All discussions','全部讨论','Todas las conversaciones','Todas as conversas','Alle Diskussionen','Toutes les discussions','すべての投稿'],
 search:['Find similar experiences','寻找相似经历','Buscar experiencias similares','Buscar experiências semelhantes','Ähnliche Erfahrungen finden','Trouver des expériences similaires','似た体験を探す'],
@@ -167,3 +181,4 @@ privacyText:['This development preview is for fictional test data. Public posts 
 const baseLanguages=['en','zh-CN','es','pt-BR','de','fr','ja'];
 export const dictionaries=Object.fromEntries(baseLanguages.map((l,i)=>[l,Object.fromEntries(Object.entries(rows).map(([k,v])=>[k,v[i]||v[0]]))]));
 dictionaries['zh-TW']=traditionalChinese;
+
