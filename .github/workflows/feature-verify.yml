@@ -30,7 +30,7 @@ jobs:
   production-assets:
     name: Production assets smoke check
     needs: verify
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.head_ref == 'release/spine-20261112-live-production-audit')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
