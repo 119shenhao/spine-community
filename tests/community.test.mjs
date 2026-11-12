@@ -3144,3 +3144,24 @@ test('legacy reply dates need a local nonduplicate collection window, not just a
  assert.equal(db.prepare("SELECT entered_at FROM content_origins WHERE content_id='within-window'").get().entered_at,200);
  db.close();
 });
+
+
+test('production release: personalized reading mode is accessible to guests and members',async()=>{
+ const app=readFileSync('public/app.js','utf8'),styles=readFileSync('public/styles.css','utf8');
+ assert.match(app,/function readingSettingsCard\(\)/);
+ assert.match(app,/data-action="reading-options"/);
+ assert.match(app,/readingSettingsCard\(\)\}\$\{empty\('login'/);
+ assert.match(app,/logout-link'\)\}<\/div>\$\{readingSettingsCard\(\)\}<nav class="tabs"/);
+ assert.match(styles,/data-reading-theme="warm"/);
+ assert.match(styles,/data-reading-size="large"/);
+ assert.match(styles,/\.topic-card p\.summary\{/);
+ const {loadReadingPreferences,saveReadingPreferences,defaultReadingPreferences}=await import('../public/reading-preferences.js');
+ const store=new Map(),storage={getItem:key=>store.get(key),setItem:(key,val)=>store.set(key,val)};
+ const root={dataset:{}};
+ assert.deepEqual(loadReadingPreferences(storage),defaultReadingPreferences);
+ saveReadingPreferences(storage,root,{theme:'warm',size:'large'});
+ assert.equal(root.dataset.readingTheme,'warm');
+ assert.equal(root.dataset.readingSize,'large');
+ assert.deepEqual(loadReadingPreferences(storage),{theme:'warm',size:'large'});
+ assert.deepEqual(loadReadingPreferences({getItem:()=>'{oops'}),defaultReadingPreferences);
+});

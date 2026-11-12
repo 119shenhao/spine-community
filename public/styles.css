@@ -130,3 +130,86 @@ dialog #modal-content {
     max-height:5.4em;
   }
 }
+
+
+/* Readability: keep the existing page layout, upgrade contrast and reading sizes.
+   WCAG text contrast is checked against both standard and warm backgrounds. */
+:root {
+  --reading-body-size:17px;
+  --reading-summary-size:16px;
+  --reading-comment-size:16px;
+  --reading-title-size:22px;
+  --reading-support-size:13px;
+}
+:root[data-reading-theme="warm"] {
+  --ink:#263c37;
+  --muted:#475b54;
+  --paper:#fffcf4;
+  --bg:#f6f1e8;
+  --mint:#e8f0e6;
+  --border:#cad3c7;
+  --soft-coral:#fff0e6;
+}
+:root[data-reading-size="comfortable"] {
+  --reading-body-size:19px;
+  --reading-summary-size:18px;
+  --reading-comment-size:18px;
+  --reading-title-size:24px;
+  --reading-support-size:14px;
+}
+:root[data-reading-size="large"] {
+  --reading-body-size:21px;
+  --reading-summary-size:20px;
+  --reading-comment-size:20px;
+  --reading-title-size:26px;
+  --reading-support-size:15px;
+}
+.topic-card h3 {font-size:var(--reading-title-size)}
+.topic-card .summary {font-size:var(--reading-summary-size);line-height:1.75}
+.prose {font-size:var(--reading-body-size);line-height:1.85}
+.comment .prose {font-size:var(--reading-comment-size)}
+.topic-meta,.subtle,.text-action,.tag,.translation-note,.translation-note button,
+.rail-panel p,.rail-line,.notification small,.form-grid small,.status,
+.sidebar-note,.admin-row,.back-link,.notice,.empty p,.button.small,.tabs .button {
+  font-size:var(--reading-support-size);
+}
+.sidebar-label,.rail-caption,.preview-badge {font-size:12px}
+.nav-link {color:var(--muted)}
+.hero p {font-size:15px}
+.hero-subnote {font-size:12px}
+.search-field>input,.form-grid input,.form-grid textarea,.form-grid select {font-size:16px}
+:root[data-reading-size="comfortable"] .search-field>input,
+:root[data-reading-size="comfortable"] .form-grid input,
+:root[data-reading-size="comfortable"] .form-grid textarea,
+:root[data-reading-size="comfortable"] .form-grid select {font-size:18px}
+:root[data-reading-size="large"] .search-field>input,
+:root[data-reading-size="large"] .form-grid input,
+:root[data-reading-size="large"] .form-grid textarea,
+:root[data-reading-size="large"] .form-grid select {font-size:20px}
+footer {font-size:13px}
+/* Prominent personal-center reading controls for both guests and members. */
+.reading-settings-summary {display:flex;align-items:center;justify-content:space-between;gap:18px}
+.reading-settings-summary h2 {margin:0;color:var(--ink);font-size:21px;line-height:1.4}
+.reading-settings-summary p {margin:6px 0 0;font-size:var(--reading-support-size);line-height:1.7}
+.reading-settings-summary .button {font-size:15px;min-height:44px;flex-shrink:0}
+@media(max-width:700px) {
+  .reading-settings-summary {flex-direction:column;align-items:stretch;gap:14px}
+  .reading-settings-summary .button {align-self:flex-start}
+}
+.reading-options-grid {display:grid;gap:16px;margin:18px 0}
+.reading-options {min-width:0;border:1px solid var(--border);border-radius:10px;padding:12px}
+.reading-options legend {font-weight:650;color:var(--ink);padding:0 6px}
+.reading-choice {
+  display:flex;align-items:center;gap:12px;min-height:44px;
+  padding:7px 10px;margin:3px 0;border-radius:7px;
+  background:var(--paper);color:var(--ink);font-size:16px;cursor:pointer;
+}
+.reading-choice:hover,.reading-choice:has(input:checked) {background:var(--mint)}
+.reading-choice input {width:18px;height:18px;flex-shrink:0;accent-color:var(--green)}
+.reading-choice:focus-within {outline:2px solid var(--green);outline-offset:2px}
+@media(max-width:700px) {
+  .sidebar .nav-link {font-size:12px}
+  .header-actions select {color:var(--muted)}
+  .hero p {font-size:15px}
+  footer {font-size:13px}
+}
