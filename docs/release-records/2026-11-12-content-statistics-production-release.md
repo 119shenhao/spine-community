@@ -19,7 +19,7 @@
 - 现有目标UUID、授权检查、恢复点和Wrangler迁移流程均保留；只读applied/pending/blocking_reason与聚合统计输出日志。
 - 对工作流中实际Python代码完成语法及有效/无效历史回归验证。工作流已在Cloudflare构建排除路径内，不发布网站代码。
 - 第一次只读inspect：[43126129877](https://github.com/119shenhao/spine-community/actions/runs/43126129877)，成功但旧版仅把迁移清单写Summary；未执行迁移。
-- 修复后的inspect：[43126451684](https://github.com/119shenhao/spine-community/actions/runs/43126451684)，正在核对实际最终结果。
+- 修复后的inspect：[43126451684](https://github.com/119shenhao/spine-community/actions/runs/43126451684)，实际成功，仅0014/0015待迁移，无阻断。
 
 ## 执行状态
 - 修复后生产inspect [43126451684](https://github.com/119shenhao/spine-community/actions/runs/43126451684) 成功：blocking_reason=null，仅0014/0015待执行。
@@ -28,7 +28,10 @@
 - 生产实际对账：导入732篇／3341条评论；用户前台1篇／5条评论；当前总量733篇／3346条评论。来源账本缺失0条，外键错误0条。
 - 生产历史导入的本环境入库日期缺少本地回执证据：732篇／3341条评论保留未知。它们计入当前总量，不计期间新增；不能沿用开发环境的64条未知日期数字。新导入/同步将由触发器记录本环境实际首次写入时间。
 - 发布PR23已合并，正式merge SHA `45f3e92649eb9e42246e362feefa2e4d305a8dc8`。
-- Cloudflare正式Build `579e8abc-50d2-4896-84a6-cfa3be8e4f04` 正在构建，部署后HTTP和资源版本验收待完成。此处不声明全部发布成功。
+- **发布完成**。Cloudflare正式Build `579e8abc-50d2-4896-84a6-cfa3be8e4f04` 为 completed/success；Version ID `bd77a078-d49d-4e0a-bca6-58eb34383c88`。
+- 线上HTTP实际核验：/api/health返回HTTP200、environment=production、status=ok、databaseReady=true、translationConfigured=true、analyticsEnabled=true。
+- 正式首页加载版本目录 `/_app/ce3902ce61e592d5`；该目录下app.js、content-stats-ui.js、i18n.js、i18n-zh-tw.js的实际内容Git blob SHA逐一与已审查的发布候选一致。robots.txt与sitemap.xml有效。
+- 本次未登录管理员进行远程交互，也未向生产写入虚构测试帖。数据库真实聚合、匿名权限拒绝、本地129项测试与线上部署/静态资源核验构成本次验收。用户可在正式站登录后打开「社区管理→社区统计」。
 
 ## 回滚与数据边界
 0014/0015是兼容式新增来源元数据，不改帖子正文/语言、不清理用户内容，不覆盖生产人工语言修正。若应用异常，优先回退Worker到发布前兼容版本；来源表与触发器可保留。整库Time Travel恢复可能丢失恢复点之后的新内容，必须单独评估并获授权后执行。
