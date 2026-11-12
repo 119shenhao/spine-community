@@ -3,5 +3,6 @@
   "operation": "inspect",
   "migration_sha": "ae8abac0bdec9d8dd94f37a662b501752e5783eb",
   "production_db_id": "5919ff78-b8fc-46ab-85f0-01fe5e6a41b0",
-  "confirmation": ""
+  "confirmation": "",
+  "request_id": "statistics-release-inspect-20261112-0819"
 }
