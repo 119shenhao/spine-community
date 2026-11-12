@@ -1,5 +1,5 @@
 import {Row,all} from './core';
-import {excerptText,FEED_EXCERPT_LIMIT} from './excerpt';
+import {excerptText,FEED_EXCERPT_LIMIT,SUMMARY_TRANSLATION_ENGINE,SUMMARY_TRANSLATION_REVISION} from './excerpt';
 
 // A locale is fetched independently: enforce a per-locale budget, not a
 // combined budget that starves later languages as a page gets translated.
@@ -13,13 +13,14 @@ export async function projectTranslations(db:D1Database,topics:Row[],comments:Ro
     FROM topic_translations x JOIN json_each(?) r
       ON x.topic_id=json_extract(r.value,'$[0]') AND x.source_version=json_extract(r.value,'$[1]')
     WHERE scope=? AND (?=1 OR (projection_token IS NOT NULL AND projection_key IS NOT NULL))
+      AND (x.scope<>'summary' OR x.provider<>'azure' OR x.engine_type=?)
     UNION ALL
     SELECT 'comment',comment_id,x.scope,locale,source_version,'',body_text,provider,projection_token,projection_key
     FROM comment_translations x JOIN (
       SELECT value,'full' scope FROM json_each(?) UNION ALL SELECT value,'preview' FROM json_each(?)
     ) r ON x.comment_id=json_extract(r.value,'$[0]') AND x.source_version=json_extract(r.value,'$[1]') AND x.scope=r.scope
     WHERE (?=1 OR (projection_token IS NOT NULL AND projection_key IS NOT NULL))
-    ORDER BY locale,type,id,scope LIMIT 1024`,refs(topics),scope,Number(direct),refs(comments),refs(progress),Number(direct));
+    ORDER BY locale,type,id,scope LIMIT 1024`,refs(topics),scope,Number(direct),SUMMARY_TRANSLATION_ENGINE,refs(comments),refs(progress),Number(direct));
   // Existing records may have a cached full translation but an older,
   // independently translated teaser. Prefer the full translation when rebuilding
   // direct/separate R2 feed JSON, without another Azure call or D1 migration.
@@ -42,7 +43,8 @@ export async function projectTranslations(db:D1Database,topics:Row[],comments:Ro
   const sizes=new Map<string,number>();
   for(const r of [...rows,...fullTeasers]){
     const fullTeaser=scope==='summary'&&direct&&r.type==='topic'&&r.scope==='full';
-    const translation={title:r.title_text,body:fullTeaser?excerptText(r.body_text,FEED_EXCERPT_LIMIT):r.body_text,provider:r.provider};
+    const translation={title:r.title_text,body:fullTeaser?excerptText(r.body_text,FEED_EXCERPT_LIMIT):r.body_text,
+      provider:r.provider,...(scope==='summary'&&r.type==='topic'?{summaryRevision:SUMMARY_TRANSLATION_REVISION}:{})};
     const text=encoder.encode(JSON.stringify(translation));
     const size=sizes.get(r.locale)||0;
     if(size+text.length+64>LOCALE_PAGE_BYTES)continue;
