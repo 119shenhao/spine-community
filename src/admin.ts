@@ -1,4 +1,5 @@
 import {Env,Row,all,one,stmt,now,id,fail,json,body,textField,requireRole,locales,analyticsEnabled} from './core';
+import {contentStatistics} from './content-statistics';
 import {purge,notify} from './content';
 import {verificationWrite} from './language-state';
 import {proposeHistoricalLanguage} from './historical-language';
@@ -9,14 +10,15 @@ export async function adminRoute(req:Request,env:Env,user:Row|null,path:string):
   const u=requireRole(user),url=new URL(req.url);
   if(path==='/api/admin/overview'&&req.method==='GET'){
     const days=url.searchParams.get('days')==='30'?30:7;
-    return json({reports:await all(env.DB,`SELECT r.*,CASE WHEN r.topic_id IS NOT NULL THEN t.title ELSE substr(c.body,1,150) END preview FROM reports r LEFT JOIN topics t ON t.id=r.topic_id LEFT JOIN comments c ON c.id=r.comment_id WHERE r.status IN ('open','reviewing') ORDER BY r.priority DESC,r.created_at LIMIT 100`),
+    const content=await contentStatistics(env.DB,days);
+    return json({contentTotals:content.current,contentUndated:content.undated,reports:await all(env.DB,`SELECT r.*,CASE WHEN r.topic_id IS NOT NULL THEN t.title ELSE substr(c.body,1,150) END preview FROM reports r LEFT JOIN topics t ON t.id=r.topic_id LEFT JOIN comments c ON c.id=r.comment_id WHERE r.status IN ('open','reviewing') ORDER BY r.priority DESC,r.created_at LIMIT 100`),
       queue:await all(env.DB,`SELECT id,'topic' type,author_id,title,body,status,created_at FROM topics WHERE status IN ('pending_review','blocked','hidden') UNION ALL SELECT id,'comment',author_id,NULL,body,status,created_at FROM comments WHERE status IN ('pending_review','blocked','hidden') ORDER BY created_at DESC LIMIT 100`),
       appeals:await all(env.DB,"SELECT * FROM appeals WHERE status IN ('open','reviewing') ORDER BY created_at LIMIT 100"),
       logs:await all(env.DB,'SELECT m.*,u.nickname actor_name FROM moderation_actions m JOIN users u ON u.id=m.actor_id ORDER BY m.created_at DESC LIMIT 100'),
       users:u.role==='admin'?await all(env.DB,`SELECT u.id,u.nickname,u.status,COALESCE((SELECT group_concat(role) FROM user_roles r WHERE r.user_id=u.id),'member') role FROM users u ORDER BY u.created_at DESC LIMIT 100`):[],
       sanctions:await all(env.DB,`SELECT s.*,u.nickname FROM user_sanctions s JOIN users u ON u.id=s.user_id WHERE s.lifted_at IS NULL ORDER BY s.created_at DESC LIMIT 100`),
       privacy:u.role==='admin'?await all(env.DB,"SELECT p.*,u.nickname FROM privacy_requests p JOIN users u ON u.id=p.user_id WHERE p.status IN ('open','processing') ORDER BY p.requested_at LIMIT 100"):[],
-      metrics:await all(env.DB,`WITH RECURSIVE days(d,n) AS(SELECT date('now'),1 UNION ALL SELECT date(d,'-1 day'),n+1 FROM days WHERE n<?) SELECT d day_utc,COALESCE(c.new_users,0) new_users,COALESCE(c.new_topics,0) new_topics,COALESCE(c.new_comments,0) new_comments,COALESCE(c.new_reports,0) new_reports,COALESCE(t.uv_estimate,0) uv_estimate,COALESCE(t.pv,0) pv,COALESCE(t.peak_active_5m_estimate,0) peak_active_5m_estimate,t.peak_hour_utc,COALESCE(t.peak_hour_pv,0) peak_hour_pv FROM days LEFT JOIN daily_community_metrics c ON c.day_utc=d LEFT JOIN daily_traffic_metrics t ON t.day_utc=d ORDER BY d DESC`,days),
+      metrics:(await all(env.DB,`WITH RECURSIVE days(d,n) AS(SELECT date('now'),1 UNION ALL SELECT date(d,'-1 day'),n+1 FROM days WHERE n<?) SELECT d day_utc,COALESCE(c.new_users,0) new_users,COALESCE(c.new_topics,0) new_topics,COALESCE(c.new_comments,0) new_comments,COALESCE(c.new_reports,0) new_reports,COALESCE(t.uv_estimate,0) uv_estimate,COALESCE(t.pv,0) pv,COALESCE(t.peak_active_5m_estimate,0) peak_active_5m_estimate,t.peak_hour_utc,COALESCE(t.peak_hour_pv,0) peak_hour_pv FROM days LEFT JOIN daily_community_metrics c ON c.day_utc=d LEFT JOIN daily_traffic_metrics t ON t.day_utc=d ORDER BY d DESC`,days)).map(row=>({...row,new_topics:0,new_comments:0,imported_topics:0,imported_comments:0,user_topics:0,user_comments:0,unknown_topics:0,unknown_comments:0,...content.daily.find(d=>d.day_utc===row.day_utc)})),
       settings:u.role==='admin'?await all(env.DB,'SELECT key,value FROM settings'):[],analyticsEnabled:await analyticsEnabled(env.DB)});
   }
   // Preview-only bounded backfill. 'legacy' means provisional, and must not
@@ -217,3 +219,4 @@ export async function adminRoute(req:Request,env:Env,user:Row|null,path:string):
   }
   fail(404,'not_found');
 }
+
