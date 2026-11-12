@@ -168,9 +168,14 @@ dialog #modal-content {
 :root[data-reading-size="large"] .form-grid textarea,
 :root[data-reading-size="large"] .form-grid select {font-size:20px}
 footer {font-size:13px}
-.reading-settings-link {
-  color:var(--green);font:inherit;border:0;background:transparent;cursor:pointer;
-  padding:4px 6px;text-decoration:underline;text-underline-offset:3px;
+/* Prominent personal-center reading controls for both guests and members. */
+.reading-settings-summary {display:flex;align-items:center;justify-content:space-between;gap:18px}
+.reading-settings-summary h2 {margin:0;color:var(--ink);font-size:21px;line-height:1.4}
+.reading-settings-summary p {margin:6px 0 0;font-size:var(--reading-support-size);line-height:1.7}
+.reading-settings-summary .button {font-size:15px;min-height:44px;flex-shrink:0}
+@media(max-width:700px) {
+  .reading-settings-summary {flex-direction:column;align-items:stretch;gap:14px}
+  .reading-settings-summary .button {align-self:flex-start}
 }
 .reading-options-grid {display:grid;gap:16px;margin:18px 0}
 .reading-options {min-width:0;border:1px solid var(--border);border-radius:10px;padding:12px}
