@@ -1,4 +1,5 @@
 import {Row,all} from './core';
+import {excerptText,FEED_EXCERPT_LIMIT} from './excerpt';
 
 // A locale is fetched independently: enforce a per-locale budget, not a
 // combined budget that starves later languages as a page gets translated.
@@ -19,6 +20,17 @@ export async function projectTranslations(db:D1Database,topics:Row[],comments:Ro
     ) r ON x.comment_id=json_extract(r.value,'$[0]') AND x.source_version=json_extract(r.value,'$[1]') AND x.scope=r.scope
     WHERE (?=1 OR (projection_token IS NOT NULL AND projection_key IS NOT NULL))
     ORDER BY locale,type,id,scope LIMIT 1024`,refs(topics),scope,Number(direct),refs(comments),refs(progress),Number(direct));
+  // Existing records may have a cached full translation but an older,
+  // independently translated teaser. Prefer the full translation when rebuilding
+  // direct/separate R2 feed JSON, without another Azure call or D1 migration.
+  const fullTeasers=scope==='summary'&&direct?await all(db,`SELECT 'topic' type,x.topic_id id,'full' scope,x.locale,x.source_version,
+    x.title_text,substr(x.body_text,1,801) body_text,x.provider,x.projection_token,x.projection_key
+    FROM topic_translations x JOIN json_each(?) r
+      ON x.topic_id=json_extract(r.value,'$[0]') AND x.source_version=json_extract(r.value,'$[1]')
+    WHERE x.scope='full' AND x.provider='azure' AND NOT EXISTS (
+      SELECT 1 FROM topic_translations m WHERE m.topic_id=x.topic_id
+        AND m.locale=x.locale AND m.source_version=x.source_version
+        AND m.scope='summary' AND m.provider<>'azure')`,refs(topics)):[];
   const index=new Map<string,Row[]>();
   for(const [type,part,group] of [['topic',scope,topics],['comment','full',comments],['comment','preview',progress]] as const){
     for(const row of group){
@@ -28,13 +40,14 @@ export async function projectTranslations(db:D1Database,topics:Row[],comments:Ro
     }
   }
   const sizes=new Map<string,number>();
-  for(const r of rows){
-    const translation={title:r.title_text,body:r.body_text,provider:r.provider};
+  for(const r of [...rows,...fullTeasers]){
+    const fullTeaser=scope==='summary'&&direct&&r.type==='topic'&&r.scope==='full';
+    const translation={title:r.title_text,body:fullTeaser?excerptText(r.body_text,FEED_EXCERPT_LIMIT):r.body_text,provider:r.provider};
     const text=encoder.encode(JSON.stringify(translation));
     const size=sizes.get(r.locale)||0;
     if(size+text.length+64>LOCALE_PAGE_BYTES)continue;
     sizes.set(r.locale,size+text.length+64);
-    const targets=index.get(r.type+':'+r.scope+':'+r.id)||[];
+    const targets=index.get(r.type+':'+(fullTeaser?'summary':r.scope)+':'+r.id)||[];
     if(direct){
       for(const row of targets)(row.translations??={})[r.locale]={...translation,sourceVersion:r.source_version};
       continue;
