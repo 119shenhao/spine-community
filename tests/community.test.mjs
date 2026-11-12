@@ -1990,8 +1990,8 @@ test('cache-only reads, summary and detail share the title, and each cache row r
  const {call,DB,env,topic}=await fixture();
  mockTranslator(env,DB);
  const title='A practice log',body='I have been practicing the exercises from physical therapy. '.repeat(7);
- const {excerptText}=await import('../.test-build/excerpt.js');
- const sourceExcerpt=excerptText(body,260,false);
+ const {translationSummaryText}=await import('../.test-build/excerpt.js');
+ const sourceExcerpt=translationSummaryText(body);
  const id=await topic(title,body);
  const summary=translationItem(id,{scope:'summary'}),full=translationItem(id);
  const requests=[];
@@ -2021,7 +2021,8 @@ test('cache-only reads, summary and detail share the title, and each cache row r
  assert.equal(rows.length,2);
  for(const row of rows)assert.deepEqual(
   [row.topic_id,row.source_version,row.source_language,row.locale,row.provider,row.product_id,row.engine_type,row.model_id,row.model_version],
-  [id,1,'en','zh-CN','azure','azure_ai_translator_text','nmt',null,null]);
+  [id,1,'en','zh-CN','azure','azure_ai_translator_text',row.scope==='summary'?'nmt-summary-sentence-v2':'nmt',null,null]);
+ assert.equal(rows.find(row=>row.scope==='summary').engine_type,'nmt-summary-sentence-v2');
  assert(rows.every(row=>row.created_at>0));
  const ledger=DB.db.prepare('SELECT * FROM translation_usage_daily').get();
  assert.equal(ledger.requests,2);
@@ -2038,6 +2039,98 @@ test('word-safe excerpts work for English, Chinese and mixed Unicode',async()=>{
  const css=readFileSync('public/styles.css','utf8');
  assert.match(css,/\\.summary\\{[^}]*-webkit-line-clamp:4/);
  assert.match(css,/@media\\(max-width:700px\\)\\{\\.topic-card \\.summary\\{-webkit-line-clamp:3/);
+});
+
+test('sentence-safe medical summary never sends a dangling English clause to Azure',async()=>{
+ const {translationSummaryText}=await import('../.test-build/excerpt.js');
+ const source='The procedure went well and helped my lower back pain. '.repeat(4)+
+   'I have an excellent orthopedic surgeon who helped explain recovery.';
+ const summary=translationSummaryText(source,250);
+ assert(summary.endsWith('.'),summary);
+ assert(!summary.includes('I have an'),summary);
+ assert(summary.length<250);
+ assert.equal(translationSummaryText('简短的颈椎恢复说明。'),'简短的颈椎恢复说明。');
+});
+
+test('legacy Azure teaser is ignored and repaired on demand without altering source',async t=>{
+ const {call,topic,DB,env}=await fixture();
+ mockTranslator(env,DB);
+ const body='I had back pain after surgery. '.repeat(12)+'I have an excellent orthopedic surgeon.';
+ const id=await topic('Spine recovery experience',body);
+ DB.db.prepare(`INSERT INTO topic_translations(
+   topic_id,locale,scope,source_version,title_text,body_text,provider,
+   product_id,source_language,engine_type)
+   VALUES(?,'zh-CN','summary',1,'旧中文标题','我有个e。','azure',
+      'azure_ai_translator_text','en','nmt')`).run(id);
+ const summary=translationItem(id,{scope:'summary'});
+ assert.equal((await translationBatch(call,[summary],{locale:'zh-CN',generate:false})).data.items[0].reason,'translation_cache_miss');
+ const requests=[];
+ t.mock.method(globalThis,'fetch',async(url,options)=>{
+  requests.push(JSON.parse(options.body).map(x=>x.Text));
+  return translatedByMock(url,options);
+ });
+ const translated=(await translationBatch(call,[summary],{locale:'zh-CN'})).data.items[0];
+ const {translationSummaryText}=await import('../.test-build/excerpt.js');
+ assert.equal(translated.body,'mock '+translationSummaryText(body)+'…');
+ assert(!translated.body.includes('我有个e。'));
+ assert.equal(requests.length,1);
+ assert.equal(requests[0][1],translationSummaryText(body));
+ const row=DB.db.prepare("SELECT body_text,engine_type FROM topic_translations WHERE topic_id=? AND locale='zh-CN' AND scope='summary'").get(id);
+ assert.equal(row.body_text,translated.body);
+ assert.equal(row.engine_type,'nmt-summary-sentence-v2');
+ assert.equal((await translationBatch(call,[summary],{locale:'zh-CN',generate:false})).data.items[0].body,translated.body);
+ assert.equal(requests.length,1);
+ assert.equal(DB.db.prepare('SELECT body FROM topics WHERE id=?').get(id).body,body);
+});
+
+test('existing full D1 translation replaces obsolete teaser without another Azure request',async()=>{
+ const {call,topic,DB,env}=await fixture();
+ mockTranslator(env,DB);
+ const body='I began physiotherapy after surgery. '.repeat(15);
+ const id=await topic('Recovery update',body);
+ const full='这是基于完整英文原文生成的中文译文。'.repeat(30);
+ const insert=DB.db.prepare(`INSERT INTO topic_translations(
+    topic_id,locale,scope,source_version,title_text,body_text,provider,
+    product_id,source_language,engine_type)
+    VALUES(?,'zh-CN',?,1,?,?,'azure','azure_ai_translator_text','en','nmt')`);
+ insert.run(id,'summary','旧标题','我有个e。');
+ insert.run(id,'full','完整中文标题',full);
+ let requests=0;
+ const original=globalThis.fetch;
+ globalThis.fetch=async()=>{requests++;throw Error('Azure must not run when full D1 is cached');};
+ try{
+  const out=(await translationBatch(call,[translationItem(id,{scope:'summary'})],{locale:'zh-CN'})).data.items[0];
+  const {excerptText}=await import('../.test-build/excerpt.js');
+  assert.equal(out.body,excerptText(full,800));
+  assert.equal(out.title,'完整中文标题');
+  assert.equal(requests,0);
+  const row=DB.db.prepare("SELECT engine_type FROM topic_translations WHERE topic_id=? AND scope='summary'").get(id);
+  assert.equal(row.engine_type,'nmt-summary-sentence-v2');
+ }finally{globalThis.fetch=original;}
+});
+
+test('stale CDN teaser cannot bypass the translation revision guard',async()=>{
+ const {translationView}=await import('../public/translation-ui.js');
+ const base={id:'old-cdn',status:'published',source_lang:'en',source_lang_mode:'manual',
+   content_version:1,summary:'An English teaser.'};
+ const old={...base,translations:{'zh-CN':{title:'中文标题',body:'我有个e。',provider:'azure',sourceVersion:1}}};
+ let calls=0;
+ const request=async()=>{calls++;return {items:[{translated:false,reason:'translation_cache_miss'}]};};
+ const view=translationView('zh-CN',{configured:true,hasCache:true,direct:true,request,render:()=>{}});
+ view.markPage({projectionKey:'feeds/latest/page-1.json',topics:[old]});
+ assert.equal(view.item('topic',old,'summary').result,null);
+ await view.prime([['topic',old,'summary']]);
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(view.item('topic',old,'summary').result,null);
+ assert.equal(calls,1);
+ view.close();
+ const fresh={...base,translations:{'zh-CN':{title:'中文标题',body:'完整句子的中文翻译。',
+   provider:'azure',sourceVersion:1,summaryRevision:2}}};
+ const newView=translationView('zh-CN',{configured:true,hasCache:true,direct:true,
+   request:async()=>{throw Error('No Worker check for new CDN summary');},render:()=>{}});
+ newView.markPage({projectionKey:'feeds/latest/page-1.json',topics:[fresh]});
+ assert.equal(newView.item('topic',fresh,'summary').result.body,'完整句子的中文翻译。');
+ newView.close();
 });
 
 test('full translation first creates an identical cached feed teaser without another Azure call',async t=>{
