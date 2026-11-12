@@ -1,6 +1,7 @@
 import {Env,Row,stmt,one,hash,now,id} from './core';
 
 import {projectTranslations} from './projection-translations';
+import {excerptText,FEED_EXCERPT_LIMIT} from './excerpt';
 
 export const FEED_LIMIT=501;
 const PREVIEW_ORIGIN='https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev';
@@ -53,7 +54,7 @@ const termsFor=(db:D1Database,ids:string[])=>stmt(db,`
 const versionOf=(db:D1Database,scope:string,target:string)=>stmt(db,
   'SELECT version FROM public_projection WHERE scope=? AND target=?',scope,target);
 const feedRows=(db:D1Database,index:number)=>stmt(db,`
- SELECT t.id,t.title,substr(t.body,1,260) summary,
+ SELECT t.id,t.title,substr(t.body,1,801) summary,
         COALESCE(v.language,t.source_lang) source_lang,
         CASE WHEN v.method='admin-manual' THEN 'manual' WHEN v.language IS NOT NULL THEN 'auto' ELSE t.source_lang_mode END source_lang_mode,
         t.content_version,t.status,
@@ -104,7 +105,7 @@ export async function buildProjection(db:D1Database,scope:string,target:string,i
       ORDER BY tt.topic_id,tt.term_id`,(index-1)*20)]);
     const [v,raw,tags]=result.map(r=>r.results);
     const more=raw.length===21&&index<FEED_LIMIT;
-    const topics=raw.slice(0,20).map(t=>({...t,terms:tags.filter(tag=>tag.topic_id===t.id)}));
+    const topics=raw.slice(0,20).map(t=>({...t,summary:excerptText(t.summary,FEED_EXCERPT_LIMIT),terms:tags.filter(tag=>tag.topic_id===t.id)}));
     await projectTranslations(db,topics,[],[],'summary',directTranslations);
     return {version:v[0]?.version||0,data:index===1||topics.length?{topics,next:more?index*20:null,similar:false,highlights:[]}:null,more};
   }
