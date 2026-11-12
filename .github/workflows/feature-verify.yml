@@ -46,9 +46,12 @@ jobs:
               with urlopen(req,timeout=15) as res:
                   if res.status!=200:raise RuntimeError(f'{path} returned HTTP {res.status}')
                   return res.read(1024*1024).decode('utf8')
-          for attempt in range(1,25):
+          for attempt in range(1,2):
               try:
                   html=get('/')
+                  print('PRODUCTION HTML HEAD:',html[:1100].replace('\\n',' '),flush=True)
+                  root_css=get('/styles.css')
+                  print('UNVERSIONED CSS markers:',{'summary_clamp': '-webkit-line-clamp' in root_css,'three_lines': '-webkit-line-clamp:3' in root_css,'mobile_fallback':'max-height:5.4em' in root_css},flush=True)
                   match=re.search(r'href="(/_app/[a-f0-9]{16}/styles\\.css)"',html)
                   script=re.search(r'src="(/_app/[a-f0-9]{16}/app\\.js)"',html)
                   if not match or not script:raise RuntimeError('Production HTML is still using old unversioned assets')
@@ -70,7 +73,7 @@ jobs:
                   print('VERIFIED mobile 3-line clamp, JS preview guard and production DB readiness')
                   break
               except Exception as exc:
-                  print(f'Attempt {attempt}/24: {type(exc).__name__}: {exc}',flush=True)
-                  if attempt==24:raise
+                  print(f'Attempt {attempt}/1: {type(exc).__name__}: {exc}',flush=True)
+                  if attempt==1:raise
                   time.sleep(10)
           PY
