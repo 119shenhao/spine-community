@@ -22,7 +22,13 @@
 - 修复后的inspect：[43126451684](https://github.com/119shenhao/spine-community/actions/runs/43126451684)，正在核对实际最终结果。
 
 ## 执行状态
-生产迁移、备份恢复点、正式代码合并及线上验收结果将在完成后追加。当前记录不声明整次生产发布完成。
+- 修复后生产inspect [43126451684](https://github.com/119shenhao/spine-community/actions/runs/43126451684) 成功：blocking_reason=null，仅0014/0015待执行。
+- 生产apply [43126641400](https://github.com/119shenhao/spine-community/actions/runs/43126641400) 成功，job 130880304443 的「Record a restore point and apply migrations」成功；Time Travel恢复点已由原工作流保存到该运行Summary。两份SQL在日志中均显示✅。
+- 迁移后只读inspect [43126738414](https://github.com/119shenhao/spine-community/actions/runs/43126738414) 成功：applied包含0014/0015，pending=[]，blocking_reason=null。
+- 生产实际对账：导入732篇／3341条评论；用户前台1篇／5条评论；当前总量733篇／3346条评论。来源账本缺失0条，外键错误0条。
+- 生产历史导入的本环境入库日期缺少本地回执证据：732篇／3341条评论保留未知。它们计入当前总量，不计期间新增；不能沿用开发环境的64条未知日期数字。新导入/同步将由触发器记录本环境实际首次写入时间。
+- 发布PR23已合并，正式merge SHA `45f3e92649eb9e42246e362feefa2e4d305a8dc8`。
+- Cloudflare正式Build `579e8abc-50d2-4896-84a6-cfa3be8e4f04` 正在构建，部署后HTTP和资源版本验收待完成。此处不声明全部发布成功。
 
 ## 回滚与数据边界
 0014/0015是兼容式新增来源元数据，不改帖子正文/语言、不清理用户内容，不覆盖生产人工语言修正。若应用异常，优先回退Worker到发布前兼容版本；来源表与触发器可保留。整库Time Travel恢复可能丢失恢复点之后的新内容，必须单独评估并获授权后执行。
