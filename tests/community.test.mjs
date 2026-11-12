@@ -2033,6 +2033,25 @@ test('word-safe excerpts work for English, Chinese and mixed Unicode',async()=>{
  assert.match(css,/@media\(max-width:700px\)\{\.topic-card \.summary\{-webkit-line-clamp:3/);
 });
 
+test('production mobile feed trims legacy partial words and clamps cards to 3 lines',async()=>{
+ const {cardPreview}=await import('../public/feed-preview.js');
+ const legacy='Back pain. '.repeat(22)+'spinal pa';
+ assert([...legacy].length>=245&&[...legacy].length<=270);
+ const text=cardPreview({summary:legacy});
+ assert(text.endsWith('spinal…'),text);
+ assert(!text.endsWith(' pa'));
+ assert.equal(cardPreview({summary:'Short English summary.'}),'Short English summary.');
+ assert.equal(cardPreview({summary:'简短的中文摘要。'}),'简短的中文摘要。');
+ const newer='Recovery details '.repeat(50)+'…';
+ assert.equal(cardPreview({summary:newer}),newer);
+ const css=readFileSync('public/styles.css','utf8');
+ assert.match(css,/\.topic-card p\.summary\{[^}]*-webkit-line-clamp:4/);
+ assert.match(css,/@media\(max-width:700px\)\{\s*\.topic-card p\.summary\{[^}]*-webkit-line-clamp:3/);
+ assert.match(css,/max-height:5\.4em/);
+ const app=readFileSync('public/app.js','utf8');
+ assert.match(app,/highlight\(cardPreview\(c\)\)/);
+});
+
 test('sentence-safe medical summary never sends a dangling English clause to Azure',async()=>{
  const {translationSummaryText}=await import('../.test-build/excerpt.js');
  const source='The procedure went well and helped my lower back pain. '.repeat(4)+

@@ -111,3 +111,22 @@ dialog #modal-content {
 
 /* Limit mobile feed cards to three lines with the native trailing ellipsis. */
 @media(max-width:700px){.topic-card .summary{-webkit-line-clamp:3}}
+
+/* Defense-in-depth for mobile Safari and historical R2 feed projections.
+   The stronger article+p selector prevents other paragraph rules overriding
+   the clamp. max-height is a fallback if native multi-line clamping fails. */
+.topic-card p.summary{
+  display:-webkit-box;
+  -webkit-box-orient:vertical;
+  -webkit-line-clamp:4;
+  line-clamp:4;
+  max-height:7.2em;
+  overflow:hidden;
+}
+@media(max-width:700px){
+  .topic-card p.summary{
+    -webkit-line-clamp:3;
+    line-clamp:3;
+    max-height:5.4em;
+  }
+}

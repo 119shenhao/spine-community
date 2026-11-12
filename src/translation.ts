@@ -250,8 +250,8 @@ async function generate(env:Env,entry:Item,row:Row,locale:string,config:Settings
     const other=topic?await one(db,`SELECT title_text,body_text FROM topic_translations WHERE topic_id=? AND locale=?
       AND source_version=? AND scope<>? AND provider='azure' AND product_id=? AND source_language=?`,
       c.id,locale,version,entry.scope,PRODUCT,source):null;
-    const cap=entry.scope==='summary'?TRANSLATION_SUMMARY_LIMIT:entry.scope==='preview'?180:null;
-    const text=entry.scope==='summary'?translationSummaryText(c.body):cap===null?c.body:excerptText(c.body,cap,false);
+    const text=entry.scope==='summary'?translationSummaryText(c.body):
+      entry.scope==='preview'?[...c.body].slice(0,180).join(''):c.body;
     const title=topic&&!other?c.title:null;
     const teaser=topic?260:180;
     const sameBody=c.body.length<=teaser*2&&[...c.body].length<=teaser;

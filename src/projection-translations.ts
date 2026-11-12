@@ -25,7 +25,8 @@ export async function projectTranslations(db:D1Database,topics:Row[],comments:Ro
   // independently translated teaser. Prefer the full translation when rebuilding
   // direct/separate R2 feed JSON, without another Azure call or D1 migration.
   const fullTeasers=scope==='summary'&&direct?await all(db,`SELECT 'topic' type,x.topic_id id,'full' scope,x.locale,x.source_version,
-    x.title_text,substr(x.body_text,1,801) body_text,x.provider,x.projection_token,x.projection_key
+    x.title_text,substr(x.body_text,1,801) body_text,x.provider,x.projection_token,x.projection_key,
+    CASE WHEN length(x.body_text)>801 THEN 1 ELSE 0 END has_more
     FROM topic_translations x JOIN json_each(?) r
       ON x.topic_id=json_extract(r.value,'$[0]') AND x.source_version=json_extract(r.value,'$[1]')
     WHERE x.scope='full' AND x.provider='azure' AND NOT EXISTS (
@@ -43,7 +44,11 @@ export async function projectTranslations(db:D1Database,topics:Row[],comments:Ro
   const sizes=new Map<string,number>();
   for(const r of [...rows,...fullTeasers]){
     const fullTeaser=scope==='summary'&&direct&&r.type==='topic'&&r.scope==='full';
-    const translation={title:r.title_text,body:fullTeaser?excerptText(r.body_text,FEED_EXCERPT_LIMIT):r.body_text,
+    const fullPreview=fullTeaser?excerptText(r.body_text,FEED_EXCERPT_LIMIT):'';
+    // SQLite's substr(1,801) can end with a space that excerptText trims,
+    // hiding the fact that the original full translation has more content.
+    const displayPreview=fullTeaser&&r.has_more&&!fullPreview.endsWith('…')?fullPreview+'…':fullPreview;
+    const translation={title:r.title_text,body:fullTeaser?displayPreview:r.body_text,
       provider:r.provider,...(scope==='summary'&&r.type==='topic'?{summaryRevision:SUMMARY_TRANSLATION_REVISION}:{})};
     const text=encoder.encode(JSON.stringify(translation));
     const size=sizes.get(r.locale)||0;
