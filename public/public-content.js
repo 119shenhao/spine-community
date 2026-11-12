@@ -63,7 +63,8 @@ export function publicContentReader(health,user,api,fetcher=fetch,locale=null) {
      if(item?.sourceVersion!==row.content_version||row.status&&row.status!=='published')continue;
      (row.translations??={})[locale]={
        title:item.title||'',body:item.body,provider:item.provider,
-       sourceVersion:item.sourceVersion
+       sourceVersion:item.sourceVersion,
+       ...(type==='topic'&&scope==='summary'?{summaryRevision:item.summaryRevision}:{})
      };
     }
    };
