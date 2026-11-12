@@ -2045,11 +2045,11 @@ test('production mobile feed trims legacy partial words and clamps cards to 3 li
  const newer='Recovery details '.repeat(50)+'…';
  assert.equal(cardPreview({summary:newer}),newer);
  const css=readFileSync('public/styles.css','utf8');
- assert.match(css,/\\.topic-card p\\.summary\\{[^}]*-webkit-line-clamp:4/);
- assert.match(css,/@media\\(max-width:700px\\)\\{\\s*\\.topic-card p\\.summary\\{[^}]*-webkit-line-clamp:3/);
- assert.match(css,/max-height:5\\.4em/);
+ assert.match(css,/\.topic-card p\.summary\{[^}]*-webkit-line-clamp:4/);
+ assert.match(css,/@media\(max-width:700px\)\{\s*\.topic-card p\.summary\{[^}]*-webkit-line-clamp:3/);
+ assert.match(css,/max-height:5\.4em/);
  const app=readFileSync('public/app.js','utf8');
- assert.match(app,/highlight\\(cardPreview\\(c\\)\\)/);
+ assert.match(app,/highlight\(cardPreview\(c\)\)/);
 });
 
 test('sentence-safe medical summary never sends a dangling English clause to Azure',async()=>{
