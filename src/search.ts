@@ -1,4 +1,5 @@
 import {Env,Row,all,stmt,fail,json,rate} from './core';
+import {excerptText,FEED_EXCERPT_LIMIT} from './excerpt';
 import {decorate} from './content';
 export async function searchRoute(req:Request,env:Env,u:Row|null,path:string):Promise<Response|null>{
   if(!['/api/topics','/api/search'].includes(path)||req.method!=='GET')return null;
@@ -41,7 +42,7 @@ export async function searchRoute(req:Request,env:Env,u:Row|null,path:string):Pr
   }
   const hasMore=!similar&&rows.length>20;rows=rows.slice(0,20);await decorate(env,rows,u);
   const highlights=[q,...(concepts.length? (await all(env.DB,`SELECT normalized_alias FROM taxonomy_aliases WHERE term_id IN (${concepts.map(()=>'?').join(',')})`,...concepts)).map(a=>a.normalized_alias):[])].filter(Boolean);
-  for(const row of rows){row.summary=row.body?.slice(0,260)||'';delete row.body;
+  for(const row of rows){row.summary=excerptText(row.body||'',FEED_EXCERPT_LIMIT);delete row.body;
     if(similar){const inferred=await all(env.DB,"SELECT DISTINCT term_id FROM taxonomy_aliases WHERE instr(lower(?),normalized_alias)>0",row.title+' '+row.summary);const ids=[...row.terms.map((t:Row)=>t.id),...inferred.map(t=>t.term_id)];row.relaxed=filters.filter(([,v])=>v&&!ids.includes(v)).map(([k])=>k);if(duration){const d=row.symptom_duration_days;const matches=d!==null&&(duration==='acute'?d<42:duration==='subacute'?d>=42&&d<=89:d>=90);if(!matches)row.relaxed.push('duration');}}
   }
   return json({topics:rows,next:hasMore?offset+20:null,similar,highlights});
