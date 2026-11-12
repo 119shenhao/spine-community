@@ -212,15 +212,29 @@ jobs:
           )}
           applied = [r["name"] for r in query("SELECT name FROM d1_migrations ORDER BY id")] if "d1_migrations" in tables else []
           files = sorted(f.name for f in (Path(os.environ["RUNNER_TEMP"]) / "production-d1/migrations").glob("*.sql"))
-          pending = files[len(applied):]
+          # 0099 was an early data-only nickname correction, released before
+          # later numbered schema migrations. Verify that exact historical SQL;
+          # all other migrations must still form a strict ordered prefix.
+          import hashlib
+          legacy = "0099_import_author_english_name.sql"
+          legacy_file = Path(os.environ["RUNNER_TEMP"]) / "production-d1/migrations" / legacy
+          legacy_bytes = legacy_file.read_bytes() if legacy_file.is_file() else b""
+          legacy_hash = hashlib.sha1(b"blob " + str(len(legacy_bytes)).encode() + b"\\0" + legacy_bytes).hexdigest()
+          legacy_valid = legacy_hash == "934c160f4daf826f3691f3e9ce87aa34417fa2b0"
+          core_files = [f for f in files if f != legacy]
+          core_applied = [f for f in applied if f != legacy]
+          pending = [f for f in files if f not in applied]
           blocking_reason = None
-          if applied != files[:len(applied)]:
-              blocking_reason = "Production migration history is not an ordered prefix of this commit."
+          if (not legacy_valid or len(applied) != len(set(applied))
+                  or not set(applied) <= set(files)
+                  or core_applied != core_files[:len(core_applied)]):
+              blocking_reason = "Production migration history mismatch or changed historical 0099 SQL."
           elif not applied and tables - {"d1_migrations"}:
               blocking_reason = "Production has tables without registered migrations. Review legacy compatibility first."
           elif applied and not {"users", "topics", "comments", "settings", "auth_states"} <= tables:
               blocking_reason = "Required v1 tables are missing despite registered migrations."
 
+          print("Production migration inspection (read-only): " + json.dumps({"applied": applied, "pending": pending, "blocking_reason": blocking_reason}, sort_keys=True))
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
               print("### Production D1 inspection", file=summary)
               for label, values in (("Tables", sorted(tables)), ("Applied", applied), ("Pending", pending)):
@@ -249,6 +263,11 @@ jobs:
                   print("\\n```json", file=summary)
                   print(json.dumps(diagnostic, sort_keys=True, indent=2), file=summary)
                   print("```", file=summary)
+
+          if os.environ["OPERATION"] == "inspect" and "content_origins" in tables:
+              counts = query("SELECT o.content_type,o.source,count(*) AS n,sum(o.entered_at IS NULL) AS undated FROM content_origins o JOIN (SELECT 'topic' AS content_type,id FROM topics WHERE status='published' UNION ALL SELECT 'comment',c.id FROM comments c JOIN topics t ON t.id=c.topic_id WHERE c.status='published' AND t.status IN ('published','deleted')) c ON c.content_type=o.content_type AND c.id=o.content_id GROUP BY o.content_type,o.source")
+              missing = query("SELECT count(*) AS n FROM (SELECT 'topic' AS type,id FROM topics UNION ALL SELECT 'comment',id FROM comments) c LEFT JOIN content_origins o ON o.content_type=c.type AND o.content_id=c.id WHERE o.content_id IS NULL")
+              print("Production content statistics (read-only): " + json.dumps({"current_by_source": counts, "missing_origins": missing, "foreign_key_errors": len(query("PRAGMA foreign_key_check"))}, sort_keys=True))
 
           if blocking_reason and os.environ["OPERATION"] != "inspect":
               raise SystemExit(blocking_reason)
