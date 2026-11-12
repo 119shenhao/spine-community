@@ -1,5 +1,6 @@
 import {Env,Row,all,one,stmt,now,id,fail,json,body,textField,lang,locales,requireUser,writable,rate,hash,randomToken,cookie,safeUser,analyticsEnabled} from './core';
 import {getContent,decorate,purge,notify} from './content';
+import {excerptText,FEED_EXCERPT_LIMIT} from './excerpt';
 export async function communityRoute(req:Request,env:Env,u:Row|null,path:string):Promise<Response|null>{
   const method=req.method,url=new URL(req.url);
   if(path==='/api/me'&&method==='GET')return json({user:safeUser(u),googleConfigured:Boolean(env.GOOGLE_CLIENT_ID&&env.GOOGLE_CLIENT_SECRET),imageUploadsEnabled:false});
@@ -18,7 +19,7 @@ export async function communityRoute(req:Request,env:Env,u:Row|null,path:string)
     if(kind==='comments')rows=await all(env.DB,`SELECT c.*,u.nickname FROM comments c JOIN users u ON u.id=c.author_id WHERE c.author_id=? ORDER BY c.created_at DESC,c.id DESC LIMIT 21 OFFSET ?`,user.id,offset);
     else rows=await all(env.DB,`SELECT t.*,u.nickname,u.public_region FROM topics t JOIN users u ON u.id=t.author_id ${kind==='bookmarks'?'JOIN bookmarks x ON x.topic_id=t.id':kind==='follows'?'JOIN topic_follows x ON x.topic_id=t.id':''} WHERE ${kind==='topics'?'t.author_id=?':"x.user_id=? AND t.status IN ('published','deleted')"} ORDER BY ${kind==='topics'?'t.created_at':'x.created_at'} DESC,t.id DESC LIMIT 21 OFFSET ?`,user.id,offset);
     const next=rows.length>20?offset+20:null;rows=rows.slice(0,20);await decorate(env,rows,u,kind==='comments'?'comment':'topic');
-    for(const r of rows)if(r.status==='deleted'){r.title=null;r.body=null;}else if(kind!=='comments'){r.summary=r.body.slice(0,260);delete r.body;}
+    for(const r of rows)if(r.status==='deleted'){r.title=null;r.body=null;}else if(kind!=='comments'){r.summary=excerptText(r.body,FEED_EXCERPT_LIMIT);delete r.body;}
     return json({items:rows,next});
   }
   if(path==='/api/notifications'&&method==='GET'){
