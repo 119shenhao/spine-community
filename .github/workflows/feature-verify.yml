@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - feature/v1-community-build-20261106
+      - main
+    paths-ignore:
+      - 'docs/**'
   pull_request:
     branches:
       - main
@@ -23,3 +26,51 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run verify
+
+  production-assets:
+    name: Production assets smoke check
+    needs: verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Confirm deployed CSS and JS are the reviewed mobile-summary release
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json,re,time
+          from urllib.request import Request,urlopen
+          root='https://spine.nbn369.com'
+          def get(path):
+              req=Request(root+path,headers={'User-Agent':'SpineCommunityReleaseSmoke/1.0','Cache-Control':'no-cache'})
+              with urlopen(req,timeout=15) as res:
+                  if res.status!=200:raise RuntimeError(f'{path} returned HTTP {res.status}')
+                  return res.read(1024*1024).decode('utf8')
+          for attempt in range(1,25):
+              try:
+                  html=get('/')
+                  match=re.search(r'href="(/_app/[a-f0-9]{16}/styles\\.css)"',html)
+                  script=re.search(r'src="(/_app/[a-f0-9]{16}/app\\.js)"',html)
+                  if not match or not script:raise RuntimeError('Production HTML is still using old unversioned assets')
+                  if match.group(1).rsplit('/',1)[0]!=script.group(1).rsplit('/',1)[0]:
+                      raise RuntimeError('Mismatched versioned frontend revision')
+                  css=get(match.group(1))
+                  app=get(script.group(1))
+                  module=get(script.group(1).rsplit('/',1)[0]+'/feed-preview.js')
+                  if not all(x in css for x in ['.topic-card p.summary','-webkit-line-clamp:3','max-height:5.4em']):
+                      raise RuntimeError('Production CSS lacks Safari three-line clamp fallback')
+                  if "cardPreview(c)" not in app or "feed-preview.js" not in app:
+                      raise RuntimeError('Production app JS lacks legacy excerpt guard')
+                  if 'export function cardPreview' not in module:
+                      raise RuntimeError('Production feed-preview module does not match release')
+                  health=json.loads(get('/api/health'))
+                  if health.get('status')!='ok' or health.get('environment')!='production' or health.get('databaseReady') is not True:
+                      raise RuntimeError('Production health is not ready')
+                  print('VERIFIED production frontend revision:',match.group(1).split('/')[2])
+                  print('VERIFIED mobile 3-line clamp, JS preview guard and production DB readiness')
+                  break
+              except Exception as exc:
+                  print(f'Attempt {attempt}/24: {type(exc).__name__}: {exc}',flush=True)
+                  if attempt==24:raise
+                  time.sleep(10)
+          PY
