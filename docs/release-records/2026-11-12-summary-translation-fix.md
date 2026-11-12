@@ -25,3 +25,15 @@
 
 ## 生产保护
 保留 main 的 wrangler.jsonc、keep_vars、生产与预览 D1/R2 绑定、OAuth、SEO、原有 GitHub Actions 与同步规则；不执行生产数据库迁移或 Time Travel 恢复。若 Cloudflare 构建失败，应按日志修复后再重试，不擅自整库回滚。
+
+## 2026-11-12 生产实际部署补充验收（覆盖上文“尚未验证”的旧状态）
+
+用户 iPhone Safari 截图发现生产首页英文卡片显示约 5 行、且在 `pa` 处断词，证明前一次只凭 PR25 合并确认发布不充分。
+
+- [PR26](https://github.com/119shenhao/spine-community/pull/26) 已合并（`01b5af0f5841313a10d165b3c5ea420d7dc8c099`）：增强 Safari 的三行 clamp 和 `max-height:5.4em` 高度兜底；客户端针对历史约 260 字符原文摘要，移除尾部半个拉丁单词并显示省略号；修复全文译文投影被 `substr` 空格尾部隐藏省略号的问题；恢复楼主进展预览原有 180 字符截取，避免功能回归。
+- [完整测试](https://github.com/119shenhao/spine-community/actions/runs/43144566361)：**137/137 通过、0 失败**。此前一次 CI 发现 3 项失败，其中两项属于 PR25 引入的功能回归，另一个为新添加测试的正则断言错误；均已修复。此前未拿到 Cloudflare Build 失败日志，因此不能把 GitHub 测试失败推定为已证实的 Cloudflare 失败原因。
+- [PR27](https://github.com/119shenhao/spine-community/pull/27) 为现有 `feature-verify.yml` 增加 main 合并后的只读生产资源检查，不创建新工作流、不添加定时任务。
+- 首轮生产资源检查的 URL 正则被错误地双重转义，错误报告“旧 unversioned HTML”；这是**测试脚本误报**，不是实际证明线上仍是旧 HTML。[PR29](https://github.com/119shenhao/spine-community/pull/29) 已修复正式 CI 正则，merge SHA `3e580ff6483ac1c230192a48bf873f7954370b4d`。
+- 经临时只读诊断 PR28 实际从 GitHub 运行器访问生产环境，[生产验证 #43146204963](https://github.com/119shenhao/spine-community/actions/runs/43146204963) **Success**，两个 job（verify、Production assets smoke check）均成功。生产首页真实引用的版本目录是 `/_app/731105ec10b38c0c/`，已从该目录 GET 获取 CSS、app.js、feed-preview.js 并核对三行 Safari 样式、max-height 兜底和旧摘要保护标记；`/api/health` 实际为 production / ok / databaseReady=true。临时审计 PR28 已关闭且未合并。
+- 本次生产代码和运行资源**已完成服务器端验收**；不等同于重新取得同一用户 Safari 手机截图，也不表示历史多语摘要已全部批量重算。历史数据继续按既有按需修复规则处理。
+- 本轮修复及验收不涉及 D1 新迁移、生产内容同步、账号资料复制、历史内容删除或数据库恢复。
