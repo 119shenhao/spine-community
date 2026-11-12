@@ -29,7 +29,8 @@ export function translationView(locale,{request,configured,hasCache,direct,rende
   if(row.source_lang_mode&&row.source_lang_mode!=='legacy'&&source!=='und'&&normalized(source)===normalized(locale))return null;
   const page=pages.get(row)||null, projected=page&&row.translations?.[locale];
   const ready=direct&&projected?.sourceVersion===row.content_version&&typeof projected.body==='string'&&
-   typeof projected.title==='string'&&typeof projected.provider==='string';
+   typeof projected.title==='string'&&typeof projected.provider==='string'&&
+   (type!=='topic'||scope!=='summary'||projected.summaryRevision===2);
   const entry={type,id:row.id,version:row.content_version,scope,page,
    token:direct?undefined:projected?.token,ciphertext:direct?undefined:projected?.ciphertext};
   const key=keyOf(entry);
