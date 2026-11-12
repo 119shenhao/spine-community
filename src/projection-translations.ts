@@ -24,8 +24,10 @@ export async function projectTranslations(db:D1Database,topics:Row[],comments:Ro
   // Existing records may have a cached full translation but an older,
   // independently translated teaser. Prefer the full translation when rebuilding
   // direct/separate R2 feed JSON, without another Azure call or D1 migration.
+  // Work from the full value: pre-cutting to 801 characters before whitespace
+  // normalization can make a truly truncated excerpt appear complete, dropping “…”.
   const fullTeasers=scope==='summary'&&direct?await all(db,`SELECT 'topic' type,x.topic_id id,'full' scope,x.locale,x.source_version,
-    x.title_text,substr(x.body_text,1,801) body_text,x.provider,x.projection_token,x.projection_key
+    x.title_text,x.body_text,x.provider,x.projection_token,x.projection_key
     FROM topic_translations x JOIN json_each(?) r
       ON x.topic_id=json_extract(r.value,'$[0]') AND x.source_version=json_extract(r.value,'$[1]')
     WHERE x.scope='full' AND x.provider='azure' AND NOT EXISTS (

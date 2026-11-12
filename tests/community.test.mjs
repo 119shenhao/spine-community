@@ -2156,7 +2156,9 @@ test('full translation first creates an identical cached feed teaser without ano
  assert.deepEqual(rows.map(x=>x.scope),['full','summary']);
  const {buildProjection}=await import('../.test-build/public-projection.js');
  const feed=await buildProjection(DB,'feed','latest',1,true);
- assert.equal(feed.data.topics.find(t=>t.id===id).translations['zh-CN'].body,teaser.body);
+ const projectedTeaser=feed.data.topics.find(t=>t.id===id).translations['zh-CN'].body;
+ assert.equal(projectedTeaser,teaser.body);
+ assert.match(projectedTeaser,/…$/u,'a truncated translated teaser must keep its ellipsis');
 });
 
 test('old full translations take priority over independently translated summaries in rebuilt CDN data',async()=>{
@@ -2250,7 +2252,10 @@ test('only public text can reach Azure, and progress teasers translate their dis
  assert.deepEqual(gated.map(x=>x.reason),['not_found','source_contains_contact_details','not_found']);
  assert.equal(requests.length,0);
  assert.equal((await run(progressId))[0].translated,true);
- assert.equal(requests[0][0].Text,progress.slice(0,180));
+ const {excerptText}=await import('../.test-build/excerpt.js');
+ const expectedPreview=excerptText(progress,180,false);
+ assert.equal(requests[0][0].Text,expectedPreview);
+ assert.notEqual(expectedPreview,progress.slice(0,180),'a translated preview must not end inside an English word');
  assert.equal((await run(nestedId))[0].translated,true);
  assert.equal((await run({...progressId,scope:'full'}))[0].translated,true);
  assert.equal(requests[2][0].Text,progress);
