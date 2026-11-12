@@ -373,7 +373,7 @@ async function generate(env:Env,entry:Item,row:Row,locale:string,config:Settings
       await stmt(db,`INSERT OR IGNORE INTO topic_translations(
         scope,topic_id,locale,source_version,title_text,body_text,provider,
         source_language,product_id,engine_type,projection_token,projection_key)
-        SELECT 'summary',?,?,?,?,?,'azure',?,?,?,?
+        SELECT 'summary',?,?,?,?,?,'azure',?,?,?,?,?
         WHERE ${validLease} AND EXISTS(${currentSql})`,
         c.id,locale,version,translatedTitle,teaser,source,PRODUCT,SUMMARY_TRANSLATION_ENGINE,teaserToken,teaserKey,
         ...lease,c.id,version).run();
