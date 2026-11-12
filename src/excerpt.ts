@@ -17,3 +17,22 @@ export function excerptText(value:string,max=FEED_EXCERPT_LIMIT,ellipsis=true):s
   }
   return safe.trimEnd()+(ellipsis?'…':'');
 }
+
+/** The translation cache for a summary must be invalidated when this algorithm changes. */
+export const SUMMARY_TRANSLATION_REVISION=2;
+export const SUMMARY_TRANSLATION_ENGINE='nmt-summary-sentence-v2';
+
+/** Send complete sentences to Azure rather than a dangling clause or half-word. */
+export function translationSummaryText(value:string,max=TRANSLATION_SUMMARY_LIMIT):string {
+  const text=String(value??'').replace(/\s+/gu,' ').trim();
+  if([...text].length<=max)return text;
+  const head=[...text].slice(0,max).join('');
+  let lastSentence=0;
+  // Require punctuation to end at a word boundary, quotation mark or CJK character.
+  for(const match of head.matchAll(/[.!?。！？]+(?:["'”’）)\]]*)(?=\s|$|[\p{Script=Han}])/gu))
+    lastSentence=match.index!+match[0].length;
+  // Avoid a summary that consists solely of an introductory abbreviation.
+  if(lastSentence>=Math.min(80,Math.floor(max*.35)))
+    return head.slice(0,lastSentence).trimEnd();
+  return excerptText(text,max,false).replace(/[,:;\s–—-]+$/u,'').trimEnd();
+}
