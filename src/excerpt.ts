@@ -13,7 +13,7 @@ export function excerptText(value:string,max=FEED_EXCERPT_LIMIT,ellipsis=true):s
   // For unbroken CJK or unusually long tokens, retain the preview rather than go blank.
   if(/[\p{L}\p{N}]$/u.test(head)&&/^[\p{L}\p{N}]/u.test(next)){
     const boundary=head.replace(/[\p{L}\p{N}]+$/u,'').trimEnd();
-    if([...boundary].length>=Math.floor(max/2))safe=boundary;
+    if(boundary)safe=boundary;
   }
   return safe.trimEnd()+(ellipsis?'…':'');
 }
