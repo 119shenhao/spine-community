@@ -219,7 +219,7 @@ jobs:
           legacy = "0099_import_author_english_name.sql"
           legacy_file = Path(os.environ["RUNNER_TEMP"]) / "production-d1/migrations" / legacy
           legacy_bytes = legacy_file.read_bytes() if legacy_file.is_file() else b""
-          legacy_hash = hashlib.sha1(b"blob " + str(len(legacy_bytes)).encode() + b"\\0" + legacy_bytes).hexdigest()
+          legacy_hash = hashlib.sha1(b"blob " + str(len(legacy_bytes)).encode() + b"\0" + legacy_bytes).hexdigest()
           legacy_valid = legacy_hash == "934c160f4daf826f3691f3e9ce87aa34417fa2b0"
           core_files = [f for f in files if f != legacy]
           core_applied = [f for f in applied if f != legacy]
