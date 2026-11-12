@@ -2066,6 +2066,22 @@ test('full translation first creates an identical cached feed teaser without ano
  assert.equal(feed.data.topics.find(t=>t.id===id).translations['zh-CN'].body,teaser.body);
 });
 
+test('old full translations take priority over independently translated summaries in rebuilt CDN data',async()=>{
+ const {topic,DB}=await fixture();
+ const id=await topic('Existing original post','Long original story on physical rehabilitation. '.repeat(20));
+ const fullBody='已有的完整中文翻译，描述病人逐步康复和活动的全过程。'.repeat(40);
+ const stmt=DB.db.prepare("INSERT INTO topic_translations(topic_id,locale,scope,source_version,title_text,body_text,provider) VALUES(?,'zh-CN',?,1,?,?,'azure')");
+ stmt.run(id,'summary','旧摘要标题','不同版本的旧中文摘要');
+ stmt.run(id,'full','完整中文标题',fullBody);
+ const {buildProjection}=await import('../.test-build/public-projection.js');
+ const {excerptText}=await import('../.test-build/excerpt.js');
+ const feed=await buildProjection(DB,'feed','latest',1,true);
+ const derived=feed.data.topics.find(row=>row.id===id).translations['zh-CN'];
+ assert.equal(derived.title,'完整中文标题');
+ assert.equal(derived.body,excerptText(fullBody,800));
+ assert.notEqual(derived.body,'不同版本的旧中文摘要');
+});
+
 test('concurrent readers dedupe across isolates and reserve the global budget atomically',async t=>{
  const {call,env,DB,topic}=await fixture();
  mockTranslator(env,DB,{TRANSLATION_DAILY_LIMIT:'62',TRANSLATION_MONTHLY_LIMIT:'62'});
