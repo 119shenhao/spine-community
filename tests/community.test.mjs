@@ -3155,3 +3155,18 @@ test('legacy reply dates need a local nonduplicate collection window, not just a
  assert.equal(db.prepare("SELECT entered_at FROM content_origins WHERE content_id='within-window'").get().entered_at,200);
  db.close();
 });
+
+test('reading preferences are prominent in personal center for guests and members, not hidden in footer',()=>{
+ const app=readFileSync('public/app.js','utf8');
+ const css=readFileSync('public/styles.css','utf8');
+ assert.match(app,/function readingSettingsCard\(\)/);
+ assert.match(app,/if\(!state\.user\)\{\$\('#main'\)\.innerHTML=`[^\n]*\$\{readingSettingsCard\(\)\}/);
+ assert.match(app,/logout-link'\)\}\<\/div\>\$\{readingSettingsCard\(\)\}\<nav class="tabs"/);
+ assert.match(app,/data-action="reading-options"/);
+ assert.doesNotMatch(app,/reading-settings-link/);
+ assert.match(css,/\.reading-settings-summary\s*\{/);
+ assert.match(css,/@media\(max-width:700px\)[\s\S]*\.reading-settings-summary/);
+ const pref=readFileSync('public/reading-preferences.js','utf8');
+ assert.match(pref,/theme:'standard',size:'regular'/);
+ assert.match(pref,/sc_reading_preferences/);
+});
