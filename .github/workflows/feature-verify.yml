@@ -49,11 +49,11 @@ jobs:
           for attempt in range(1,2):
               try:
                   html=get('/')
-                  print('PRODUCTION HTML HEAD:',html[:1100].replace('\\n',' '),flush=True)
+                  print('PRODUCTION HTML HEAD:',html[:1100].replace('\n',' '),flush=True)
                   root_css=get('/styles.css')
                   print('UNVERSIONED CSS markers:',{'summary_clamp': '-webkit-line-clamp' in root_css,'three_lines': '-webkit-line-clamp:3' in root_css,'mobile_fallback':'max-height:5.4em' in root_css},flush=True)
-                  match=re.search(r'href="(/_app/[a-f0-9]{16}/styles\\.css)"',html)
-                  script=re.search(r'src="(/_app/[a-f0-9]{16}/app\\.js)"',html)
+                  match=re.search(r'href="(/_app/[a-f0-9]{16}/styles\.css)"',html)
+                  script=re.search(r'src="(/_app/[a-f0-9]{16}/app\.js)"',html)
                   if not match or not script:raise RuntimeError('Production HTML is still using old unversioned assets')
                   if match.group(1).rsplit('/',1)[0]!=script.group(1).rsplit('/',1)[0]:
                       raise RuntimeError('Mismatched versioned frontend revision')
