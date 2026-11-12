@@ -3,7 +3,7 @@ import {detectSourceLanguageEvidence,sameLanguage} from './source-language';
 import {confirmedLanguage,confirmAzureLanguage} from './language-state';
 import {refreshProjectionTranslations,drainPublicContent} from './projection-demand';
 import {parseObjectKey,objectKey,FEED_LIMIT} from './public-projection';
-import {excerptText,FEED_EXCERPT_LIMIT,TRANSLATION_SUMMARY_LIMIT} from './excerpt';
+import {excerptText,translationSummaryText,FEED_EXCERPT_LIMIT,TRANSLATION_SUMMARY_LIMIT,SUMMARY_TRANSLATION_ENGINE} from './excerpt';
 
 const AZURE_ENDPOINT='https://api.cognitive.microsofttranslator.com';
 const PRODUCT='azure_ai_translator_text';
@@ -94,6 +94,7 @@ async function readItems(db:D1Database,items:Item[],locale:string) {
       CASE WHEN r.token IS NULL OR r.token IS NOT x.projection_token THEN x.body_text END body_text
     FROM requested r JOIN topics t ON t.id=r.id AND t.status='published'
     LEFT JOIN topic_translations x ON x.topic_id=t.id AND x.locale=? AND x.source_version=t.content_version AND x.scope=r.scope
+      AND (r.scope<>'summary' OR x.provider<>'azure' OR x.engine_type=?)
     LEFT JOIN content_language_verifications v ON v.content_type='topic' AND v.content_id=t.id AND v.content_version=t.content_version
     WHERE r.type='topic'
     UNION ALL
@@ -107,7 +108,7 @@ async function readItems(db:D1Database,items:Item[],locale:string) {
     LEFT JOIN comment_translations x ON x.comment_id=c.id AND x.locale=? AND x.source_version=c.content_version AND x.scope=r.scope
     LEFT JOIN content_language_verifications v ON v.content_type='comment' AND v.content_id=c.id AND v.content_version=c.content_version
     WHERE r.type='comment' AND (r.scope<>'preview' OR c.kind='progress')
-  ) SELECT * FROM public_rows`,JSON.stringify(items),locale,locale);
+  ) SELECT * FROM public_rows`,JSON.stringify(items),locale,SUMMARY_TRANSLATION_ENGINE,locale);
 }
 
 // This is a website-side safety budget, not the Azure account's live metering.
@@ -250,7 +251,7 @@ async function generate(env:Env,entry:Item,row:Row,locale:string,config:Settings
       AND source_version=? AND scope<>? AND provider='azure' AND product_id=? AND source_language=?`,
       c.id,locale,version,entry.scope,PRODUCT,source):null;
     const cap=entry.scope==='summary'?TRANSLATION_SUMMARY_LIMIT:entry.scope==='preview'?180:null;
-    const text=cap===null?c.body:excerptText(c.body,cap,false);
+    const text=entry.scope==='summary'?translationSummaryText(c.body):cap===null?c.body:excerptText(c.body,cap,false);
     const title=topic&&!other?c.title:null;
     const teaser=topic?260:180;
     const sameBody=c.body.length<=teaser*2&&[...c.body].length<=teaser;
@@ -347,12 +348,21 @@ async function generate(env:Env,entry:Item,row:Row,locale:string,config:Settings
     const key=b64(crypto.getRandomValues(new Uint8Array(32)));
     const parameters=topic?[entry.scope,c.id,locale,version,translatedTitle,translatedBody]:
       [entry.scope,c.id,locale,version,translatedBody];
+    // A previous translation can have a valid source version but an obsolete
+    // truncation algorithm. Replace only the Azure summary after the new output
+    // is ready and under the same current source/version/translation lease.
+    if(topic&&entry.scope==='summary')
+      await stmt(db,`DELETE FROM topic_translations WHERE topic_id=? AND locale=?
+        AND scope='summary' AND source_version=? AND provider='azure'
+        AND (engine_type IS NULL OR engine_type<>?)
+        AND ${validLease} AND EXISTS(${currentSql})`,
+        c.id,locale,version,SUMMARY_TRANSLATION_ENGINE,...lease,c.id,version).run();
     const inserted=await one(db,`INSERT OR IGNORE INTO ${topic?'topic_translations':'comment_translations'}(
       ${topic?'scope,topic_id,locale,source_version,title_text':'scope,comment_id,locale,source_version'},
       body_text,provider,source_language,product_id,engine_type,projection_token,projection_key)
-      SELECT ${parameters.map(()=>'?').join(',')},'azure',?,?,'nmt',?,?
+      SELECT ${parameters.map(()=>'?').join(',')},'azure',?,?,?,?,?
       WHERE ${validLease} AND EXISTS(${currentSql}) RETURNING provider`,
-      ...parameters,source,PRODUCT,token,key,...lease,c.id,version);
+      ...parameters,source,PRODUCT,topic&&entry.scope==='summary'?SUMMARY_TRANSLATION_ENGINE:'nmt',token,key,...lease,c.id,version);
     if(!inserted)return result('content_changed');
     if(topic&&entry.scope==='full'){
       // When a full translation becomes available, replace its older independent
@@ -363,16 +373,17 @@ async function generate(env:Env,entry:Item,row:Row,locale:string,config:Settings
       await stmt(db,`INSERT OR IGNORE INTO topic_translations(
         scope,topic_id,locale,source_version,title_text,body_text,provider,
         source_language,product_id,engine_type,projection_token,projection_key)
-        SELECT 'summary',?,?,?,?,?,'azure',? ,?,'nmt',?,?
+        SELECT 'summary',?,?,?,?,?,'azure',?,?,?,?
         WHERE ${validLease} AND EXISTS(${currentSql})`,
-        c.id,locale,version,translatedTitle,teaser,source,PRODUCT,teaserToken,teaserKey,
+        c.id,locale,version,translatedTitle,teaser,source,PRODUCT,SUMMARY_TRANSLATION_ENGINE,teaserToken,teaserKey,
         ...lease,c.id,version).run();
       await stmt(db,`UPDATE topic_translations SET title_text=?,body_text=?,
+        engine_type=?,product_id=?,source_language=?,
         projection_token=?,projection_key=?,created_at=unixepoch()
         WHERE topic_id=? AND locale=? AND source_version=? AND scope='summary'
-          AND provider='azure' AND product_id=? AND source_language=?
+          AND provider='azure'
           AND ${validLease} AND EXISTS(${currentSql})`,
-        translatedTitle,teaser,teaserToken,teaserKey,c.id,locale,version,PRODUCT,source,
+        translatedTitle,teaser,SUMMARY_TRANSLATION_ENGINE,PRODUCT,source,teaserToken,teaserKey,c.id,locale,version,
         ...lease,c.id,version).run();
     }
     return {translated:true,title:translatedTitle,body:translatedBody,provider:'azure',generated:true,languageConfirmed:needsAutoDetection||Boolean(evidence.newlyConfirmed)};
