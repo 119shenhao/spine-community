@@ -1,5 +1,6 @@
 import {dictionaries,languages} from './i18n.js';
 import {initialLocale} from './locale.js';
+import {defaultReadingPreferences,loadReadingPreferences,applyReadingPreferences,saveReadingPreferences,readingLabels} from './reading-preferences.js';
 import {postingLanguage,profilePostingLanguageOptions} from './posting-language.js';
 import {applyInteractionResult} from './interaction-ui.js';
 import {applyReplyResult} from './reply-ui.js';
@@ -14,6 +15,11 @@ const $=(s,root=document)=>root.querySelector(s),$$=(s,root=document)=>[...root.
 // Resolve and persist the visitor's language before any Google sign-in redirect.
 // An account's database default ('en') must not reset the UI language on login.
 let locale=initialLocale(localStorage,navigator.language,languages);
+// Rendering preferences belong to the visitor's browser, including signed-out visitors.
+const readingStorage=(()=>{try{return window.localStorage;}catch{return null;}})();
+let readingPreferences=loadReadingPreferences(readingStorage);
+applyReadingPreferences(document.documentElement,readingPreferences);
+const readingText=key=>readingLabels(locale)[key];
 const state={user:null,google:false,health:null,terms:[],next:null,feed:[],highlights:[],topic:null,comments:[],notificationItems:[],unread:0,admin:null};
 let sequence=0,observer,toastTimer,translations;
 const historicalLanguageAfter={topic:'',comment:''};
@@ -32,6 +38,10 @@ const publicReads=()=>publicContentReader(state.health,state.user,api,fetch,loca
 function toast(message){clearTimeout(toastTimer);$('#toast').textContent=message;$('#toast').hidden=false;toastTimer=setTimeout(()=>$('#toast').hidden=true,4500);}
 function modal(html){const content=$('#modal-content');content.innerHTML=html;content.scrollTop=0;if(!$('#modal').open)$('#modal').showModal();}
 function closeModal(){$('#modal').close();}
+function showReadingSettings(){
+ const radioGroup=(name,title,entries,current)=>`<fieldset class="reading-options"><legend>${esc(title)}</legend>${entries.map(([value,label])=>`<label class="reading-choice"><input type="radio" name="${name}" value="${value}" ${value===current?'checked':''}><span>${esc(label)}</span></label>`).join('')}</fieldset>`;
+ modal(`<h2>${esc(readingText('title'))}</h2><p>${esc(readingText('hint'))}</p><div class="reading-options-grid">${radioGroup('reading-theme',readingText('theme'),[['standard',readingText('standard')],['warm',readingText('warm')]],readingPreferences.theme)}${radioGroup('reading-size',readingText('size'),[['regular',readingText('regular')],['comfortable',readingText('comfortable')],['large',readingText('large')]],readingPreferences.size)}</div><button type="button" class="button" data-action="reading-reset">${esc(readingText('reset'))}</button>`);
+}
 function needUser(){if(state.user)return true;showLogin();return false;}
 const isPreview=()=>state.health?.environment==='preview'||(!state.health?.environment&&(location.hostname.startsWith('feature-')||['localhost','127.0.0.1'].includes(location.hostname)));
 function showLogin(){modal(`<h2>${t('login')}</h2><p>${t('loginNote')}</p>${state.google?`<a class="button primary" href="/api/auth/google">G &nbsp; ${t('google')}</a>`:`<div class="notice">${t('loginSetup')}</div>`}${isPreview()?`<p class="subtle">${t('previewOnly')}</p>`:''}`);}
@@ -41,9 +51,9 @@ function highlight(value){let raw=String(value||'');const words=[...new Set(stat
 function renderChrome(){document.documentElement.lang=locale;$('#language').value=locale;const badge=$('#preview-badge');badge.textContent=isPreview()?t('preview'):'';badge.hidden=!isPreview();const {path,params}=route();
  const nav=(name,href,k,active=false)=>`<a class="nav-link ${active?'active':''}" href="${href}">${icon(k)}${t(name)}</a>`;
  $('#sidebar').innerHTML=`<nav class="primary-nav">${nav('home','/','home',path==='/')}${nav('search','/search','search',path==='/search')}${nav('mySpace','/me','user',path.startsWith('/me'))}<button type="button" class="nav-link nav-compose" data-action="compose">${icon('plus')}${t('newPost')}</button></nav><div class="sidebar-label">${t('spaces')}</div><nav class="secondary-nav">${nav('neck','/search?body_part=neck','neck',params.get('body_part')==='neck')}${nav('back','/search?body_part=lower-back','neck',params.get('body_part')==='lower-back')}${nav('stories','/search?category=patient-story','story',params.has('category'))}</nav>${state.user&&['admin','moderator'].includes(state.user.role)?`<div class="sidebar-label">${t('admin')}</div><nav>${nav('admin','/admin','shield',path==='/admin')}</nav>`:''}<div class="sidebar-note"><strong>${t('welcome')}</strong>${t('medical')}<p><a href="/privacy">${t('privacy')}</a></p></div>`;
- $('#account-actions').innerHTML=state.user?`<a href="/notifications" class="bell" aria-label="${t('notifications')}">${icon('bell')}${state.unread?`<span class="count">${state.unread>99?'99+':state.unread}</span>`:''}</a><details class="account-menu"><summary class="account-trigger" aria-label="${esc(t('mySpace'))}"><span class="avatar">${esc(state.user.nickname.slice(0,1))}</span><span class="nickname">${esc(state.user.nickname)}</span><span class="account-chevron" aria-hidden="true">▾</span></summary><div class="account-dropdown"><a href="/me">${t('mySpace')}</a><a href="/me?kind=settings">${t('settings')}</a><button type="button" data-action="logout">${t('logout')}</button></div></details>`:button(t('login'),'login','','primary');
+ $('#account-actions').innerHTML=state.user?`<a href="/notifications" class="bell" aria-label="${t('notifications')}">${icon('bell')}${state.unread?`<span class="count">${state.unread>99?'99+':state.unread}</span>`:''}</a><details class="account-menu"><summary class="account-trigger" aria-label="${esc(t('mySpace'))}"><span class="avatar">${esc(state.user.nickname.slice(0,1))}</span><span class="nickname">${esc(state.user.nickname)}</span><span class="account-chevron" aria-hidden="true">▾</span></summary><div class="account-dropdown"><a href="/me">${t('mySpace')}</a><a href="/me?kind=settings">${t('settings')}</a><button type="button" data-action="reading-options">${esc(readingText('link'))}</button><button type="button" data-action="logout">${t('logout')}</button></div></details>`:button(t('login'),'login','','primary');
  $('#right-rail').innerHTML=`<div class="rail-panel"><div class="rail-caption">SPINE COMMUNITY</div><h3>${t('approach')}</h3><p>${t('approachBody')}</p>${['value1','value2','value3'].map(k=>`<div class="rail-line">${icon('check')}<span>${t(k)}</span></div>`).join('')}</div><div class="rail-panel accent">${icon('leaf')}<h3>${t('careTitle')}</h3><p>${t('careBody')}</p><a class="button" href="/privacy">${t('privacy')}</a></div>${isPreview()?`<p class="subtle">${t('previewOnly')}</p>`:''}`;
- $('#footer').innerHTML=`${t('medical')}<br><a href="/privacy">${t('privacy')}</a>${isPreview()?` · ${t('previewOnly')}`:''}`;
+ $('#footer').innerHTML=`${t('medical')}<br><a href="/privacy">${t('privacy')}</a> · <button type="button" class="reading-settings-link" data-action="reading-options">${esc(readingText('link'))}</button>${isPreview()?` · ${t('previewOnly')}`:''}`;
 }
 function empty(title='emptyTitle',message='emptyBody',action=true){return `<div class="panel empty">${icon('chat')}<h3>${t(title)}</h3><p>${t(message)}</p>${action?button(t('share')+' '+icon('arrow'),'compose','','primary'):''}</div>`;}
 function errorPanel(e){return `<div class="panel empty">${icon('leaf')}<h3>${esc(errorText(e))}</h3>${e.status===503?`<p>${t('setup')}</p>`:''}${button(t('retry'),'retry')}</div>`;}
@@ -182,7 +192,10 @@ function findContent(type,id){return type==='topic'?(state.topic?.id===id?state.
 async function refreshMe(){const me=await api('/api/me');state.user=me.user;state.google=me.googleConfigured;}
 async function refreshUnread(){if(!state.user)return;try{const r=await api('/api/notifications');state.unread=r.unread;renderChrome();}catch{}}
 async function clicked(el,event){const action=el.dataset.action,{id,type,active}=el.dataset;
- if(action==='login')return showLogin();if(action==='close-modal')return closeModal();if(action==='retry')return render();if(action==='compose')return composer();if(action==='privacy'){return navigate('/privacy');}
+ if(action==='login')return showLogin();
+ if(action==='reading-options')return showReadingSettings();
+ if(action==='reading-reset'){readingPreferences=saveReadingPreferences(readingStorage,document.documentElement,defaultReadingPreferences);return showReadingSettings();}
+ if(action==='close-modal')return closeModal();if(action==='retry')return render();if(action==='compose')return composer();if(action==='privacy'){return navigate('/privacy');}
  if(action==='load-more')return loadMore();
  if(action==='historical-language-scan'||action==='historical-language-apply'){
   if(!isPreview()||state.user?.role!=='admin'||!['topic','comment'].includes(type))
@@ -271,7 +284,13 @@ document.addEventListener('submit',async event=>{const form=event.target;if(!(fo
  }catch(e){toast(errorText(e));}finally{if(submit)submit.disabled=false;}
 });
 $('#language').addEventListener('change',async e=>{locale=e.target.value;translations?.close();++sequence;localStorage.setItem('sc_locale',locale);try{state.terms=(await api('/api/taxonomy?locale='+locale)).terms;}catch{}await render();});
-document.addEventListener('change',e=>{if(e.target.id==='sort'){const current=route();navigate(sortRoute(current.path,current.params,e.target.value));}});
+document.addEventListener('change',e=>{
+ if(e.target.matches('input[name="reading-theme"],input[name="reading-size"]')){
+  const field=e.target.name==='reading-theme'?'theme':'size';
+  readingPreferences=saveReadingPreferences(readingStorage,document.documentElement,{...readingPreferences,[field]:e.target.value});
+  return;
+ }
+ if(e.target.id==='sort'){const current=route();navigate(sortRoute(current.path,current.params,e.target.value));}});
 document.addEventListener('keydown',event=>{if(event.key==='Escape')document.querySelector('.account-menu[open]')?.removeAttribute('open');});
 window.addEventListener('popstate',()=>{window.scrollTo({top:0});render();});
 async function boot(){renderChrome();await Promise.allSettled([refreshMe(),api('/api/health').then(r=>state.health=r),api('/api/taxonomy?locale='+locale).then(r=>state.terms=r.terms)]);await render();refreshUnread();}
