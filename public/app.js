@@ -1,5 +1,6 @@
 import {dictionaries,languages} from './i18n.js';
 import {initialLocale} from './locale.js';
+import {defaultReadingPreferences,loadReadingPreferences,applyReadingPreferences,saveReadingPreferences,readingLabels} from './reading-preferences.js';
 import {postingLanguage,profilePostingLanguageOptions} from './posting-language.js';
 import {applyInteractionResult} from './interaction-ui.js';
 import {applyReplyResult} from './reply-ui.js';
@@ -15,6 +16,11 @@ const $=(s,root=document)=>root.querySelector(s),$$=(s,root=document)=>[...root.
 // Resolve and persist the visitor's language before any Google sign-in redirect.
 // An account's database default ('en') must not reset the UI language on login.
 let locale=initialLocale(localStorage,navigator.language,languages);
+// Rendering preferences belong to the visitor's browser, including signed-out visitors.
+const readingStorage=(()=>{try{return window.localStorage;}catch{return null;}})();
+let readingPreferences=loadReadingPreferences(readingStorage);
+applyReadingPreferences(document.documentElement,readingPreferences);
+const readingText=key=>readingLabels(locale)[key];
 const state={user:null,google:false,health:null,terms:[],next:null,feed:[],highlights:[],topic:null,comments:[],notificationItems:[],unread:0,admin:null};
 let sequence=0,observer,toastTimer,translations;
 const historicalLanguageAfter={topic:'',comment:''};
@@ -33,6 +39,13 @@ const publicReads=()=>publicContentReader(state.health,state.user,api,fetch,loca
 function toast(message){clearTimeout(toastTimer);$('#toast').textContent=message;$('#toast').hidden=false;toastTimer=setTimeout(()=>$('#toast').hidden=true,4500);}
 function modal(html){const content=$('#modal-content');content.innerHTML=html;content.scrollTop=0;if(!$('#modal').open)$('#modal').showModal();}
 function closeModal(){$('#modal').close();}
+function showReadingSettings(){
+ const radioGroup=(name,title,entries,current)=>`<fieldset class="reading-options"><legend>${esc(title)}</legend>${entries.map(([value,label])=>`<label class="reading-choice"><input type="radio" name="${name}" value="${value}" ${value===current?'checked':''}><span>${esc(label)}</span></label>`).join('')}</fieldset>`;
+ modal(`<h2>${esc(readingText('title'))}</h2><p>${esc(readingText('hint'))}</p><div class="reading-options-grid">${radioGroup('reading-theme',readingText('theme'),[['standard',readingText('standard')],['warm',readingText('warm')]],readingPreferences.theme)}${radioGroup('reading-size',readingText('size'),[['regular',readingText('regular')],['comfortable',readingText('comfortable')],['large',readingText('large')]],readingPreferences.size)}</div><button type="button" class="button" data-action="reading-reset">${esc(readingText('reset'))}</button>`);
+}
+function readingSettingsCard(){
+ return `<section class="panel reading-settings-panel" aria-labelledby="reading-settings-title"><div class="reading-settings-summary"><div><h2 id="reading-settings-title">${esc(readingText('title'))}</h2><p class="subtle">${esc(readingText('hint'))}</p></div>${button(esc(readingText('link')),'reading-options','','primary')}</div></section>`;
+}
 function needUser(){if(state.user)return true;showLogin();return false;}
 const isPreview=()=>state.health?.environment==='preview'||(!state.health?.environment&&(location.hostname.startsWith('feature-')||['localhost','127.0.0.1'].includes(location.hostname)));
 function showLogin(){modal(`<h2>${t('login')}</h2><p>${t('loginNote')}</p>${state.google?`<a class="button primary" href="/api/auth/google">G &nbsp; ${t('google')}</a>`:`<div class="notice">${t('loginSetup')}</div>`}${isPreview()?`<p class="subtle">${t('previewOnly')}</p>`:''}`);}
@@ -42,7 +55,7 @@ function highlight(value){let raw=String(value||'');const words=[...new Set(stat
 function renderChrome(){document.documentElement.lang=locale;$('#language').value=locale;const badge=$('#preview-badge');badge.textContent=isPreview()?t('preview'):'';badge.hidden=!isPreview();const {path,params}=route();
  const nav=(name,href,k,active=false)=>`<a class="nav-link ${active?'active':''}" href="${href}">${icon(k)}${t(name)}</a>`;
  $('#sidebar').innerHTML=`<nav class="primary-nav">${nav('home','/','home',path==='/')}${nav('search','/search','search',path==='/search')}${nav('mySpace','/me','user',path.startsWith('/me'))}<button type="button" class="nav-link nav-compose" data-action="compose">${icon('plus')}${t('newPost')}</button></nav><div class="sidebar-label">${t('spaces')}</div><nav class="secondary-nav">${nav('neck','/search?body_part=neck','neck',params.get('body_part')==='neck')}${nav('back','/search?body_part=lower-back','neck',params.get('body_part')==='lower-back')}${nav('stories','/search?category=patient-story','story',params.has('category'))}</nav>${state.user&&['admin','moderator'].includes(state.user.role)?`<div class="sidebar-label">${t('admin')}</div><nav>${nav('admin','/admin','shield',path==='/admin')}</nav>`:''}<div class="sidebar-note"><strong>${t('welcome')}</strong>${t('medical')}<p><a href="/privacy">${t('privacy')}</a></p></div>`;
- $('#account-actions').innerHTML=state.user?`<a href="/notifications" class="bell" aria-label="${t('notifications')}">${icon('bell')}${state.unread?`<span class="count">${state.unread>99?'99+':state.unread}</span>`:''}</a><details class="account-menu"><summary class="account-trigger" aria-label="${esc(t('mySpace'))}"><span class="avatar">${esc(state.user.nickname.slice(0,1))}</span><span class="nickname">${esc(state.user.nickname)}</span><span class="account-chevron" aria-hidden="true">▾</span></summary><div class="account-dropdown"><a href="/me">${t('mySpace')}</a><a href="/me?kind=settings">${t('settings')}</a><button type="button" data-action="logout">${t('logout')}</button></div></details>`:button(t('login'),'login','','primary');
+ $('#account-actions').innerHTML=state.user?`<a href="/notifications" class="bell" aria-label="${t('notifications')}">${icon('bell')}${state.unread?`<span class="count">${state.unread>99?'99+':state.unread}</span>`:''}</a><details class="account-menu"><summary class="account-trigger" aria-label="${esc(t('mySpace'))}"><span class="avatar">${esc(state.user.nickname.slice(0,1))}</span><span class="nickname">${esc(state.user.nickname)}</span><span class="account-chevron" aria-hidden="true">▾</span></summary><div class="account-dropdown"><a href="/me">${t('mySpace')}</a><a href="/me?kind=settings">${t('settings')}</a><button type="button" data-action="reading-options">${esc(readingText('link'))}</button><button type="button" data-action="logout">${t('logout')}</button></div></details>`:button(t('login'),'login','','primary');
  $('#right-rail').innerHTML=`<div class="rail-panel"><div class="rail-caption">SPINE COMMUNITY</div><h3>${t('approach')}</h3><p>${t('approachBody')}</p>${['value1','value2','value3'].map(k=>`<div class="rail-line">${icon('check')}<span>${t(k)}</span></div>`).join('')}</div><div class="rail-panel accent">${icon('leaf')}<h3>${t('careTitle')}</h3><p>${t('careBody')}</p><a class="button" href="/privacy">${t('privacy')}</a></div>${isPreview()?`<p class="subtle">${t('previewOnly')}</p>`:''}`;
  $('#footer').innerHTML=`${t('medical')}<br><a href="/privacy">${t('privacy')}</a>${isPreview()?` · ${t('previewOnly')}`:''}`;
 }
@@ -131,7 +144,7 @@ function updateReplyUI(result,editing=false){
  translateVisible(sequence);
 }
 function replyModal(c=null,kind='regular',editing=false,topicId=null){if(!needUser())return;modal(`<h2>${t(editing?'edit':kind==='progress'?'update':'reply')}</h2><form id="reply-form" class="form-grid" data-id="${esc(c?.id||'')}" data-topic-id="${esc(topicId||c?.topic_id||'')}" data-kind="${kind}" data-edit="${editing}"><label>${t('body')}<textarea name="body" required maxlength="12000">${editing?esc(c.body):''}</textarea></label>${sourceFields(editing?c:null)}<div class="notice">${t('publicNote')} ${t('translationPrivacy')}</div><div class="form-actions">${button(t('cancel'),'close-modal')}<button type="submit" class="button primary">${t(editing?'save':'publish')}</button></div></form>`);}
-async function showMe(n,params){if(!state.user){$('#main').innerHTML=empty('login','loginNote',false)+button(t('google'),'login','','primary');return;}const kind=params.get('kind')||'topics';const tabs=[['topics','myTopics'],['comments','myComments'],['bookmarks','myBookmarks'],['follows','myFollows'],['settings','settings']];$('#main').innerHTML=`<div class="profile-title"><h1 class="page-title">${t('mySpace')}</h1>${button(t('logout'),'logout','','logout-link')}</div><nav class="tabs">${tabs.map(([v,k])=>`<a class="button ${kind===v?'active':''}" href="/me?kind=${v}">${t(k)}</a>`).join('')}</nav><div id="my-content"><div class="loading"><span class="spinner"></span></div></div>`;
+async function showMe(n,params){if(!state.user){$('#main').innerHTML=`<div class="profile-title"><h1 class="page-title">${t('mySpace')}</h1></div>${readingSettingsCard()}${empty('login','loginNote',false)}${button(t('google'),'login','','primary')}`;return;}const kind=params.get('kind')||'topics';const tabs=[['topics','myTopics'],['comments','myComments'],['bookmarks','myBookmarks'],['follows','myFollows'],['settings','settings']];$('#main').innerHTML=`<div class="profile-title"><h1 class="page-title">${t('mySpace')}</h1>${button(t('logout'),'logout','','logout-link')}</div>${readingSettingsCard()}<nav class="tabs">${tabs.map(([v,k])=>`<a class="button ${kind===v?'active':''}" href="/me?kind=${v}">${t(k)}</a>`).join('')}</nav><div id="my-content"><div class="loading"><span class="spinner"></span></div></div>`;
  if(kind==='settings'){const u=state.user;$('#my-content').innerHTML=`<section class="panel"><form id="profile-form" class="form-grid"><label>${t('nickname')}<input required name="nickname" maxlength="80" value="${esc(u.nickname)}"></label><label>${t('postingLanguage')}<select name="preferred_locale">${profilePostingLanguageOptions(u,locale,languages,t,languageOptions)}</select></label><label>${t('region')}<input name="public_region" maxlength="80" value="${esc(u.public_region||'')}"></label><div><button class="button primary" type="submit">${t('save')}</button></div></form></section><section class="panel"><h3>${t('settings')}</h3><p class="subtle">${t(isPreview()?'requestNote':'requestNoteProduction')}</p><div class="stack">${button(t('privacyRequest'),'privacy-request')}${button(t('logout'),'logout')}</div><div id="privacy-history"></div></section>`;const p=await api('/api/privacy-requests');if(n===sequence)$('#privacy-history').innerHTML=p.items.map(p=>`<p class="subtle">${t(p.request_type)} · ${esc(p.status)} · ${date(p.requested_at)}</p>`).join('');return;}
  try{const data=await api('/api/me/content?kind='+encodeURIComponent(kind));if(n!==sequence)return;$('#my-content').innerHTML=data.items.length?data.items.map(c=>kind==='comments'?`<article class="topic-card"><a href="/topic/${esc(c.topic_id)}?comment=${esc(c.id)}">${date(c.created_at)} · ${t('reply')}</a>${statusHtml(c.status)}<p class="prose">${c.status==='deleted'?t('deletedComment'):esc(c.body)}</p>${actions(c,'comment')}</article>`:topicCard(c)).join(''):empty('emptyList','emptyBody');state.feed=data.items;state.meNext=data.next;if(data.next!==null)$('#my-content').insertAdjacentHTML('beforeend',button(t('loadMore'),'load-mine','','load-more'));translateVisible(n);}catch(e){if(n===sequence)$('#my-content').innerHTML=errorPanel(e);}}
 async function showNotifications(n){if(!needUser()){$('#main').innerHTML=empty('login','loginNote',false);return;}const data=await api('/api/notifications');if(n!==sequence)return;state.notificationItems=data.items;state.unread=data.unread;renderChrome();$('#main').innerHTML=`<div class="feed-heading"><h1 class="page-title">${t('notifications')}</h1>${button(t('markAll'),'read-all','','small')}</div><div class="panel">${data.items.length?data.items.map((item,i)=>`<article class="notification ${item.unread?'unread':''}">${icon(item.event_type.endsWith('_like')?'heart':item.event_type==='progress_update'?'follow':'chat')}<div><a data-action="read-notification" data-index="${i}" href="/topic/${esc(item.topic_id)}${item.comment_id?'?comment='+esc(item.comment_id):''}">${esc(item.count>1?item.count+' '+t('people'):item.actor_name||'Member')} ${t(item.event_type)}</a><small>${date(item.created_at)}</small></div></article>`).join(''):`<p class="subtle">${t('noNotifications')}</p>`}</div>`;}
@@ -183,7 +196,9 @@ function findContent(type,id){return type==='topic'?(state.topic?.id===id?state.
 async function refreshMe(){const me=await api('/api/me');state.user=me.user;state.google=me.googleConfigured;}
 async function refreshUnread(){if(!state.user)return;try{const r=await api('/api/notifications');state.unread=r.unread;renderChrome();}catch{}}
 async function clicked(el,event){const action=el.dataset.action,{id,type,active}=el.dataset;
- if(action==='login')return showLogin();if(action==='close-modal')return closeModal();if(action==='retry')return render();if(action==='compose')return composer();if(action==='privacy'){return navigate('/privacy');}
+ if(action==='login')return showLogin();
+ if(action==='reading-options')return showReadingSettings();
+ if(action==='reading-reset'){readingPreferences=saveReadingPreferences(readingStorage,document.documentElement,defaultReadingPreferences);return showReadingSettings();}if(action==='close-modal')return closeModal();if(action==='retry')return render();if(action==='compose')return composer();if(action==='privacy'){return navigate('/privacy');}
  if(action==='load-more')return loadMore();
  if(action==='historical-language-scan'||action==='historical-language-apply'){
   if(!isPreview()||state.user?.role!=='admin'||!['topic','comment'].includes(type))
@@ -272,7 +287,13 @@ document.addEventListener('submit',async event=>{const form=event.target;if(!(fo
  }catch(e){toast(errorText(e));}finally{if(submit)submit.disabled=false;}
 });
 $('#language').addEventListener('change',async e=>{locale=e.target.value;translations?.close();++sequence;localStorage.setItem('sc_locale',locale);try{state.terms=(await api('/api/taxonomy?locale='+locale)).terms;}catch{}await render();});
-document.addEventListener('change',e=>{if(e.target.id==='sort'){const current=route();navigate(sortRoute(current.path,current.params,e.target.value));}});
+document.addEventListener('change',e=>{
+ if(e.target.matches('input[name="reading-theme"],input[name="reading-size"]')){
+  const field=e.target.name==='reading-theme'?'theme':'size';
+  readingPreferences=saveReadingPreferences(readingStorage,document.documentElement,{...readingPreferences,[field]:e.target.value});
+  return;
+ }
+ if(e.target.id==='sort'){const current=route();navigate(sortRoute(current.path,current.params,e.target.value));}});
 document.addEventListener('keydown',event=>{if(event.key==='Escape')document.querySelector('.account-menu[open]')?.removeAttribute('open');});
 window.addEventListener('popstate',()=>{window.scrollTo({top:0});render();});
 async function boot(){renderChrome();await Promise.allSettled([refreshMe(),api('/api/health').then(r=>state.health=r),api('/api/taxonomy?locale='+locale).then(r=>state.terms=r.terms)]);await render();refreshUnread();}
