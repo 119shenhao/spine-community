@@ -1990,6 +1990,8 @@ test('cache-only reads, summary and detail share the title, and each cache row r
  const {call,DB,env,topic}=await fixture();
  mockTranslator(env,DB);
  const title='A practice log',body='I have been practicing the exercises from physical therapy. '.repeat(7);
+ const {excerptText}=await import('../.test-build/excerpt.js');
+ const sourceExcerpt=excerptText(body,260,false);
  const id=await topic(title,body);
  const summary=translationItem(id,{scope:'summary'}),full=translationItem(id);
  const requests=[];
@@ -2006,9 +2008,11 @@ test('cache-only reads, summary and detail share the title, and each cache row r
  const hit=async(entry,generate=true)=>(await translationBatch(call,[entry],{locale:'zh-CN',generate})).data.items[0];
  assert.equal((await hit(summary,false)).reason,'translation_cache_miss');
  assert.equal(requests.length,0);
- assert.equal((await hit(summary)).body,'mock '+body.slice(0,260));
+ assert.equal((await hit(summary)).body,'mock '+sourceExcerpt+'…');
  assert.equal((await hit(full)).body,'mock '+body.trim());
- assert.deepEqual(requests,[[title,body.slice(0,260)],[body.trim()]]);
+ // The old separately generated teaser is now replaced with an excerpt of the full translation.
+ assert.equal((await hit(summary,false)).body,'mock '+body.trim());
+ assert.deepEqual(requests,[[title,sourceExcerpt],[body.trim()]]);
  delete env.TRANSLATOR_KEY;
  assert.equal((await hit(full,false)).title,'mock '+title);
  assert.equal((await call('/api/health')).data.translationConfigured,false);
@@ -2021,8 +2025,45 @@ test('cache-only reads, summary and detail share the title, and each cache row r
  assert(rows.every(row=>row.created_at>0));
  const ledger=DB.db.prepare('SELECT * FROM translation_usage_daily').get();
  assert.equal(ledger.requests,2);
- assert.equal(ledger.characters,title.length+260+body.trim().length);
+ assert.equal(ledger.characters,title.length+sourceExcerpt.length+body.trim().length);
  assert.equal(ledger.metered_characters,ledger.characters);
+});
+
+test('word-safe excerpts work for English, Chinese and mixed Unicode',async()=>{
+ const {excerptText}=await import('../.test-build/excerpt.js');
+ assert.equal(excerptText('Some medication detail is important',12),'Some…');
+ assert.equal(excerptText('Some medication detail is important',20),'Some medication…');
+ assert.equal(excerptText('腰椎术后恢复观察记录每天活动正常',8),'腰椎术后恢复观察…');
+ assert.equal(excerptText('  First  line\\n next  line  ',40),'First line next line');
+ const css=readFileSync('public/styles.css','utf8');
+ assert.match(css,/\\.summary\\{[^}]*-webkit-line-clamp:4/);
+ assert.match(css,/@media\\(max-width:700px\\)\\{\\.topic-card \\.summary\\{-webkit-line-clamp:3/);
+});
+
+test('full translation first creates an identical cached feed teaser without another Azure call',async t=>{
+ const {call,DB,env,topic}=await fixture();
+ mockTranslator(env,DB);
+ const body='I had severe sciatica while sitting and took daily notes about my recovery. '.repeat(16);
+ const id=await topic('Pain recovery notes',body);
+ const calls=[];
+ t.mock.method(globalThis,'fetch',async(url,options)=>{
+  calls.push(JSON.parse(options.body).map(item=>item.Text));
+  return translatedByMock(url,options);
+ });
+ const full=translationItem(id),summary=translationItem(id,{scope:'summary'});
+ const translatedFull=(await translationBatch(call,[full],{locale:'zh-CN'})).data.items[0];
+ assert.equal(translatedFull.translated,true);
+ const teaser=(await translationBatch(call,[summary],{locale:'zh-CN',generate:false})).data.items[0];
+ assert.equal(teaser.translated,true);
+ const {excerptText}=await import('../.test-build/excerpt.js');
+ assert.equal(teaser.body,excerptText(translatedFull.body,800));
+ assert.equal(teaser.title,translatedFull.title);
+ assert.equal(calls.length,1,'opening the homepage after detail must not request Azure');
+ const rows=DB.db.prepare('SELECT scope,body_text FROM topic_translations WHERE topic_id=? ORDER BY scope').all(id);
+ assert.deepEqual(rows.map(x=>x.scope),['full','summary']);
+ const {buildProjection}=await import('../.test-build/public-projection.js');
+ const feed=await buildProjection(DB,'feed','latest',1,true);
+ assert.equal(feed.data.topics.find(t=>t.id===id).translations['zh-CN'].body,teaser.body);
 });
 
 test('concurrent readers dedupe across isolates and reserve the global budget atomically',async t=>{
