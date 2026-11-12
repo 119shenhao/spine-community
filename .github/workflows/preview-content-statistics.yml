@@ -1,0 +1,38 @@
+name: Preview content statistics audit
+on:
+  push:
+    branches: [feature/v1-community-build-20261106]
+    paths: [.github/workflows/preview-content-statistics.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      CLOUDFLARE_ACCOUNT_ID: '289976272520a38732bef34108585e11'
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PREVIEW_D1_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Verify isolated preview target
+        run: |
+          node --input-type=module -e "import fs from 'node:fs';const c=JSON.parse(fs.readFileSync('wrangler.preview-migrations.jsonc'));if(c.d1_databases.length!==1||c.d1_databases[0].database_id!=='4362537a-5748-4a05-b0c4-219c3db36996'||c.d1_databases[0].binding!=='PREVIEW_DB')throw Error('Wrong database');"
+      - name: Read schema and reconcile live counts (no database writes)
+        run: |
+          node --input-type=module <<'JS'
+          import {spawnSync} from 'node:child_process';
+          const sql="SELECT name FROM d1_migrations WHERE name='0014_content_origin_statistics.sql'; SELECT name FROM sqlite_master WHERE type='trigger' AND name IN ('content_origin_topic_insert','content_origin_comment_insert'); SELECT c.content_type,COALESCE(o.source,'missing') source,count(*) count,sum(o.entered_at IS NULL) undated FROM (SELECT 'topic' content_type,id FROM topics WHERE status='published' UNION ALL SELECT 'comment',c.id FROM comments c JOIN topics t ON t.id=c.topic_id WHERE c.status='published' AND t.status IN ('published','deleted')) c LEFT JOIN content_origins o ON o.content_type=c.content_type AND o.content_id=c.id GROUP BY c.content_type,o.source; SELECT count(*) count FROM (SELECT 'topic' type,id FROM topics UNION ALL SELECT 'comment',id FROM comments) c LEFT JOIN content_origins o ON o.content_type=c.type AND o.content_id=c.id WHERE o.content_id IS NULL; PRAGMA foreign_key_check;";
+          const p=spawnSync(process.execPath,['node_modules/wrangler/bin/wrangler.js','d1','execute','PREVIEW_DB','--remote','--config','wrangler.preview-migrations.jsonc','--command',sql,'--json'],{encoding:'utf8'});
+          if(p.status!==0)throw Error(p.stderr||p.stdout);
+          const r=JSON.parse(p.stdout);
+          if(r.some(x=>x.success===false)||r.length!==5||r[0].results.length!==1||r[1].results.length!==2||r[3].results[0].count!==0||r[4].results.length)throw Error('Schema or provenance audit failed: '+p.stdout);
+          const totals={topics:0,comments:0};
+          for(const row of r[2].results){if(!['imported','user','unknown'].includes(row.source))throw Error('Missing source');totals[row.content_type==='topic'?'topics':'comments']+=row.count;}
+          console.log(JSON.stringify({previewDatabase:'4362537a-5748-4a05-b0c4-219c3db36996',migrationApplied:true,triggers:2,currentBySource:r[2].results,currentTotals:totals,missingOrigins:0,foreignKeyErrors:0},null,2));
+          JS
