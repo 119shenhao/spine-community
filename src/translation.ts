@@ -2,7 +2,8 @@ import {Env,Row,all,one,stmt,now,id,b64,fail,json,body,locales} from './core';
 import {detectSourceLanguageEvidence,sameLanguage} from './source-language';
 import {confirmedLanguage,confirmAzureLanguage} from './language-state';
 import {refreshProjectionTranslations,drainPublicContent} from './projection-demand';
-import {parseObjectKey} from './public-projection';
+import {parseObjectKey,objectKey,FEED_LIMIT} from './public-projection';
+import {excerptText,FEED_EXCERPT_LIMIT,TRANSLATION_SUMMARY_LIMIT} from './excerpt';
 
 const AZURE_ENDPOINT='https://api.cognitive.microsofttranslator.com';
 const PRODUCT='azure_ai_translator_text';
@@ -248,15 +249,17 @@ async function generate(env:Env,entry:Item,row:Row,locale:string,config:Settings
     const other=topic?await one(db,`SELECT title_text,body_text FROM topic_translations WHERE topic_id=? AND locale=?
       AND source_version=? AND scope<>? AND provider='azure' AND product_id=? AND source_language=?`,
       c.id,locale,version,entry.scope,PRODUCT,source):null;
-    const cap=entry.scope==='summary'?260:entry.scope==='preview'?180:null;
-    const text=cap===null?c.body:[...c.body.slice(0,cap*2)].slice(0,cap).join('');
+    const cap=entry.scope==='summary'?TRANSLATION_SUMMARY_LIMIT:entry.scope==='preview'?180:null;
+    const text=cap===null?c.body:excerptText(c.body,cap,false);
     const title=topic&&!other?c.title:null;
     const teaser=topic?260:180;
     const sameBody=c.body.length<=teaser*2&&[...c.body].length<=teaser;
     const otherComment=!topic?await one(db,`SELECT body_text FROM comment_translations WHERE comment_id=? AND locale=?
       AND source_version=? AND scope<>? AND provider='azure' AND product_id=? AND source_language=?`,
       c.id,locale,version,entry.scope,PRODUCT,source):null;
-    const bodyFromOther=sameBody?(other||otherComment)?.body_text:
+    const bodyFromOther=topic&&entry.scope==='summary'&&other
+      ?excerptText(other.body_text,FEED_EXCERPT_LIMIT)
+      :sameBody?(other||otherComment)?.body_text:
       entry.scope==='preview'&&otherComment?[...otherComment.body_text].slice(0,180).join(''):null;
     const payload=[...(title?[title]:[]),...(bodyFromOther?[]:[text])];
     const chars=payload.reduce((sum,text)=>sum+text.length,0);
@@ -338,7 +341,9 @@ async function generate(env:Env,entry:Item,row:Row,locale:string,config:Settings
       if(sameLanguage(source,locale))return {translated:false,reason:'same_language',languageConfirmed:true};
     }
     const translatedTitle=title?data[0].translations[0].text:other?.title_text||'';
-    const translatedBody=bodyFromOther||data.at(-1)!.translations[0].text;
+    const freshBody=bodyFromOther||data.at(-1)!.translations[0].text;
+    const translatedBody=entry.scope==='summary'&&!bodyFromOther&&[...c.body].length>TRANSLATION_SUMMARY_LIMIT
+      ?freshBody.trimEnd()+'…':freshBody;
     const key=b64(crypto.getRandomValues(new Uint8Array(32)));
     const parameters=topic?[entry.scope,c.id,locale,version,translatedTitle,translatedBody]:
       [entry.scope,c.id,locale,version,translatedBody];
@@ -349,6 +354,27 @@ async function generate(env:Env,entry:Item,row:Row,locale:string,config:Settings
       WHERE ${validLease} AND EXISTS(${currentSql}) RETURNING provider`,
       ...parameters,source,PRODUCT,token,key,...lease,c.id,version);
     if(!inserted)return result('content_changed');
+    if(topic&&entry.scope==='full'){
+      // When a full translation becomes available, replace its older independent
+      // teaser with a preview of the identical full translation. The short preview
+      // gets its own cryptographic projection token and keeps the same source version.
+      const teaser=excerptText(translatedBody,FEED_EXCERPT_LIMIT);
+      const teaserToken=id(),teaserKey=b64(crypto.getRandomValues(new Uint8Array(32)));
+      await stmt(db,`INSERT OR IGNORE INTO topic_translations(
+        scope,topic_id,locale,source_version,title_text,body_text,provider,
+        source_language,product_id,engine_type,projection_token,projection_key)
+        SELECT 'summary',?,?,?,?,?,'azure',? ,?,'nmt',?,?
+        WHERE ${validLease} AND EXISTS(${currentSql})`,
+        c.id,locale,version,translatedTitle,teaser,source,PRODUCT,teaserToken,teaserKey,
+        ...lease,c.id,version).run();
+      await stmt(db,`UPDATE topic_translations SET title_text=?,body_text=?,
+        projection_token=?,projection_key=?,created_at=unixepoch()
+        WHERE topic_id=? AND locale=? AND source_version=? AND scope='summary'
+          AND provider='azure' AND product_id=? AND source_language=?
+          AND ${validLease} AND EXISTS(${currentSql})`,
+        translatedTitle,teaser,teaserToken,teaserKey,c.id,locale,version,PRODUCT,source,
+        ...lease,c.id,version).run();
+    }
     return {translated:true,title:translatedTitle,body:translatedBody,provider:'azure',generated:true,languageConfirmed:needsAutoDetection||Boolean(evidence.newlyConfirmed)};
   }catch{
     retryAfter=120;
@@ -398,7 +424,20 @@ export async function translationRoute(req:Request,env:Env,_user:Row|null,path:s
     if(!legacy&&input.generate!==true)return result('translation_cache_miss');
     if(!config||!enabled)return result('translation_not_configured');
     const {generated,...translation}=await generate(env,entry,row,locale,config);
-    if(generated)queueRefresh(entry,row);
+    if(generated){
+      queueRefresh(entry,row);
+      if(entry.type==='topic'&&entry.scope==='full'){
+        // The full translation also updates the first-page/older-page feed teaser.
+        // Refresh only its actual chronological CDN page, never the entire feed.
+        const position=await one(env.DB,`SELECT COUNT(*) n FROM topics t JOIN topics focus ON focus.id=?
+          WHERE t.status='published' AND (t.created_at>focus.created_at OR
+            (t.created_at=focus.created_at AND t.id>focus.id))`,entry.id);
+        if(position){
+          const page=Math.floor(Number(position.n)/20)+1;
+          if(page<=FEED_LIMIT)queueRefresh({...entry,scope:'summary',page:objectKey('feed','latest',page)},row);
+        }
+      }
+    }
     return translation;
   }));
   // A cache hit in a mixed batch may have waited behind an external request.
