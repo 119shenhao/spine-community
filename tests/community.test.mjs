@@ -2035,10 +2035,10 @@ test('word-safe excerpts work for English, Chinese and mixed Unicode',async()=>{
  assert.equal(excerptText('Some medication detail is important',12),'Some…');
  assert.equal(excerptText('Some medication detail is important',20),'Some medication…');
  assert.equal(excerptText('腰椎术后恢复观察记录每天活动正常',8),'腰椎术后恢复观察…');
- assert.equal(excerptText('  First  line\\n next  line  ',40),'First line next line');
+ assert.equal(excerptText('  First  line\n next  line  ',40),'First line next line');
  const css=readFileSync('public/styles.css','utf8');
- assert.match(css,/\\.summary\\{[^}]*-webkit-line-clamp:4/);
- assert.match(css,/@media\\(max-width:700px\\)\\{\\.topic-card \\.summary\\{-webkit-line-clamp:3/);
+ assert.match(css,/\.summary\{[^}]*-webkit-line-clamp:4/);
+ assert.match(css,/@media\(max-width:700px\)\{\.topic-card \.summary\{-webkit-line-clamp:3/);
 });
 
 test('sentence-safe medical summary never sends a dangling English clause to Azure',async()=>{
