@@ -52,11 +52,25 @@ function readingSettingsCard(){
 function needUser(){if(state.user)return true;showLogin();return false;}
 const isPreview=()=>state.health?.environment==='preview'||(!state.health?.environment&&(location.hostname.startsWith('feature-')||['localhost','127.0.0.1'].includes(location.hostname)));
 function showLogin(){modal(`<h2>${t('login')}</h2><p>${t('loginNote')}</p>${state.google?`<a class="button primary" href="/api/auth/google">G &nbsp; ${t('google')}</a>`:`<div class="notice">${t('loginSetup')}</div>`}${isPreview()?`<p class="subtle">${t('previewOnly')}</p>`:''}`);}
+const chineseShareNames={WeChat:'微信',QQ:'QQ',Douyin:'抖音',Bilibili:'B站',Weibo:'微博',Qzone:'QQ空间'};
+const sharePlatformName=name=>locale.startsWith('zh')?(chineseShareNames[name]||name):name;
 function shareTopicDialog(c,url){
  const targets=socialShareTargets(c.title,url);
- // Icons are in a local JS module. Accessible names remain, with no visible
- // platform-name text and no third-party icon or tracking requests.
- modal(`<h2>${esc(t('sharePost'))}</h2><p>${esc(t('sharePostHint'))}</p><div class="share-grid" role="group" aria-label="${esc(t('sharePost'))}">${targets.map(target=>`<a href="${esc(target.href)}" target="_blank" rel="noopener noreferrer" class="share-platform share-${esc(target.name.toLowerCase())}" aria-label="${esc(target.name)}" title="${esc(target.name)}">${socialShareIcon(target.name)}<span class="sr-only">${esc(target.name)}</span></a>`).join('')}</div><div class="share-link-row"><input id="share-url" type="text" readonly aria-label="${esc(t('copyLink'))}" value="${esc(url)}">${button(t('copyLink'),'share-copy','','primary')}</div>${typeof navigator.share==='function'?`<div class="share-native">${button(icon('share')+t('shareSystem'),'share-native')}</div>`:''}`);
+ const chinese=new Set(Object.keys(chineseShareNames));
+ const card=target=>{
+  const name=sharePlatformName(target.name),mark=socialShareIcon(target.name);
+  const label=target.method==='copy'?t('shareCopyToApp').replace('{app}',name):name;
+  const attrs=`class="share-platform share-${esc(target.name.toLowerCase())}" aria-label="${esc(label)}" title="${esc(label)}"`;
+  return target.method==='copy'
+   ?`<button type="button" ${attrs} data-action="share-app-copy" data-platform="${esc(target.name)}">${mark}<span class="sr-only">${esc(label)}</span></button>`
+   :`<a href="${esc(target.href)}" target="_blank" rel="noopener noreferrer" ${attrs}>${mark}<span class="sr-only">${esc(label)}</span></a>`;
+ };
+ const group=(title,items)=>`<section class="share-group"><h3 class="share-group-heading">${esc(title)}</h3><div class="share-grid" role="group" aria-label="${esc(title)}">${items.map(card).join('')}</div></section>`;
+ const domestic=targets.filter(target=>chinese.has(target.name)),global=targets.filter(target=>!chinese.has(target.name));
+ const groups=locale.startsWith('zh')
+  ?group(t('shareChina'),domestic)+group(t('shareGlobal'),global)
+  :group(t('shareGlobal'),global)+group(t('shareChina'),domestic);
+ modal(`<h2>${esc(t('sharePost'))}</h2><p>${esc(t('sharePostHint'))}</p>${groups}<p class="subtle share-app-note">${esc(t('shareAppHint'))}</p><div class="share-link-row"><input id="share-url" type="text" readonly aria-label="${esc(t('copyLink'))}" value="${esc(url)}">${button(t('copyLink'),'share-copy','','primary')}</div>${typeof navigator.share==='function'?`<div class="share-native">${button(icon('share')+t('shareSystem'),'share-native')}</div>`:''}`);
 }
 async function showShareTopic(c){
  if(!c||c.status!=='published')return;
@@ -253,12 +267,12 @@ function rememberAnalyticsFilters(){
 }
 async function clicked(el,event){const action=el.dataset.action,{id,type,active}=el.dataset;
  if(action==='share-topic')return showShareTopic(findContent('topic',id));
- if(action==='share-copy'){
+ if(action==='share-copy'||action==='share-app-copy'){
   const input=$('#share-url');if(!input)return;
   try{
    if(navigator.clipboard?.writeText)await navigator.clipboard.writeText(input.value);
    else{input.focus();input.select();if(!document.execCommand('copy'))throw new Error('copy failed');}
-   closeModal();toast(t('linkCopied'));
+   closeModal();toast(action==='share-app-copy'?t('shareAppCopied').replace('{app}',sharePlatformName(el.dataset.platform)):t('linkCopied'));
   }catch{input.focus();input.select();toast(t('shareCopyError'));}
   return;
  }
