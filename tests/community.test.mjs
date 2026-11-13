@@ -3305,7 +3305,11 @@ test('sharing: published detail has an accessible social share action with no lo
  assert(app.includes('aria-label="${esc(label)}"'),'icon links must have accessible localized names');
  assert(app.includes('data-action="share-app-copy"'),'some apps copy the post URL instead of pretending a direct share');
  assert(app.includes('sharePlatformName(el.dataset.platform)'),'copy feedback should identify the target app');
- assert(app.includes("t('shareChina')")&&app.includes("t('shareGlobal')"),'platforms should have grouped labels');
+ assert(!app.includes("group(t('shareChina')")&&!app.includes("group(t('shareGlobal')"),'all platform icons should share one uninterrupted grid');
+ const shareDialog=app.slice(app.indexOf('function shareTopicDialog(c,url)'),app.indexOf('async function showShareTopic(c)'));
+ assert(shareDialog.includes("${targets.map(card).join('')}"),'international and Chinese platforms render in the declared target order');
+ assert(!shareDialog.includes('share-group-heading'),'no Chinese or international grouping title');
+ assert(!css.includes('.share-group-heading'),'obsolete heading styles should be removed');
  const native=app.slice(app.indexOf('async function showShareTopic(c)'),app.indexOf('function route(){'));
  assert(native.indexOf('await navigator.share(')>=0);
  assert(native.indexOf('await navigator.share(')<native.indexOf('shareTopicDialog(c,url);'),'native share must run before fallback dialog');
