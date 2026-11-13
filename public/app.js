@@ -85,7 +85,57 @@ async function showShareTopic(c){
  shareTopicDialog(c,url);
 }
 function route(){return {path:location.pathname==='/index.html'?'/':location.pathname,params:new URLSearchParams(location.search)};}
-function navigate(path){const url=new URL(path,location.origin);if(url.origin!==location.origin||url.pathname.startsWith('/api/'))return;if(url.pathname+url.search+url.hash===location.pathname+location.search+location.hash)return;history.pushState(null,'',url.pathname+url.search+url.hash);window.scrollTo({top:0});return render();}
+// Keep list entries in memory, including all loaded pages and their translation views.
+// Entry keys distinguish different visits to the same URL and different search filters.
+const listViews=new Map();
+const listFields=['feed','next','feedVersion','highlights','meNext','contributorId','contributorNext'];
+const navigationKey=()=>crypto.randomUUID();
+let navigationEntry={key:navigationKey(),index:0,url:location.pathname+location.search+location.hash,list:null};
+history.replaceState({...history.state,scNavigation:navigationEntry},'');
+if('scrollRestoration' in history)history.scrollRestoration='manual';
+let renderedListEntry=null;
+function saveListView(){
+ if(renderedListEntry!==navigationEntry.key)return;
+ const main=$('#main');
+ if(!main||main.querySelector('.loading'))return;
+ observer?.disconnect();translations?.suspend();
+ const data=Object.fromEntries(listFields.map(key=>[key,state[key]]));
+ listViews.delete(navigationEntry.key);
+ listViews.set(navigationEntry.key,{entry:{...navigationEntry},nodes:[...main.childNodes],data,
+  translations,locale,user:state.user?.id||null,top:window.scrollY,left:window.scrollX});
+ translations=null;
+ while(listViews.size>12){const key=listViews.keys().next().value;listViews.get(key).translations?.close();listViews.delete(key);}
+}
+function restoreListView(n){
+ const saved=listViews.get(navigationEntry.key);
+ if(!saved||saved.locale!==locale||saved.user!==(state.user?.id||null))return false;
+ translations?.close();translations=saved.translations;
+ Object.assign(state,saved.data);
+ $('#main').replaceChildren(...saved.nodes);
+ renderedListEntry=navigationEntry.key;
+ // Restore after the full list is mounted, before observing infinite pagination.
+ window.scrollTo({top:saved.top,left:saved.left,behavior:'instant'});
+ requestAnimationFrame(()=>{if(n===sequence){loadButton();translateVisible(n);}});
+ return true;
+}
+function topicListEntry(){return listViews.get(navigationEntry.list);}
+function returnToList(){
+ const saved=topicListEntry();
+ if(saved&&navigationEntry.index>saved.entry.index){history.go(saved.entry.index-navigationEntry.index);return;}
+ return navigate('/');
+}
+function navigate(path){
+ const url=new URL(path,location.origin);
+ if(url.origin!==location.origin||url.pathname.startsWith('/api/'))return;
+ const destination=url.pathname+url.search+url.hash;
+ if(destination===location.pathname+location.search+location.hash)return;
+ saveListView();
+ const list=renderedListEntry===navigationEntry.key&&listViews.has(navigationEntry.key)?navigationEntry.key:navigationEntry.list;
+ navigationEntry={key:navigationKey(),index:navigationEntry.index+1,url:destination,list:url.pathname.startsWith('/topic/')?list:null};
+ history.pushState({scNavigation:navigationEntry},'',destination);
+ window.scrollTo({top:0,behavior:'instant'});
+ return render();
+}
 function highlight(value){let raw=String(value||'');const words=[...new Set(state.highlights.filter(s=>s.length>1))].sort((a,b)=>b.length-a.length).slice(0,120);if(!words.length)return esc(raw);const regex=new RegExp(words.map(w=>w.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('|'),'giu');let out='',last=0;for(const m of raw.matchAll(regex)){out+=esc(raw.slice(last,m.index))+'<mark>'+esc(m[0])+'</mark>';last=m.index+m[0].length;}return out+esc(raw.slice(last));}
 function renderChrome(){document.documentElement.lang=locale;$('#language').value=locale;const badge=$('#preview-badge');badge.textContent=isPreview()?t('preview'):'';badge.hidden=!isPreview();const {path,params}=route();
  const nav=(name,href,k,active=false)=>`<a class="nav-link ${active?'active':''}" href="${href}">${icon(k)}${t(name)}</a>`;
@@ -151,9 +201,9 @@ function sourcePayload(fields){
  return label==='auto'||!label?{source_lang_mode:'auto'}:
   {source_lang_mode:'manual',source_lang:label};
 }
-async function showTopic(n,topicId,params,force){$('#main').innerHTML='<div class="loading"><span class="spinner"></span></div>';try{const p=new URLSearchParams();if(params.get('comment'))p.set('focus',params.get('comment'));if(params.get('progress'))p.set('progress','1');const data=await (force?api('/api/topics/'+encodeURIComponent(topicId)+'?'+p):publicReads().topic(topicId,p));if(n!==sequence)return;translations.markPage(data);await translations.prime([['topic',data.topic],...data.progress.map(row=>['comment',row,'preview']),...data.comments.slice(0,4).map(row=>['comment',row])]);if(n!==sequence)return;state.topicVersion=data.projectionVersion||null;state.commentPage=1;state.topic=data.topic;state.comments=data.comments;state.progress=data.progress;state.commentNext=data.next;renderTopic(data.progress);translateVisible(n);if(params.get('comment'))setTimeout(()=>$('[data-comment="'+CSS.escape(params.get('comment'))+'"]')?.scrollIntoView({block:'center'}),150);}catch(e){if(n===sequence)$('#main').innerHTML=errorPanel(e);}}
+async function showTopic(n,topicId,params,force){$('#main').innerHTML='<div class="loading"><span class="spinner"></span></div>';try{const p=new URLSearchParams();if(params.get('comment'))p.set('focus',params.get('comment'));if(params.get('progress'))p.set('progress','1');const data=await (force?api('/api/topics/'+encodeURIComponent(topicId)+'?'+p):publicReads().topic(topicId,p));if(n!==sequence)return;translations.markPage(data);await translations.prime([['topic',data.topic],...data.progress.map(row=>['comment',row,'preview']),...data.comments.slice(0,4).map(row=>['comment',row])]);if(n!==sequence)return;state.topicVersion=data.projectionVersion||null;state.commentPage=1;state.topic=data.topic;state.comments=data.comments;state.progress=data.progress;state.commentNext=data.next;renderTopic(data.progress);translateVisible(n);if(params.get('comment'))setTimeout(()=>n===sequence&&$('[data-comment="'+CSS.escape(params.get('comment'))+'"]')?.scrollIntoView({block:'center'}),150);}catch(e){if(n===sequence)$('#main').innerHTML=errorPanel(e);}}
 function commentHtml(c){let depth=0,parent=c.parent_comment_id,seen=new Set();while(parent&&!seen.has(parent)){seen.add(parent);depth++;parent=state.comments.find(x=>x.id===parent)?.parent_comment_id;}return `<article class="comment ${depth?'nested':''}" class-depth="${Math.min(depth,4)}" id="comment-${esc(c.id)}" data-comment="${esc(c.id)}"><div class="topic-meta"><span class="avatar">${esc(displayAuthor(c).slice(0,1))}</span><strong>${authorLink(c)}</strong><time>${date(c.created_at)}</time>${c.kind==='progress'?`<span class="tag">${t('progress')} #${c.progress_seq}</span>`:''}${c.parent_comment_id?`<a href="/topic/${esc(c.topic_id)}?comment=${esc(c.parent_comment_id)}">↳ ${t('reply')}</a>`:''}${statusHtml(c.status)}</div><div class="prose ${c.status==='deleted'?'deleted':''}" data-body="${esc(c.id)}">${c.status==='deleted'?t('deletedComment'):esc(c.body)}</div>${translationShell('comment',c)}${actions(c,'comment')}</article>`;}
-function renderTopic(progress=[]){const c=state.topic,deleted=c.status==='deleted';$('#main').innerHTML=`<a href="/" class="back-link">← ${t('backLink')}</a><article class="panel"><div class="topic-meta"><span class="avatar">${esc(displayAuthor(c).slice(0,1))}</span><strong>${authorLink(c)}</strong><time>${date(c.created_at)}</time><span>${esc(c.source_lang)}</span>${c.public_region?`<span>${esc(c.public_region)}</span>`:''}${statusHtml(c.status)}</div><h1 class="article-title ${deleted?'deleted':''}" data-title="${esc(c.id)}">${deleted?t('deletedTopic'):esc(c.title)}</h1>${tagHtml(c.terms)}<div class="prose" data-body="${esc(c.id)}">${deleted?'':esc(c.body)}</div>${translationShell('topic',c)}${actions(c)}${c.status==='published'?`<div class="stack">${button(icon('follow')+t(c.followed?'followed':'follow'),'follow',`data-id="${esc(c.id)}" data-type="topic" data-active="${c.followed?'true':'false'}" aria-pressed="${c.followed?'true':'false'}"`,c.followed?'active':'')}${state.user?.id===c.author_id?button(icon('plus')+t('update'),'progress','','primary'):''}</div>`:''}${progress.length?`<section class="progress-panel"><h3>${t('progress')}</h3>${progress.map(p=>progressItem(c.id,p)).join('')}<a href="/topic/${esc(c.id)}?progress=1" class="subtle">${t('allProgress')} →</a></section>`:''}${c.status==='published'?`<div class="topic-share-row">${button(icon('share')+t('sharePost'),'share-topic',`data-id="${esc(c.id)}"`,'small')}</div>`:''}</article><div class="feed-heading"><h2>${t('comments')} <span class="subtle" data-reply-count>${c.reply_count}</span></h2>${route().params.get('progress')?`<a href="/topic/${esc(c.id)}">${t('comments')}</a>`:''}</div><section class="panel" id="comments">${state.comments.length?state.comments.map(commentHtml).join(''):`<p class="subtle empty-comments">${t('emptyList')}</p>`}</section>${state.commentNext?button(t('loadMore'),'load-comments','','load-more'):''}${c.status==='published'?`<section class="panel">${state.user?`<form id="root-reply" class="form-grid"><label>${t('reply')}<textarea class="short" name="body" required maxlength="12000" placeholder="${t('commentPlaceholder')}"></textarea></label>${sourceFields()}<small>${t('publicNote')} ${t('translationPrivacy')}</small><div class="form-actions"><button class="button primary" type="submit">${t('reply')}</button></div></form>`:`<p class="subtle">${t('loginNote')}</p>${button(t('google'),'login','','primary')}`}</section>`:''}`;}
+function renderTopic(progress=[]){const c=state.topic,deleted=c.status==='deleted';$('#main').innerHTML=`<a href="${esc(topicListEntry()?.entry.url||'/')}" class="back-link" data-action="back-to-list">← ${t('backLink')}</a><article class="panel"><div class="topic-meta"><span class="avatar">${esc(displayAuthor(c).slice(0,1))}</span><strong>${authorLink(c)}</strong><time>${date(c.created_at)}</time><span>${esc(c.source_lang)}</span>${c.public_region?`<span>${esc(c.public_region)}</span>`:''}${statusHtml(c.status)}</div><h1 class="article-title ${deleted?'deleted':''}" data-title="${esc(c.id)}">${deleted?t('deletedTopic'):esc(c.title)}</h1>${tagHtml(c.terms)}<div class="prose" data-body="${esc(c.id)}">${deleted?'':esc(c.body)}</div>${translationShell('topic',c)}${actions(c)}${c.status==='published'?`<div class="stack">${button(icon('follow')+t(c.followed?'followed':'follow'),'follow',`data-id="${esc(c.id)}" data-type="topic" data-active="${c.followed?'true':'false'}" aria-pressed="${c.followed?'true':'false'}"`,c.followed?'active':'')}${state.user?.id===c.author_id?button(icon('plus')+t('update'),'progress','','primary'):''}</div>`:''}${progress.length?`<section class="progress-panel"><h3>${t('progress')}</h3>${progress.map(p=>progressItem(c.id,p)).join('')}<a href="/topic/${esc(c.id)}?progress=1" class="subtle">${t('allProgress')} →</a></section>`:''}${c.status==='published'?`<div class="topic-share-row">${button(icon('share')+t('sharePost'),'share-topic',`data-id="${esc(c.id)}"`,'small')}</div>`:''}</article><div class="feed-heading"><h2>${t('comments')} <span class="subtle" data-reply-count>${c.reply_count}</span></h2>${route().params.get('progress')?`<a href="/topic/${esc(c.id)}">${t('comments')}</a>`:''}</div><section class="panel" id="comments">${state.comments.length?state.comments.map(commentHtml).join(''):`<p class="subtle empty-comments">${t('emptyList')}</p>`}</section>${state.commentNext?button(t('loadMore'),'load-comments','','load-more'):''}${c.status==='published'?`<section class="panel">${state.user?`<form id="root-reply" class="form-grid"><label>${t('reply')}<textarea class="short" name="body" required maxlength="12000" placeholder="${t('commentPlaceholder')}"></textarea></label>${sourceFields()}<small>${t('publicNote')} ${t('translationPrivacy')}</small><div class="form-actions"><button class="button primary" type="submit">${t('reply')}</button></div></form>`:`<p class="subtle">${t('loginNote')}</p>${button(t('google'),'login','','primary')}`}</section>`:''}`;}
 function progressItem(topicId,p){
  return `<div class="progress-item"><a href="/topic/${esc(topicId)}?comment=${esc(p.id)}">${t('update')} #${p.progress_seq} · ${date(p.created_at)}</a><span data-body="${esc(p.id)}">${esc([...p.body].slice(0,180).join(''))}</span>${translationShell('comment',p,'preview',true)}</div>`;
 }
@@ -232,12 +282,15 @@ async function showAdmin(n,params){if(!state.user||!['admin','moderator'].includ
  if(tab==='settings')html=`<p class="subtle">${t('translation')} · ${esc(data.settings.find(s=>s.key==='translation_enabled')?.value||'false')}</p><p class="subtle">${t('translationFallback')}</p>${button(t('privacy'),'privacy')}<h3>${t('privacyRequest')}</h3>${data.privacy.map(p=>`<div class="admin-row"><strong>${esc(p.nickname)}</strong> · ${t(p.request_type)}<p>${esc(p.status)} · ${date(p.requested_at)}</p>${adminAction('resolve','privacy',{id:p.id,status:p.request_type==='data_export'?'resolved':'fulfill'})}${adminAction('reject','privacy',{id:p.id,status:'rejected'})}</div>`).join('')||`<p class="subtle">${t('emptyList')}</p>`}`;
  $('#admin-content').innerHTML=html||`<p class="subtle">${t('emptyList')}</p>`;
 }
-async function render(force=false){const n=++sequence;observer?.disconnect();translations?.close();
- translations=translationView(locale,{configured:state.health?.translationConfigured,hasCache:state.health?.translationCacheAvailable,
+async function render(force=false,restore=false){const n=++sequence;renderedListEntry=null;observer?.disconnect();translations?.close();
+ const view=translationView(locale,{configured:state.health?.translationConfigured,hasCache:state.health?.translationCacheAvailable,
   direct:state.health?.publicContent?.directTranslations,
   request:(payload,signal)=>api('/api/translate',{method:'POST',body:JSON.stringify(payload),signal}),render:renderTranslation,
-  onStale:()=>{if(n===sequence)void render(true);}});
- state.topic=null;renderChrome();const {path,params}=route();try{
+  onStale:()=>{if(translations===view)void render(true);}});
+ translations=view;
+ state.topic=null;renderChrome();const {path,params}=route();
+ if(restore&&restoreListView(n))return;
+ try{
  if(path==='/'||path==='/search')await showFeed(n,params,path==='/search',force);
  else if(path.startsWith('/topic/'))await showTopic(n,decodeURIComponent(path.slice(7)),params,force);
  else if(path==='/me')await showMe(n,params);
@@ -247,6 +300,7 @@ async function render(force=false){const n=++sequence;observer?.disconnect();tra
  else if(path==='/privacy')$('#main').innerHTML=`<h1 class="page-title">${t('privacy')}</h1><section class="panel privacy-copy">${isPreview()?`<h3>${t('previewOnly')}</h3>`:''}<p>${t(isPreview()?'privacyText':'privacyProduction')}</p><p>${t('translationPrivacy')}</p><div class="notice info">${t('medical')}</div></section>`;
  else $('#main').innerHTML=empty('notFound','emptyBody',false);
  }catch(e){if(n===sequence)$('#main').innerHTML=errorPanel(e);}
+ if(n===sequence&&(path==='/'||path==='/search'||path==='/me'||path.startsWith('/users/')))renderedListEntry=navigationEntry.key;
  if(n===sequence&&state.health?.analyticsEnabled===true)send('/api/pageview',{path:location.pathname}).catch(()=>{});
 }
 function findContent(type,id){return type==='topic'?(state.topic?.id===id?state.topic:state.feed.find(c=>c.id===id)):state.comments.find(c=>c.id===id)||state.feed.find(c=>c.id===id);}
@@ -260,6 +314,7 @@ function rememberAnalyticsFilters(){
  history.replaceState(history.state,'',url.pathname+url.search+url.hash);
 }
 async function clicked(el,event){const action=el.dataset.action,{id,type,active}=el.dataset;
+ if(action==='back-to-list'){if(event.metaKey||event.ctrlKey||event.shiftKey||event.altKey||event.button!==0)return;event.preventDefault();return returnToList();}
  if(action==='share-topic')return showShareTopic(findContent('topic',id));
  if(action==='share-copy'||action==='share-app-copy'){
   const input=$('#share-url');if(!input)return;
@@ -326,7 +381,7 @@ async function clicked(el,event){const action=el.dataset.action,{id,type,active}
  if(action==='delete'){if(!needUser())return;modal(`<h2>${t('delete')}</h2><p>${t('confirmDelete')}</p><div class="form-actions">${button(t('cancel'),'close-modal')}${button(t('delete'),'confirm-delete',`data-id="${esc(id)}" data-type="${type}"`,'danger')}</div>`);return;}
  if(action==='confirm-delete'){await api(`/api/${type==='comment'?'comments':'topics'}/${encodeURIComponent(id)}`,{method:'DELETE'});closeModal();await render();return;}
  if(action==='report'||action==='appeal'){if(!needUser())return;modal(`<h2>${t(action)}</h2><form class="form-grid" id="report-form" data-id="${esc(id)}" data-type="${type}" data-kind="${action}"><label>${t('reason')}<textarea class="short" name="reason" required maxlength="${action==='appeal'?2000:120}"></textarea></label>${action==='report'?`<label>${t('detail')} · ${t('optional')}<textarea class="short" name="detail" maxlength="2000"></textarea></label>`:''}<div class="form-actions"><button class="button primary">${t('submit')}</button></div></form>`);return;}
- if(action==='logout'){await send('/api/auth/logout',{});state.user=null;state.unread=0;state.notificationItems=[];history.replaceState(null,'','/');await render();return;}
+ if(action==='logout'){await send('/api/auth/logout',{});state.user=null;state.unread=0;state.notificationItems=[];for(const saved of listViews.values())saved.translations?.close();listViews.clear();history.replaceState(null,'','/');await render();return;}
  if(action==='privacy-request'){modal(`<h2>${t('privacyRequest')}</h2><p>${t('requestNote')}</p><form id="privacy-form" class="form-grid"><label>${t('requestType')}<select name="type">${['account_delete','personal_data_delete','data_export'].map(k=>`<option value="${k}">${t(k)}</option>`).join('')}</select></label><button class="button primary">${t('submit')}</button></form>`);return;}
  if(action==='read-all'){await send('/api/notifications/read',{all:true});state.unread=0;await render();return;}
  if(action==='read-notification'){event.preventDefault();const item=state.notificationItems[Number(el.dataset.index)];await send('/api/notifications/read',{ids:item.ids});navigate(el.getAttribute('href'));refreshUnread();return;}
@@ -418,7 +473,13 @@ document.addEventListener('change',e=>{
  }
  if(e.target.id==='sort'){const current=route();navigate(sortRoute(current.path,current.params,e.target.value));}});
 document.addEventListener('keydown',event=>{if(event.key==='Escape')document.querySelector('.account-menu[open]')?.removeAttribute('open');});
-window.addEventListener('popstate',()=>{window.scrollTo({top:0});render();});
+window.addEventListener('popstate',event=>{
+ saveListView();
+ navigationEntry=event.state?.scNavigation||{key:navigationKey(),index:0,url:location.pathname+location.search+location.hash,list:null};
+ window.scrollTo({top:0,behavior:'instant'});
+ render(false,true);
+});
 async function boot(){renderChrome();await Promise.allSettled([refreshMe(),api('/api/health').then(r=>state.health=r),api('/api/taxonomy?locale='+locale).then(r=>state.terms=r.terms)]);await render();refreshUnread();}
 boot();setInterval(()=>{if(document.visibilityState==='visible')refreshUnread();},60000);
+
 
