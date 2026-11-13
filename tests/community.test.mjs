@@ -3316,8 +3316,8 @@ test('sharing: independent topic URL, encoded social targets, preview origin and
  assert.equal(byName.Reddit.searchParams.get('url'),prod);
  assert.equal(byName.LinkedIn.searchParams.get('url'),prod);
  assert.equal(byName.Telegram.searchParams.get('url'),prod);
- assert.equal(byName.WhatsApp.searchParams.get('text'),title+'\\n'+prod);
- assert.equal(byName.Bluesky.searchParams.get('text'),title+'\\n'+prod);
+ assert.equal(byName.WhatsApp.searchParams.get('text'),title+'\n'+prod);
+ assert.equal(byName.Bluesky.searchParams.get('text'),title+'\n'+prod);
  assert(!targets.some(x=>x.href.includes('utm_')));
  const {dictionaries,languages}=await import('../public/i18n.js');
  for(const lang of languages)for(const key of ['sharePost','sharePostHint','copyLink','linkCopied','shareSystem','shareSystemError','shareCopyError'])assert(dictionaries[lang][key],lang+' missing '+key);
