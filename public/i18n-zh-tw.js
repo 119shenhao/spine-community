@@ -1,6 +1,14 @@
 /** Shared Traditional Chinese interface for Taiwan, Hong Kong and Macau. */
 export const traditionalChinese = {
 contentSource:"來源",
+topContributors:"活躍使用者排行榜",
+contributorHint:"只統計真實使用者公開發表的貼文及回覆，不包含採集及同步匯入內容。",
+contributorRank:"排名",
+totalContributions:"總貢獻",
+contributorTopics:"發表的貼文",
+contributorReplies:"發表的回覆",
+joinDate:"加入時間",
+viewDiscussion:"查看討論",
 importedContent:"匯入內容",
 userContent:"使用者前台發布",
 allContent:"全站總量",

@@ -3,6 +3,7 @@ import {authRoute} from './auth';
 import {contentRoute} from './content';
 import {searchRoute} from './search';
 import {communityRoute} from './community';
+import {contributorRoute} from './contributors';
 import {translationRoute,translationConfigured,translationSetup} from './translation';
 import {adminRoute} from './admin';
 import {importRoute,importEnabled} from './import';
@@ -82,7 +83,7 @@ export default {
    const ip=req.headers.get('cf-connecting-ip')||'local';
    await rate(env.DB,'api:'+await hash(ip+new Date().toISOString().slice(0,10)),180);
    const user=await currentUser(req,env);
-   for(const route of [authRoute,communityRoute,contentRoute,searchRoute,translationRoute,projectionViewerRoute,projectionAdminRoute,adminRoute]){
+   for(const route of [authRoute,contributorRoute,communityRoute,contentRoute,searchRoute,translationRoute,projectionViewerRoute,projectionAdminRoute,adminRoute]){
     const response=await route(req,env,user,path,ctx);
     if(!response)continue;
     if(response.ok){

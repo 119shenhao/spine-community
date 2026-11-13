@@ -3165,3 +3165,118 @@ test('production release: personalized reading mode is accessible to guests and 
  assert.deepEqual(loadReadingPreferences(storage),{theme:'warm',size:'large'});
  assert.deepEqual(loadReadingPreferences({getItem:()=>'{oops'}),defaultReadingPreferences);
 });
+
+
+test('contributor ranking and public author activity exclude imports and nonpublic content',async()=>{
+ const {DB,call,topic}=await fixture();
+ const a=await topic('Alice recovery timeline','My ongoing lumbar recovery after rehab','alice');
+ const b=await topic('Bob neck recovery','Exercises and neck stiffness today','bob');
+ const c=await call('/api/topics/'+a+'/comments','POST',{body:'I have a similar experience'},'bob');
+ assert.equal(c.status,201);
+ await call('/api/topics/'+b+'/comments','POST',{body:'Thank you for sharing'},'alice');
+ const system=DB.db.prepare('SELECT id FROM users WHERE is_system=1').get();
+ assert(system,'system import account should exist');
+ DB.db.prepare("INSERT INTO topics(id,author_id,title,body,status) VALUES('imported-example',?,'Imported example','Imported clinical story','published')").run(system.id);
+ DB.db.prepare("INSERT INTO comments(id,topic_id,author_id,body,status) VALUES('imported-reply',? ,?,'Imported answer','published')").run(a,system.id);
+ const board=await call('/api/admin/overview?rank=comments','GET',undefined,'admin');
+ assert.equal(board.status,200,JSON.stringify(board));
+ assert.equal(board.data.contributorSort,'comments');
+ assert.deepEqual(board.data.contributors.map(x=>x.id),['alice','bob']);
+ assert(board.data.contributors.every(x=>x.posts===1&&x.replies===1&&x.total===2));
+ assert.equal((await call('/api/admin/overview?rank=total','GET',undefined,'admin')).data.contributorSort,'total');
+ assert.equal((await call('/api/admin/overview?rank=invalid','GET',undefined,'admin')).data.contributorSort,'topics');
+ const publicTopics=await call('/api/users/alice','GET',undefined,null);
+ assert.equal(publicTopics.status,200,JSON.stringify(publicTopics));
+ assert.equal(publicTopics.data.user.nickname,'alice');
+ assert.equal(publicTopics.data.user.posts,1);
+ assert.equal(publicTopics.data.user.replies,1);
+ assert.deepEqual(publicTopics.data.items.map(x=>x.id),[a]);
+ assert.equal(publicTopics.data.items[0].body,undefined);
+ assert.equal(publicTopics.data.items[0].summary.length>0,true);
+ const publicReplies=await call('/api/users/bob?kind=comments','GET',undefined,null);
+ assert.equal(publicReplies.status,200,JSON.stringify(publicReplies));
+ assert.equal(publicReplies.data.items[0].id,c.data.id);
+ assert.equal(publicReplies.data.items[0].topic_title,'Alice recovery timeline');
+ assert.equal((await call('/api/users/'+system.id,'GET',undefined,null)).status,404);
+ assert.equal((await call('/api/users/alice?kind=secret','GET',undefined,null)).status,400);
+ assert.equal((await call('/api/users/alice?offset=-1','GET',undefined,null)).status,400);
+ DB.db.prepare("UPDATE topics SET status='hidden' WHERE id=?").run(a);
+ const after=await call('/api/users/alice','GET',undefined,null);
+ assert.equal(after.data.user.posts,0);
+ assert.equal(after.data.items.length,0);
+ assert.equal((await call('/api/users/bob?kind=comments','GET',undefined,null)).data.items.length,0);
+ assert(!JSON.stringify(after.data).includes('token_hash'));
+ assert(!JSON.stringify(after.data).includes('provider_subject'));
+});
+
+
+test('analytics buttons update in place and contributor sorting uses a narrow read-only endpoint',async()=>{
+ const {call,topic}=await fixture();
+ await topic('Analytics contributor example','Personal experience for statistics');
+ const denied=await call('/api/admin/contributors?rank=total','GET',undefined,'alice');
+ assert.equal(denied.status,403);
+ assert.equal((await call('/api/admin/contributors?rank=comments','GET',undefined,null)).status,401);
+ const ranking=await call('/api/admin/contributors?rank=total','GET',undefined,'admin');
+ assert.equal(ranking.status,200,JSON.stringify(ranking));
+ assert.equal(ranking.data.contributorSort,'total');
+ assert.deepEqual(ranking.data.contributors.map(u=>u.id),['alice']);
+ assert.deepEqual(Object.keys(ranking.data).sort(),['contributorSort','contributors']);
+ const {renderContentStats,renderContentPeriod}=await import('../public/content-stats-ui.js');
+ const {renderContributorRanking}=await import('../public/contributors-ui.js');
+ const overview=(await call('/api/admin/overview?days=30&rank=topics','GET',undefined,'admin')).data;
+ const identity=v=>String(v);
+ const view={...overview,days:7,metrics:overview.metrics.slice(0,7)};
+ const html=renderContentStats(view,k=>k,identity);
+ assert.match(html,/data-action="analytics-days" data-days="7"/);
+ assert.match(html,/data-action="analytics-days" data-days="30"/);
+ assert.match(html,/id="content-stats-ranking"/);
+ assert.match(html,/id="content-stats-period"/);
+ assert.equal(html.includes('href="/admin?tab=analytics&days='),false);
+ const rankingHtml=renderContributorRanking(overview,k=>k,identity);
+ for(const rank of ['topics','comments','total'])
+  assert.match(rankingHtml,new RegExp('data-action="analytics-rank" data-rank="'+rank+'"'));
+ assert.equal(rankingHtml.includes('href="/admin?tab=analytics&days='),false);
+ const period=renderContentPeriod(view,k=>k,identity);
+ assert.match(period,/periodContent/);
+ const app=readFileSync('public/app.js','utf8');
+ assert.ok(app.includes("if(action==='analytics-days')"));
+ assert.ok(app.includes("if(action==='analytics-rank')"));
+ assert.ok(app.includes('history.replaceState(history.state'));
+ assert.ok(app.includes('state.admin.metrics.slice(0,days)'));
+});
+
+
+test('analytics period switch selects both buttons without a DOM iteration error',async()=>{
+ const {updateAnalyticsDayButtons,renderContentPeriod}=await import('../public/content-stats-ui.js');
+ const buttons=[7,30].map(day=>{
+  const attributes={},classes=new Set();
+  return {
+   dataset:{days:String(day)},attributes,classes,
+   classList:{toggle(name,on){if(on)classes.add(name);else classes.delete(name);}},
+   setAttribute(name,value){attributes[name]=value;}
+  };
+ });
+ let queryCount=0;
+ const controls={querySelectorAll(selector){
+  queryCount++;
+  assert.equal(selector,'[data-action="analytics-days"]');
+  return buttons;
+ }};
+ updateAnalyticsDayButtons(controls,30);
+ assert.equal(queryCount,1);
+ assert.deepEqual(buttons.map(b=>b.attributes['aria-pressed']),['false','true']);
+ assert.deepEqual(buttons.map(b=>b.classes.has('active')),[false,true]);
+ updateAnalyticsDayButtons(controls,7);
+ assert.deepEqual(buttons.map(b=>b.attributes['aria-pressed']),['true','false']);
+ assert.deepEqual(buttons.map(b=>b.classes.has('active')),[true,false]);
+ updateAnalyticsDayButtons(null,7);
+ const app=readFileSync('public/app.js','utf8');
+ assert.match(app,/updateAnalyticsDayButtons\(\$\('#analytics-period-controls'\),days\)/);
+ assert(!app.includes("for(const btn of $('#analytics-period-controls"));
+ const {call}=await fixture();
+ const data=(await call('/api/admin/overview?days=30','GET',undefined,'admin')).data;
+ for(const days of [7,30,7]){
+  const result=renderContentPeriod({...data,metrics:data.metrics.slice(0,days)},k=>k,v=>String(v));
+  assert(result.includes('periodContent'));
+ }
+});

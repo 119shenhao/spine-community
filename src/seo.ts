@@ -104,7 +104,7 @@ async function htmlPage(req:Request,env:Env,path:string):Promise<Response> {
  }
  const original=await indexShell(req,env);
  if(!original)return forbiddenPage(req,env,503);
- const isPrivate=PRIVATE_PAGES.has(path);
+ const isPrivate=PRIVATE_PAGES.has(path)||path.startsWith('/users/');
  let html=original;
  if(topic&&record&&record.status==='published'){
   const canonical=CANONICAL_ORIGIN+'/topic/'+encodeURIComponent(record.id);
@@ -149,7 +149,7 @@ async function htmlPage(req:Request,env:Env,path:string):Promise<Response> {
 }
 export async function seoRoute(req:Request,env:Env,path:string):Promise<Response|null> {
  const known=path==='/'||path==='/index.html'||PRIVATE_PAGES.has(path)||path.startsWith('/topic/')||
-   path==='/sitemap.xml'||path==='/robots.txt'||path.startsWith('/sitemaps/');
+   path==='/sitemap.xml'||path==='/robots.txt'||path.startsWith('/sitemaps/')||path.startsWith('/users/');
  if(!known)return null;
  if(req.method!=='GET'&&req.method!=='HEAD')return new Response(null,{status:405,headers:{allow:'GET, HEAD'}});
  if(path==='/robots.txt'){
