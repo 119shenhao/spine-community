@@ -44,14 +44,14 @@ export async function contributorRoute(req:Request,env:Env,_user:Row|null,path:s
  let rows:Row[];
  if(kind==='topics'){
   rows=await all(env.DB,`SELECT t.id,t.author_id,t.title,t.body,t.source_lang,t.created_at,
-   t.reply_count,t.like_count,u.nickname,u.public_region,t.status
+   t.reply_count,t.like_count,u.nickname,u.public_region,t.status,t.content_version,t.source_lang_mode
    FROM topics t ${topicOrigin} JOIN users u ON u.id=t.author_id
    WHERE t.author_id=? AND t.status='published'
    ORDER BY t.created_at DESC,t.id DESC LIMIT 21 OFFSET ?`,uid,offset);
   for(const r of rows){r.summary=excerptText(r.body,FEED_EXCERPT_LIMIT);delete r.body;}
  }else{
   rows=await all(env.DB,`SELECT c.id,c.topic_id,c.author_id,c.body,c.source_lang,c.created_at,
-   c.kind,c.status,t.title topic_title,t.status topic_status
+   c.kind,c.status,c.content_version,c.source_lang_mode,t.title topic_title,t.status topic_status
    FROM comments c ${commentOrigin} JOIN topics t ON t.id=c.topic_id
    WHERE c.author_id=? AND c.status='published' AND t.status IN ('published','deleted')
    ORDER BY c.created_at DESC,c.id DESC LIMIT 21 OFFSET ?`,uid,offset);

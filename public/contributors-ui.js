@@ -13,12 +13,12 @@ export function renderContributorRanking(data,t,esc){
  ${rows.map((u,i)=>`<tr><td>${i+1}</td><th scope="row"><a href="/users/${encodeURIComponent(u.id)}">${esc(u.nickname)}</a></th><td>${esc(u.posts)}</td><td>${esc(u.replies)}</td><td>${esc(u.total)}</td></tr>`).join('')||`<tr><td colspan="5">${esc(t('emptyList'))}</td></tr>`}
  </tbody></table></div></section>`;
 }
-export function renderContributorItems(items,kind,t,esc,date){
+export function renderContributorItems(items,kind,t,esc,date,translationShell=()=>'' ){
  return items.map(item=>kind==='comments'
- ?`<article class="topic-card"><p class="subtle"><a href="/topic/${encodeURIComponent(item.topic_id)}?comment=${encodeURIComponent(item.id)}">${esc(item.topic_title||t('deletedTopic'))}</a> · ${esc(date(item.created_at))}</p><p class="prose">${esc(item.body)}</p><a class="subtle" href="/topic/${encodeURIComponent(item.topic_id)}?comment=${encodeURIComponent(item.id)}">${esc(t('viewDiscussion'))} →</a></article>`
- :`<article class="topic-card"><div class="topic-meta"><time>${esc(date(item.created_at))}</time><span>· ${esc(item.source_lang)}</span></div><h3><a href="/topic/${encodeURIComponent(item.id)}">${esc(item.title)}</a></h3><p class="summary">${esc(item.summary)}</p><a class="subtle" href="/topic/${encodeURIComponent(item.id)}">${esc(t('viewDiscussion'))} →</a></article>`).join('');
+ ?`<article class="topic-card"><p class="subtle"><a href="/topic/${encodeURIComponent(item.topic_id)}?comment=${encodeURIComponent(item.id)}">${esc(item.topic_title||t('deletedTopic'))}</a> · ${esc(date(item.created_at))}</p><p class="prose" data-body="${esc(item.id)}">${esc(item.body)}</p>${translationShell('comment',item)}<a class="subtle" href="/topic/${encodeURIComponent(item.topic_id)}?comment=${encodeURIComponent(item.id)}">${esc(t('viewDiscussion'))} →</a></article>`
+ :`<article class="topic-card"><div class="topic-meta"><time>${esc(date(item.created_at))}</time><span>· ${esc(item.source_lang)}</span></div><h3><a href="/topic/${encodeURIComponent(item.id)}" data-title="${esc(item.id)}">${esc(item.title)}</a></h3><p class="summary" data-body="${esc(item.id)}">${esc(item.summary)}</p>${translationShell('topic',item,'summary')}<a class="subtle" href="/topic/${encodeURIComponent(item.id)}">${esc(t('viewDiscussion'))} →</a></article>`).join('');
 }
-export function renderContributorProfile(data,t,esc,date){
+export function renderContributorProfile(data,t,esc,date,translationShell=()=>'' ){
  const u=data.user,kind=data.kind,profilePath='/users/'+encodeURIComponent(u.id);
  return `<a class="back-link" href="/">← ${esc(t('backLink'))}</a>
  <section class="panel contributor-profile"><div class="contributor-identity">
@@ -32,6 +32,6 @@ export function renderContributorProfile(data,t,esc,date){
  <nav class="tabs" aria-label="${esc(t('topContributors'))}">
  <a class="button ${kind==='topics'?'active':''}" href="${profilePath}?kind=topics">${esc(t('contributorTopics'))}</a>
  <a class="button ${kind==='comments'?'active':''}" href="${profilePath}?kind=comments">${esc(t('contributorReplies'))}</a></nav>
- <section id="contributor-items">${data.items.length?renderContributorItems(data.items,kind,t,esc,date):`<p class="subtle">${esc(t('emptyList'))}</p>`}</section>
+ <section id="contributor-items">${data.items.length?renderContributorItems(data.items,kind,t,esc,date,translationShell):`<p class="subtle">${esc(t('emptyList'))}</p>`}</section>
  <div id="contributor-pagination">${data.next===null?'':`<button type="button" class="button load-more" data-action="load-contributor">${esc(t('loadMore'))}</button>`}</div>`;
 }

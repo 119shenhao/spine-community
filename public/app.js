@@ -154,9 +154,12 @@ async function showContributor(n,id,params){
  try{
   const data=await api('/api/users/'+encodeURIComponent(id)+'?kind='+kind);
   if(n!==sequence)return;
+  await translations.prime(data.items.slice(0,4).map(row=>[kind==='topics'?'topic':'comment',row,kind==='topics'?'summary':'full']));
+  if(n!==sequence)return;
   state.contributorNext=data.next;
   state.contributorId=data.user.id;
-  $('#main').innerHTML=renderContributorProfile(data,t,esc,date);
+  $('#main').innerHTML=renderContributorProfile(data,t,esc,date,translationShell);
+  translateVisible(n);
  }catch(e){if(n===sequence)$('#main').innerHTML=errorPanel(e);}
 }
 async function showNotifications(n){if(!needUser()){$('#main').innerHTML=empty('login','loginNote',false);return;}const data=await api('/api/notifications');if(n!==sequence)return;state.notificationItems=data.items;state.unread=data.unread;renderChrome();$('#main').innerHTML=`<div class="feed-heading"><h1 class="page-title">${t('notifications')}</h1>${button(t('markAll'),'read-all','','small')}</div><div class="panel">${data.items.length?data.items.map((item,i)=>`<article class="notification ${item.unread?'unread':''}">${icon(item.event_type.endsWith('_like')?'heart':item.event_type==='progress_update'?'follow':'chat')}<div><a data-action="read-notification" data-index="${i}" href="/topic/${esc(item.topic_id)}${item.comment_id?'?comment='+esc(item.comment_id):''}">${esc(item.count>1?item.count+' '+t('people'):item.actor_name||'Member')} ${t(item.event_type)}</a><small>${date(item.created_at)}</small></div></article>`).join(''):`<p class="subtle">${t('noNotifications')}</p>`}</div>`;}
@@ -269,8 +272,11 @@ async function clicked(el,event){const action=el.dataset.action,{id,type,active}
    const id=state.contributorId,n=sequence,kind=route().params.get('kind')==='comments'?'comments':'topics';
    const data=await api('/api/users/'+encodeURIComponent(id)+'?kind='+kind+'&offset='+state.contributorNext);
    if(n!==sequence||state.contributorId!==id)return;
+   await translations.prime(data.items.slice(0,4).map(row=>[kind==='topics'?'topic':'comment',row,kind==='topics'?'summary':'full']));
+   if(n!==sequence||state.contributorId!==id)return;
    state.contributorNext=data.next;
-   $('#contributor-items')?.insertAdjacentHTML('beforeend',renderContributorItems(data.items,kind,t,esc,date));
+   $('#contributor-items')?.insertAdjacentHTML('beforeend',renderContributorItems(data.items,kind,t,esc,date,translationShell));
+   translateVisible(n);
    const pager=$('#contributor-pagination');if(pager)pager.innerHTML=data.next===null?'':button(t('loadMore'),'load-contributor','','load-more');
    return;
   }
