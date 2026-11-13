@@ -3235,16 +3235,16 @@ test('analytics buttons update in place and contributor sorting uses a narrow re
  assert.match(html,/data-action="analytics-days" data-days="30"/);
  assert.match(html,/id="content-stats-ranking"/);
  assert.match(html,/id="content-stats-period"/);
- assert.doesNotMatch(html,/href="\\/admin\\?tab=analytics&days=/);
+ assert.equal(html.includes('href="/admin?tab=analytics&days='),false);
  const rankingHtml=renderContributorRanking(overview,k=>k,identity);
  for(const rank of ['topics','comments','total'])
   assert.match(rankingHtml,new RegExp('data-action="analytics-rank" data-rank="'+rank+'"'));
- assert.doesNotMatch(rankingHtml,/href="\\/admin\\?tab=analytics&days=/);
+ assert.equal(rankingHtml.includes('href="/admin?tab=analytics&days='),false);
  const period=renderContentPeriod(view,k=>k,identity);
  assert.match(period,/periodContent/);
  const app=readFileSync('public/app.js','utf8');
- assert.match(app,/if\\(action==='analytics-days'\\)/);
- assert.match(app,/if\\(action==='analytics-rank'\\)/);
- assert.match(app,/history\\.replaceState\\(history\\.state/);
- assert.match(app,/state\\.admin\\.metrics\\.slice\\(0,days\\)/);
+ assert.ok(app.includes("if(action==='analytics-days')"));
+ assert.ok(app.includes("if(action==='analytics-rank')"));
+ assert.ok(app.includes('history.replaceState(history.state'));
+ assert.ok(app.includes('state.admin.metrics.slice(0,days)'));
 });
