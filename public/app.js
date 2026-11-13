@@ -316,7 +316,8 @@ async function clicked(el,event){const action=el.dataset.action,{id,type,active}
  if(action==='analytics-rank'){
   const rank=el.dataset.rank;
   if(!['topics','comments','total'].includes(rank)||!state.admin||route().path!=='/admin'||route().params.get('tab')!=='analytics')return;
-  if(state.admin.contributorSort===rank)return;
+  // Clicking the already selected sort cancels any older in-flight sort request.
+  if(state.admin.contributorSort===rank){++analyticsRankingRequest;return;}
   const token=++analyticsRankingRequest,n=sequence;
   // Fetch only leaderboard rows, leaving traffic metrics, content totals and scroll unchanged.
   const data=await api('/api/admin/contributors?rank='+rank);
