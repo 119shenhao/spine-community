@@ -3289,6 +3289,14 @@ test('sharing: published detail has an accessible social share action with no lo
  const app=readFileSync('public/app.js','utf8'),css=readFileSync('public/styles.css','utf8');
  assert.match(app,/data-action="share-topic"|['"]share-topic['"]/);
  assert.match(app,/topic-share-row/);
+ const detail=app.slice(app.indexOf('function renderTopic('),app.indexOf('function progressItem('));
+ const sharing=detail.indexOf('<div class="topic-share-row">');
+ assert(sharing>detail.indexOf('class="progress-panel"'),'share belongs below the body, controls and progress updates');
+ assert(sharing<detail.indexOf('</article><div class="feed-heading">'),'share belongs before the comments heading');
+ assert.equal(detail.split('<div class="topic-share-row">').length-1,1,'only one share button appears per published post');
+ const progressUpdate=app.slice(app.indexOf('function updateProgressPanel()'),app.indexOf('function updateReplyUI('));
+ assert(progressUpdate.includes("share.insertAdjacentHTML('beforebegin',html)"),'new progress updates must not move the share button above the post end');
+ assert.match(css,/\.topic-share-row\{[^}]*margin:20px 0 0/);
  assert.match(app,/c\.status==='published'\?\`<div class="topic-share-row"/);
  assert.match(app,/noopener noreferrer/);
  assert(app.includes('navigator.share'));
