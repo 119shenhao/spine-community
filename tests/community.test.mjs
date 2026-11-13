@@ -3283,3 +3283,42 @@ test('analytics period switch selects both buttons without a DOM iteration error
   assert(result.includes('periodContent'));
  }
 });
+
+
+test('sharing: published detail has an accessible social share action with no login and no page reload',()=>{
+ const app=readFileSync('public/app.js','utf8'),css=readFileSync('public/styles.css','utf8');
+ assert.match(app,/data-action="share-topic"|['"]share-topic['"]/);
+ assert.match(app,/topic-share-row/);
+ assert.match(app,/c\.status==='published'\?\`<div class="topic-share-row"/);
+ assert.match(app,/noopener noreferrer/);
+ assert.match(app,/navigator\.share/);
+ assert.match(app,/navigator\.clipboard/);
+ assert.match(css,/\.share-grid/);
+ assert.match(css,/@media\(max-width:420px\)/);
+});
+
+test('sharing: independent topic URL, encoded social targets, preview origin and clean links',async()=>{
+ const {topicShareUrl,socialShareTargets}=await import('../public/share-ui.js');
+ const prod=topicShareUrl('abc_123-XYZ','https://spine.nbn369.com');
+ const preview=topicShareUrl('abc_123-XYZ','https://example.workers.dev/path?old=1#hash');
+ assert.equal(prod,'https://spine.nbn369.com/topic/abc_123-XYZ');
+ assert.equal(preview,'https://example.workers.dev/topic/abc_123-XYZ');
+ assert.throws(()=>topicShareUrl('../evil','https://spine.nbn369.com'));
+ const title='Patient’s neck & lower back story / 你好';
+ const targets=socialShareTargets(title,prod);
+ assert.deepEqual(targets.map(x=>x.name),['Facebook','X','Reddit','LinkedIn','WhatsApp','Telegram','Bluesky']);
+ const byName=Object.fromEntries(targets.map(x=>[x.name,new URL(x.href)]));
+ for(const u of Object.values(byName))assert.equal(u.protocol,'https:');
+ assert.equal(byName.Facebook.searchParams.get('u'),prod);
+ assert.equal(byName.X.searchParams.get('url'),prod);
+ assert.equal(byName.X.searchParams.get('text'),title);
+ assert.equal(byName.Reddit.searchParams.get('title'),title);
+ assert.equal(byName.Reddit.searchParams.get('url'),prod);
+ assert.equal(byName.LinkedIn.searchParams.get('url'),prod);
+ assert.equal(byName.Telegram.searchParams.get('url'),prod);
+ assert.equal(byName.WhatsApp.searchParams.get('text'),title+'\\n'+prod);
+ assert.equal(byName.Bluesky.searchParams.get('text'),title+'\\n'+prod);
+ assert(!targets.some(x=>x.href.includes('utm_')));
+ const {dictionaries,languages}=await import('../public/i18n.js');
+ for(const lang of languages)for(const key of ['sharePost','sharePostHint','copyLink','linkCopied','shareSystem','shareSystemError','shareCopyError'])assert(dictionaries[lang][key],lang+' missing '+key);
+});
