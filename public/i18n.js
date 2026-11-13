@@ -5,6 +5,8 @@ topContributors:['Top contributors','活跃用户排行榜','Colaboradores desta
 contributorHint:['Public posts and replies by real members only; imported content is excluded.','仅统计真实用户公开发表的帖子和回复；不含采集与同步导入内容。','Solo publicaciones y respuestas públicas de miembros reales; se excluye el contenido importado.','Somente publicações e respostas públicas de membros reais; conteúdo importado excluído.','Nur öffentliche Beiträge und Antworten echter Mitglieder; importierte Inhalte ausgeschlossen.','Publications et réponses publiques de membres réels uniquement ; contenu importé exclu.','実際の会員の公開投稿・返信のみ。インポートは対象外。'],
 contributorRank:['Rank','排名','Puesto','Posição','Rang','Rang','順位'],
 totalContributions:['Total contributions','总贡献','Contribuciones totales','Contribuições totais','Gesamtbeiträge','Contributions totales','投稿・返信合計'],
+contributorTopics:['Posts','发表的帖子','Publicaciones','Publicações','Beiträge','Publications','投稿'],
+contributorReplies:['Replies','发表的回复','Respuestas','Respostas','Antworten','Réponses','返信'],
 joinDate:['Joined','加入时间','Se unió','Entrou em','Beigetreten','Inscription','参加日'],
 viewDiscussion:['View discussion','查看讨论','Ver discusión','Ver discussão','Diskussion ansehen','Voir la discussion','スレッドを見る'],
 contentSource:["Source", "来源", "Origen", "Origem", "Quelle", "Source", "投稿元"],

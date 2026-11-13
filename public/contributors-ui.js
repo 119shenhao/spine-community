@@ -30,8 +30,8 @@ export function renderContributorProfile(data,t,esc,date){
  <div><strong>${esc(Number(u.posts)+Number(u.replies))}</strong><span>${esc(t('totalContributions'))}</span></div>
  </div></section>
  <nav class="tabs" aria-label="${esc(t('topContributors'))}">
- <a class="button ${kind==='topics'?'active':''}" href="${profilePath}?kind=topics">${esc(t('myTopics'))}</a>
- <a class="button ${kind==='comments'?'active':''}" href="${profilePath}?kind=comments">${esc(t('myComments'))}</a></nav>
+ <a class="button ${kind==='topics'?'active':''}" href="${profilePath}?kind=topics">${esc(t('contributorTopics'))}</a>
+ <a class="button ${kind==='comments'?'active':''}" href="${profilePath}?kind=comments">${esc(t('contributorReplies'))}</a></nav>
  <section id="contributor-items">${data.items.length?renderContributorItems(data.items,kind,t,esc,date):`<p class="subtle">${esc(t('emptyList'))}</p>`}</section>
  <div id="contributor-pagination">${data.next===null?'':`<button type="button" class="button load-more" data-action="load-contributor">${esc(t('loadMore'))}</button>`}</div>`;
 }
