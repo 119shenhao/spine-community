@@ -3280,3 +3280,80 @@ test('analytics period switch selects both buttons without a DOM iteration error
   assert(result.includes('periodContent'));
  }
 });
+
+test('sharing: published detail has an accessible social share action with no login and no page reload',()=>{
+ const app=readFileSync('public/app.js','utf8'),css=readFileSync('public/styles.css','utf8');
+ assert.match(app,/data-action="share-topic"|['"]share-topic['"]/);
+ assert.match(app,/topic-share-row/);
+ const detail=app.slice(app.indexOf('function renderTopic('),app.indexOf('function progressItem('));
+ const sharing=detail.indexOf('<div class="topic-share-row">');
+ assert(sharing>detail.indexOf('class="progress-panel"'),'share belongs below the body, controls and progress updates');
+ assert(sharing<detail.indexOf('</article><div class="feed-heading">'),'share belongs before the comments heading');
+ assert.equal(detail.split('<div class="topic-share-row">').length-1,1,'only one share button appears per published post');
+ const progressUpdate=app.slice(app.indexOf('function updateProgressPanel()'),app.indexOf('function updateReplyUI('));
+ assert(progressUpdate.includes("share.insertAdjacentHTML('beforebegin',html)"),'new progress updates must not move the share button above the post end');
+ assert.match(css,/\.topic-share-row\{[^}]*margin:20px 0 0/);
+ assert.match(app,/c\.status==='published'\?\`<div class="topic-share-row"/);
+ assert.match(app,/noopener noreferrer/);
+ assert(app.includes('navigator.share'));
+ assert(app.includes('navigator.clipboard'));
+ assert(app.includes('socialShareIcon(target.name)'),'fallback must use SVG icon markup');
+ assert(app.includes('aria-label="${esc(label)}"'),'icon links must have accessible localized names');
+ assert(app.includes('data-action="share-app-copy"'),'some apps copy the post URL instead of pretending a direct share');
+ assert(app.includes('sharePlatformName(el.dataset.platform)'),'copy feedback should identify the target app');
+ assert(!app.includes("group(t('shareChina')")&&!app.includes("group(t('shareGlobal')"),'all platform icons should share one uninterrupted grid');
+ const shareDialog=app.slice(app.indexOf('function shareTopicDialog(c,url)'),app.indexOf('async function showShareTopic(c)'));
+ assert(shareDialog.includes("${targets.map(card).join('')}"),'international and Chinese platforms render in the declared target order');
+ assert(!shareDialog.includes('share-group-heading'),'no Chinese or international grouping title');
+ assert(!css.includes('.share-group-heading'),'obsolete heading styles should be removed');
+ const native=app.slice(app.indexOf('async function showShareTopic(c)'),app.indexOf('function route(){'));
+ assert(native.indexOf('await navigator.share(')>=0);
+ assert(native.indexOf('await navigator.share(')<native.indexOf('shareTopicDialog(c,url);'),'native share must run before fallback dialog');
+ assert(native.includes("e?.name!=='AbortError'"));
+ assert(css.includes('grid-template-columns:repeat(4,'),'share choices should be a four-column grid');
+ assert.match(css,/\.share-grid/);
+ assert.match(css,/@media\(max-width:420px\)/);
+});
+
+test('sharing: independent topic URL, encoded social targets, preview origin and clean links',async()=>{
+ const {topicShareUrl,socialShareTargets}=await import('../public/share-ui.js');
+ const prod=topicShareUrl('abc_123-XYZ','https://spine.nbn369.com');
+ const preview=topicShareUrl('abc_123-XYZ','https://example.workers.dev/path?old=1#hash');
+ assert.equal(prod,'https://spine.nbn369.com/topic/abc_123-XYZ');
+ assert.equal(preview,'https://example.workers.dev/topic/abc_123-XYZ');
+ assert.throws(()=>topicShareUrl('../evil','https://spine.nbn369.com'));
+ const title='Patient’s neck & lower back story / 你好';
+ const targets=socialShareTargets(title,prod);
+ assert.deepEqual(targets.map(x=>x.name),['Facebook','X','Reddit','LinkedIn','WhatsApp','Telegram','Bluesky','WeChat','QQ','Douyin','Bilibili','Weibo','Qzone']);
+ assert.deepEqual(targets.filter(x=>x.method==='copy').map(x=>x.name),['WeChat','Douyin','Bilibili']);
+ assert(targets.filter(x=>x.method==='copy').every(x=>!x.href),'copy-only apps must never have fake app deeplinks');
+ const {socialShareIcon}=await import('../public/share-ui.js');
+ for(const target of targets){
+  const svg=socialShareIcon(target.name);
+  assert(svg.startsWith('<svg'),target.name+' must have an SVG icon');
+  assert(svg.includes('aria-hidden="true"'),target.name+' SVG must not replace its accessible link label');
+  assert(!svg.includes('<image')&&!svg.includes('<use'),target.name+' must remain fully local');
+ }
+ assert.equal(socialShareIcon('Unknown'),'');
+ const byName=Object.fromEntries(targets.filter(x=>x.href).map(x=>[x.name,new URL(x.href)]));
+ for(const u of Object.values(byName))assert.equal(u.protocol,'https:');
+ assert.equal(byName.Facebook.searchParams.get('u'),prod);
+ assert.equal(byName.X.searchParams.get('url'),prod);
+ assert.equal(byName.X.searchParams.get('text'),title);
+ assert.equal(byName.Reddit.searchParams.get('title'),title);
+ assert.equal(byName.Reddit.searchParams.get('url'),prod);
+ assert.equal(byName.LinkedIn.searchParams.get('url'),prod);
+ assert.equal(byName.Telegram.searchParams.get('url'),prod);
+ assert.equal(byName.WhatsApp.searchParams.get('text'),title+'\n'+prod);
+ assert.equal(byName.Bluesky.searchParams.get('text'),title+'\n'+prod);
+ for(const name of ['QQ','Weibo','Qzone']){
+  assert.equal(byName[name].searchParams.get('url'),prod,name+' share URL');
+  assert.equal(byName[name].searchParams.get('title'),title,name+' share title');
+ }
+ assert.equal(byName.QQ.host,'connect.qq.com');
+ assert.equal(byName.Weibo.host,'service.weibo.com');
+ assert.equal(byName.Qzone.host,'sns.qzone.qq.com');
+ assert(!targets.some(x=>x.href?.includes('utm_')));
+ const {dictionaries,languages}=await import('../public/i18n.js');
+ for(const lang of languages)for(const key of ['sharePost','sharePostHint','copyLink','linkCopied','shareSystem','shareSystemError','shareCopyError','shareChina','shareGlobal','shareAppHint','shareCopyToApp','shareAppCopied'])assert(dictionaries[lang][key],lang+' missing '+key);
+});
