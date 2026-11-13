@@ -3291,8 +3291,15 @@ test('sharing: published detail has an accessible social share action with no lo
  assert.match(app,/topic-share-row/);
  assert.match(app,/c\.status==='published'\?\`<div class="topic-share-row"/);
  assert.match(app,/noopener noreferrer/);
- assert.match(app,/navigator\.share/);
- assert.match(app,/navigator\.clipboard/);
+ assert.match(app,/navigator\\.share/);
+ assert.match(app,/navigator\\.clipboard/);
+ assert.match(app,/socialShareIcon\\(target\\.name\\)/,'fallback must use a real icon rather than a platform label');
+ assert.match(app,/aria-label="\\$\\{esc\\(target\\.name\\)\\}"/,'icon links must be accessible');
+ const native=app.slice(app.indexOf('async function showShareTopic(c)'),app.indexOf('function route(){'));
+ assert(native.indexOf('await navigator.share(')>=0);
+ assert(native.indexOf('await navigator.share(')<native.indexOf('shareTopicDialog(c,url);'),'native share must run before fallback dialog');
+ assert.match(native,/e\\?\\.name!=='AbortError'/);
+ assert.match(css,/grid-template-columns:repeat\\(4,/,'share choices should be icons in a four-column grid');
  assert.match(css,/\.share-grid/);
  assert.match(css,/@media\(max-width:420px\)/);
 });
@@ -3307,6 +3314,14 @@ test('sharing: independent topic URL, encoded social targets, preview origin and
  const title='Patient’s neck & lower back story / 你好';
  const targets=socialShareTargets(title,prod);
  assert.deepEqual(targets.map(x=>x.name),['Facebook','X','Reddit','LinkedIn','WhatsApp','Telegram','Bluesky']);
+ const {socialShareIcon}=await import('../public/share-ui.js');
+ for(const target of targets){
+  const svg=socialShareIcon(target.name);
+  assert(svg.startsWith('<svg'),target.name+' must have an SVG icon');
+  assert(svg.includes('aria-hidden="true"'),target.name+' SVG must not replace its accessible link label');
+  assert(!svg.includes('<image')&&!svg.includes('<use'),target.name+' must remain fully local');
+ }
+ assert.equal(socialShareIcon('Unknown'),'');
  const byName=Object.fromEntries(targets.map(x=>[x.name,new URL(x.href)]));
  for(const u of Object.values(byName))assert.equal(u.protocol,'https:');
  assert.equal(byName.Facebook.searchParams.get('u'),prod);
