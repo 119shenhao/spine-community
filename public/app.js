@@ -9,7 +9,7 @@ import {publicContentReader} from './public-content.js';
 import {translationView} from './translation-ui.js';
 import {renderProjectionAdmin,projectionAdminAction} from './projection-admin.js';
 import {renderTranslationAdmin} from './translation-admin.js';
-import {renderContentStats,renderContentPeriod} from './content-stats-ui.js';
+import {renderContentStats,renderContentPeriod,updateAnalyticsDayButtons} from './content-stats-ui.js';
 import {renderContributorProfile,renderContributorItems,renderContributorRanking} from './contributors-ui.js';
 import {renderLanguageReview} from './language-admin.js';
 const $=(s,root=document)=>root.querySelector(s),$$=(s,root=document)=>[...root.querySelectorAll(s)];
@@ -300,16 +300,12 @@ async function clicked(el,event){const action=el.dataset.action,{id,type,active}
   const days=Number(el.dataset.days);
   if(![7,30].includes(days)||!state.admin||route().path!=='/admin'||route().params.get('tab')!=='analytics')return;
   if(state.analyticsDays===days)return;
-  state.analyticsDays=days;
   // All 30 daily rows are loaded when Analytics opens; no extra Worker/D1 request.
   const view={...state.admin,days,metrics:state.admin.metrics.slice(0,days)};
   const period=$('#content-stats-period');
   if(period)period.innerHTML=renderContentPeriod(view,t,esc);
-  for(const btn of $('#analytics-period-controls [data-action="analytics-days"]')){
-   const selected=Number(btn.dataset.days)===days;
-   btn.classList.toggle('active',selected);
-   btn.setAttribute('aria-pressed',String(selected));
-  }
+  updateAnalyticsDayButtons($('#analytics-period-controls'),days);
+  state.analyticsDays=days;
   rememberAnalyticsFilters();
   return;
  }

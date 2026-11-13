@@ -3248,3 +3248,38 @@ test('analytics buttons update in place and contributor sorting uses a narrow re
  assert.ok(app.includes('history.replaceState(history.state'));
  assert.ok(app.includes('state.admin.metrics.slice(0,days)'));
 });
+
+test('analytics period switch selects both buttons without a DOM iteration error',async()=>{
+ const {updateAnalyticsDayButtons,renderContentPeriod}=await import('../public/content-stats-ui.js');
+ const buttons=[7,30].map(day=>{
+  const attributes={},classes=new Set();
+  return {
+   dataset:{days:String(day)},attributes,classes,
+   classList:{toggle(name,on){if(on)classes.add(name);else classes.delete(name);}},
+   setAttribute(name,value){attributes[name]=value;}
+  };
+ });
+ let queryCount=0;
+ const controls={querySelectorAll(selector){
+  queryCount++;
+  assert.equal(selector,'[data-action="analytics-days"]');
+  return buttons;
+ }};
+ updateAnalyticsDayButtons(controls,30);
+ assert.equal(queryCount,1);
+ assert.deepEqual(buttons.map(b=>b.attributes['aria-pressed']),['false','true']);
+ assert.deepEqual(buttons.map(b=>b.classes.has('active')),[false,true]);
+ updateAnalyticsDayButtons(controls,7);
+ assert.deepEqual(buttons.map(b=>b.attributes['aria-pressed']),['true','false']);
+ assert.deepEqual(buttons.map(b=>b.classes.has('active')),[true,false]);
+ updateAnalyticsDayButtons(null,7);
+ const app=readFileSync('public/app.js','utf8');
+ assert.match(app,/updateAnalyticsDayButtons\(\$\('#analytics-period-controls'\),days\)/);
+ assert(!app.includes("for(const btn of $('#analytics-period-controls"));
+ const {call}=await fixture();
+ const data=(await call('/api/admin/overview?days=30','GET',undefined,'admin')).data;
+ for(const days of [7,30,7]){
+  const result=renderContentPeriod({...data,metrics:data.metrics.slice(0,days)},k=>k,v=>String(v));
+  assert(result.includes('periodContent'));
+ }
+});

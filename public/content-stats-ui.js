@@ -33,3 +33,14 @@ export function renderContentStats(data,t,esc){
  <div id="content-stats-ranking">${renderContributorRanking(data,t,esc)}</div>
  <section id="content-stats-period">${renderContentPeriod(data,t,esc)}</section>`;
 }
+
+/** Update the two period buttons in place. querySelectorAll returns a collection;
+ * querySelector only returns one element and must never be iterated. */
+export function updateAnalyticsDayButtons(container,days){
+ if(!container)return;
+ for(const button of container.querySelectorAll('[data-action="analytics-days"]')){
+  const selected=Number(button.dataset.days)===days;
+  button.classList.toggle('active',selected);
+  button.setAttribute('aria-pressed',String(selected));
+ }
+}
