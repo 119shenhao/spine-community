@@ -147,6 +147,8 @@ export function translationView(locale,{request,configured,hasCache,direct,rende
    state.original=!state.original;
    for(const bound of state.nodes)if(bound.isConnected)render(bound,state);
   },
+  suspend(){observer?.disconnect();clearTimeout(timer);timer=null;queue.clear();},
   close(){closed=true;observer?.disconnect();clearTimeout(timer);}
  };
 }
+
