@@ -9,8 +9,8 @@ import {publicContentReader} from './public-content.js';
 import {translationView} from './translation-ui.js';
 import {renderProjectionAdmin,projectionAdminAction} from './projection-admin.js';
 import {renderTranslationAdmin} from './translation-admin.js';
-import {renderContentStats} from './content-stats-ui.js';
-import {renderContributorProfile,renderContributorItems} from './contributors-ui.js';
+import {renderContentStats,renderContentPeriod} from './content-stats-ui.js';
+import {renderContributorProfile,renderContributorItems,renderContributorRanking} from './contributors-ui.js';
 import {renderLanguageReview} from './language-admin.js';
 const $=(s,root=document)=>root.querySelector(s),$$=(s,root=document)=>[...root.querySelectorAll(s)];
 // Resolve and persist the visitor's language before any Google sign-in redirect.
@@ -23,6 +23,7 @@ applyReadingPreferences(document.documentElement,readingPreferences);
 const readingText=key=>readingLabels(locale)[key];
 const state={user:null,google:false,health:null,terms:[],next:null,feed:[],highlights:[],topic:null,comments:[],notificationItems:[],unread:0,admin:null};
 let sequence=0,observer,toastTimer,translations;
+let analyticsRankingRequest=0;
 const historicalLanguageAfter={topic:'',comment:''};
 const t=k=>dictionaries[locale][k]||k;
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -179,13 +180,19 @@ async function showAdmin(n,params){if(!state.user||!['admin','moderator'].includ
   await renderProjectionAdmin(target,api,esc,locale,params.get('after'));
   return;
  }
- const data=await api('/api/admin/overview?days='+(params.get('days')==='30'?'30':'7'));if(n!==sequence)return;state.admin=data;
+ const analyticsTab=tab==='analytics';
+ const selectedDays=params.get('days')==='30'?30:7;
+ const selectedRank=['topics','comments','total'].includes(params.get('rank'))?params.get('rank'):'topics';
+ const data=await api('/api/admin/overview?days='+(analyticsTab?'30':selectedDays)+(analyticsTab?'&rank='+selectedRank:''));
+ if(n!==sequence)return;
+ state.admin=data;
+ if(analyticsTab)state.analyticsDays=selectedDays;
  const adminAction=(label,endpoint,payload,kind='')=>button(t(label),'admin-action',`data-endpoint="${endpoint}" data-payload="${esc(JSON.stringify(payload))}"`,kind+' small');
  let html='';
  if(tab==='moderation')html=data.queue.map(c=>`<div class="admin-row"><strong>${esc(c.title||c.type)}</strong> ${statusHtml(c.status)}<p>${esc(c.body?.slice(0,1500))}</p><div>${adminAction('approve','content',{type:c.type,id:c.id,action:'publish'})}${adminAction('hide','content',{type:c.type,id:c.id,action:'hide'})}${state.user.role==='admin'?adminAction('delete','content',{type:c.type,id:c.id,action:'delete'},'danger'):''}</div></div>`).join('');
  if(tab==='reports')html=[...data.reports.map(r=>({...r,type:'report'})),...data.appeals.map(r=>({...r,type:'appeal'}))].map(r=>`<div class="admin-row"><strong>${t(r.type==='report'?'report':'appeal')}: ${esc(r.reason)}</strong><p>${esc(r.preview||r.detail||'')}</p>${r.topic_id?`<a href="/topic/${esc(r.topic_id)}">${t('comments')} →</a>`:''}${r.topic_id||r.comment_id?adminAction('hide','content',{type:r.comment_id?'comment':'topic',id:r.comment_id||r.topic_id,action:'hide'}):''}${adminAction('resolve','resolve',{type:r.type,id:r.id,status:'resolved'})}${adminAction('reject','resolve',{type:r.type,id:r.id,status:'rejected'})}</div>`).join('');
  if(tab==='users')html=`${data.users.map(u=>`<div class="admin-row"><strong>${esc(u.nickname)}</strong> · ${esc(u.role)}<small class="subtle"> · ${esc(u.id)}</small><div>${[1,3,7,30].map(days=>adminAction('mute','sanctions',{user_id:u.id,action:'mute',days})).map((s,i)=>s.replace(t('mute'),t('mute')+' '+[1,3,7,30][i]+'d')).join('')}${state.user.role==='admin'?adminAction('ban','sanctions',{user_id:u.id,action:'ban'},'danger')+adminAction(u.role.includes('moderator')?'revoke':'grant','roles',{user_id:u.id,enabled:!u.role.includes('moderator')}):''}</div></div>`).join('')}${data.sanctions.map(s=>`<div class="admin-row">${esc(s.nickname)} · ${esc(s.sanction_type)} · ${esc(s.reason)} ${s.ends_at?date(s.ends_at):''}${adminAction('lift','sanctions',{user_id:s.user_id,sanction_id:s.id,action:'lift'})}</div>`).join('')}`;
- if(tab==='analytics'){const enabled=data.analyticsEnabled===true;const controls=`<div class="admin-row" id="traffic-controls"><strong>${t('analyticsToggle')}</strong><p class="subtle" data-analytics-status>${t(enabled?'analyticsOn':'analyticsOff')}</p>${state.user.role==='admin'?`<button type="button" class="button ${enabled?'':'primary'}" data-action="toggle-analytics" data-enabled="${enabled}" aria-pressed="${enabled}">${t(enabled?'analyticsDisable':'analyticsEnable')}</button>`:''}</div>`;html=controls+renderContentStats(data,t,esc);}
+ if(tab==='analytics'){const enabled=data.analyticsEnabled===true;const controls=`<div class="admin-row" id="traffic-controls"><strong>${t('analyticsToggle')}</strong><p class="subtle" data-analytics-status>${t(enabled?'analyticsOn':'analyticsOff')}</p>${state.user.role==='admin'?`<button type="button" class="button ${enabled?'':'primary'}" data-action="toggle-analytics" data-enabled="${enabled}" aria-pressed="${enabled}">${t(enabled?'analyticsDisable':'analyticsEnable')}</button>`:''}</div>`;html=controls+renderContentStats({...data,days:selectedDays,metrics:data.metrics.slice(0,selectedDays)},t,esc);}
  if(tab==='logs')html=data.logs.map(r=>`<div class="admin-row"><strong>${esc(r.actor_name)} · ${esc(r.action)}</strong><p>${esc(r.target_type)} / ${esc(r.target_id)}<br>${esc(r.reason)}</p><small>${date(r.created_at)}</small></div>`).join('');
  if(tab==='taxonomy')html=button(t('addTerm'),'add-term','','primary')+state.terms.map(term=>`<div class="admin-row">${esc(term.label)} · ${esc(term.term_type)} ${button(t('edit'),'edit-term',`data-id="${esc(term.id)}"`,'small')}</div>`).join('');
  if(tab==='settings')html=`<p class="subtle">${t('translation')} · ${esc(data.settings.find(s=>s.key==='translation_enabled')?.value||'false')}</p><p class="subtle">${t('translationFallback')}</p>${button(t('privacy'),'privacy')}<h3>${t('privacyRequest')}</h3>${data.privacy.map(p=>`<div class="admin-row"><strong>${esc(p.nickname)}</strong> · ${t(p.request_type)}<p>${esc(p.status)} · ${date(p.requested_at)}</p>${adminAction('resolve','privacy',{id:p.id,status:p.request_type==='data_export'?'resolved':'fulfill'})}${adminAction('reject','privacy',{id:p.id,status:'rejected'})}</div>`).join('')||`<p class="subtle">${t('emptyList')}</p>`}`;
@@ -211,6 +218,13 @@ async function render(force=false){const n=++sequence;observer?.disconnect();tra
 function findContent(type,id){return type==='topic'?(state.topic?.id===id?state.topic:state.feed.find(c=>c.id===id)):state.comments.find(c=>c.id===id)||state.feed.find(c=>c.id===id);}
 async function refreshMe(){const me=await api('/api/me');state.user=me.user;state.google=me.googleConfigured;}
 async function refreshUnread(){if(!state.user)return;try{const r=await api('/api/notifications');state.unread=r.unread;renderChrome();}catch{}}
+function rememberAnalyticsFilters(){
+ const url=new URL(location.href);
+ url.searchParams.set('tab','analytics');
+ url.searchParams.set('days',String(state.analyticsDays));
+ url.searchParams.set('rank',state.admin?.contributorSort||'topics');
+ history.replaceState(history.state,'',url.pathname+url.search+url.hash);
+}
 async function clicked(el,event){const action=el.dataset.action,{id,type,active}=el.dataset;
  if(action==='login')return showLogin();
  if(action==='reading-options')return showReadingSettings();
@@ -282,6 +296,38 @@ async function clicked(el,event){const action=el.dataset.action,{id,type,active}
   }
  if(action==='load-mine'){const kind=route().params.get('kind')||'topics',n=sequence,data=await api('/api/me/content?kind='+kind+'&offset='+state.meNext);if(n!==sequence)return;state.feed.push(...data.items);state.meNext=data.next;el.remove();$('#my-content').insertAdjacentHTML('beforeend',data.items.map(c=>kind==='comments'?`<article class="topic-card"><a href="/topic/${c.topic_id}?comment=${c.id}">${date(c.created_at)}</a><p class="prose">${c.status==='deleted'?t('deletedComment'):esc(c.body)}</p>${actions(c,'comment')}</article>`:topicCard(c)).join('')+(data.next!==null?button(t('loadMore'),'load-mine','','load-more'):''));return;}
  if(action==='toggle-original'){translations?.toggle(el.closest('[data-translation]'));return;}
+ if(action==='analytics-days'){
+  const days=Number(el.dataset.days);
+  if(![7,30].includes(days)||!state.admin||route().path!=='/admin'||route().params.get('tab')!=='analytics')return;
+  if(state.analyticsDays===days)return;
+  state.analyticsDays=days;
+  // All 30 daily rows are loaded when Analytics opens; no extra Worker/D1 request.
+  const view={...state.admin,days,metrics:state.admin.metrics.slice(0,days)};
+  const period=$('#content-stats-period');
+  if(period)period.innerHTML=renderContentPeriod(view,t,esc);
+  for(const btn of $('#analytics-period-controls [data-action="analytics-days"]')){
+   const selected=Number(btn.dataset.days)===days;
+   btn.classList.toggle('active',selected);
+   btn.setAttribute('aria-pressed',String(selected));
+  }
+  rememberAnalyticsFilters();
+  return;
+ }
+ if(action==='analytics-rank'){
+  const rank=el.dataset.rank;
+  if(!['topics','comments','total'].includes(rank)||!state.admin||route().path!=='/admin'||route().params.get('tab')!=='analytics')return;
+  if(state.admin.contributorSort===rank)return;
+  const token=++analyticsRankingRequest,n=sequence;
+  // Fetch only leaderboard rows, leaving traffic metrics, content totals and scroll unchanged.
+  const data=await api('/api/admin/contributors?rank='+rank);
+  if(token!==analyticsRankingRequest||n!==sequence||route().path!=='/admin'||route().params.get('tab')!=='analytics')return;
+  state.admin.contributors=data.contributors;
+  state.admin.contributorSort=data.contributorSort;
+  const ranking=$('#content-stats-ranking');
+  if(ranking)ranking.innerHTML=renderContributorRanking(state.admin,t,esc);
+  rememberAnalyticsFilters();
+  return;
+ }
  if(action==='toggle-analytics'){if(state.user?.role!=='admin')throw new Error('forbidden');const enabled=el.dataset.enabled!=='true';await send('/api/admin/settings',{key:'analytics_enabled',value:String(enabled),reason:'Analytics '+(enabled?'enabled':'disabled')+' by administrator'});if(state.admin)state.admin.analyticsEnabled=enabled;if(state.health)state.health.analyticsEnabled=enabled;el.dataset.enabled=String(enabled);el.setAttribute('aria-pressed',String(enabled));el.classList.toggle('primary',!enabled);el.textContent=t(enabled?'analyticsDisable':'analyticsEnable');const status=$('[data-analytics-status]');if(status)status.textContent=t(enabled?'analyticsOn':'analyticsOff');toast(t('success'));return;}
   if(action==='admin-action'){const payload=JSON.parse(el.dataset.payload);modal(`<h2>${esc(el.textContent)}</h2><form id="admin-form" class="form-grid" data-endpoint="${esc(el.dataset.endpoint)}" data-payload="${esc(JSON.stringify(payload))}"><label>${t('reason')}<textarea class="short" name="reason" required maxlength="2000"></textarea></label><button class="button primary">${t('submit')}</button></form>`);return;}
  if(action==='add-term'||action==='edit-term'){const term=state.terms.find(x=>x.id===id);modal(`<h2>${t('taxonomy')}</h2><form id="term-form" class="form-grid" data-id="${esc(id||'')}"><label>Slug<input name="slug" required pattern="[a-z0-9-]+" maxlength="80" value="${esc(term?.slug||'')}"></label><label>${t('spaces')}<select name="term_type">${['body_part','symptom','treatment','category'].map(k=>`<option value="${k}" ${term?.term_type===k?'selected':''}>${t(k==='category'?'stories':k)}</option>`).join('')}</select></label><label>${t('title')} (${esc(locale)})<input name="label" required maxlength="120" value="${esc(term?.label||'')}"></label><label>${t('aliases')}<input name="aliases" maxlength="2000"></label><label>${t('reason')}<input name="reason" required maxlength="2000"></label><button class="button primary">${t('save')}</button></form>`);return;}

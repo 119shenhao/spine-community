@@ -3213,3 +3213,38 @@ test('contributor ranking and public author activity exclude imports and nonpubl
  assert(!JSON.stringify(after.data).includes('token_hash'));
  assert(!JSON.stringify(after.data).includes('provider_subject'));
 });
+
+test('analytics buttons update in place and contributor sorting uses a narrow read-only endpoint',async()=>{
+ const {call,topic}=await fixture();
+ await topic('Analytics contributor example','Personal experience for statistics');
+ const denied=await call('/api/admin/contributors?rank=total','GET',undefined,'alice');
+ assert.equal(denied.status,403);
+ assert.equal((await call('/api/admin/contributors?rank=comments','GET',undefined,null)).status,401);
+ const ranking=await call('/api/admin/contributors?rank=total','GET',undefined,'admin');
+ assert.equal(ranking.status,200,JSON.stringify(ranking));
+ assert.equal(ranking.data.contributorSort,'total');
+ assert.deepEqual(ranking.data.contributors.map(u=>u.id),['alice']);
+ assert.deepEqual(Object.keys(ranking.data).sort(),['contributorSort','contributors']);
+ const {renderContentStats,renderContentPeriod}=await import('../public/content-stats-ui.js');
+ const {renderContributorRanking}=await import('../public/contributors-ui.js');
+ const overview=(await call('/api/admin/overview?days=30&rank=topics','GET',undefined,'admin')).data;
+ const identity=v=>String(v);
+ const view={...overview,days:7,metrics:overview.metrics.slice(0,7)};
+ const html=renderContentStats(view,k=>k,identity);
+ assert.match(html,/data-action="analytics-days" data-days="7"/);
+ assert.match(html,/data-action="analytics-days" data-days="30"/);
+ assert.match(html,/id="content-stats-ranking"/);
+ assert.match(html,/id="content-stats-period"/);
+ assert.doesNotMatch(html,/href="\\/admin\\?tab=analytics&days=/);
+ const rankingHtml=renderContributorRanking(overview,k=>k,identity);
+ for(const rank of ['topics','comments','total'])
+  assert.match(rankingHtml,new RegExp('data-action="analytics-rank" data-rank="'+rank+'"'));
+ assert.doesNotMatch(rankingHtml,/href="\\/admin\\?tab=analytics&days=/);
+ const period=renderContentPeriod(view,k=>k,identity);
+ assert.match(period,/periodContent/);
+ const app=readFileSync('public/app.js','utf8');
+ assert.match(app,/if\\(action==='analytics-days'\\)/);
+ assert.match(app,/if\\(action==='analytics-rank'\\)/);
+ assert.match(app,/history\\.replaceState\\(history\\.state/);
+ assert.match(app,/state\\.admin\\.metrics\\.slice\\(0,days\\)/);
+});

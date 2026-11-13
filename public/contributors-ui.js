@@ -1,12 +1,12 @@
 // Read-only activity cards for real community members.
 export function renderContributorRanking(data,t,esc){
- const days=data.days===30?30:7,sort=data.contributorSort||'topics';
- const sortLink=(key,label)=>`<a class="button small ${key===sort?'active':''}" href="/admin?tab=analytics&days=${days}&rank=${key}">${esc(label)}</a>`;
+ const sort=data.contributorSort||'topics';
+ const sortButton=(key,label)=>`<button type="button" class="button small ${key===sort?'active':''}" data-action="analytics-rank" data-rank="${key}" aria-pressed="${key===sort}">${esc(label)}</button>`;
  const rows=data.contributors||[];
  return `<section class="contributors-section" aria-label="${esc(t('topContributors'))}">
  <h3>${esc(t('topContributors'))}</h3><p class="subtle">${esc(t('contributorHint'))}</p>
  <nav class="stack contributor-filters" aria-label="${esc(t('topContributors'))}">
- ${sortLink('topics',t('topicCount'))}${sortLink('comments',t('commentCount'))}${sortLink('total',t('totalContributions'))}</nav>
+ ${sortButton('topics',t('topicCount'))}${sortButton('comments',t('commentCount'))}${sortButton('total',t('totalContributions'))}</nav>
  <div class="table-wrap"><table class="metric-table contributor-table"><thead><tr>
  <th>${esc(t('contributorRank'))}</th><th>${esc(t('nickname'))}</th><th>${esc(t('topicCount'))}</th>
  <th>${esc(t('commentCount'))}</th><th>${esc(t('totalContributions'))}</th></tr></thead><tbody>

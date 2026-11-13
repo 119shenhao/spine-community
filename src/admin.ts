@@ -9,6 +9,10 @@ const audit=(env:Env,u:Row,type:string,target:string,action:string,reason:string
 export async function adminRoute(req:Request,env:Env,user:Row|null,path:string):Promise<Response|null>{
   if(!path.startsWith('/api/admin/'))return null;
   const u=requireRole(user),url=new URL(req.url);
+  if(path==='/api/admin/contributors'&&req.method==='GET'){
+    const rank=contributorSort(url.searchParams.get('rank'));
+    return json({contributorSort:rank,contributors:await contributorRanking(env.DB,rank)});
+  }
   if(path==='/api/admin/overview'&&req.method==='GET'){
     const days=url.searchParams.get('days')==='30'?30:7;
     const rank=contributorSort(url.searchParams.get('rank'));
