@@ -1,5 +1,5 @@
 import {dictionaries,languages} from './i18n.js';
-import {topicShareUrl,socialShareTargets} from './share-ui.js';
+import {topicShareUrl,socialShareTargets,socialShareIcon} from './share-ui.js';
 import {initialLocale} from './locale.js';
 import {defaultReadingPreferences,loadReadingPreferences,applyReadingPreferences,saveReadingPreferences,readingLabels} from './reading-preferences.js';
 import {postingLanguage,profilePostingLanguageOptions} from './posting-language.js';
@@ -52,10 +52,29 @@ function readingSettingsCard(){
 function needUser(){if(state.user)return true;showLogin();return false;}
 const isPreview=()=>state.health?.environment==='preview'||(!state.health?.environment&&(location.hostname.startsWith('feature-')||['localhost','127.0.0.1'].includes(location.hostname)));
 function showLogin(){modal(`<h2>${t('login')}</h2><p>${t('loginNote')}</p>${state.google?`<a class="button primary" href="/api/auth/google">G &nbsp; ${t('google')}</a>`:`<div class="notice">${t('loginSetup')}</div>`}${isPreview()?`<p class="subtle">${t('previewOnly')}</p>`:''}`);}
-function showShareTopic(c){
+function shareTopicDialog(c,url){
+ const targets=socialShareTargets(c.title,url);
+ // Icons are in a local JS module. Accessible names remain, with no visible
+ // platform-name text and no third-party icon or tracking requests.
+ modal(`<h2>${esc(t('sharePost'))}</h2><p>${esc(t('sharePostHint'))}</p><div class="share-grid" role="group" aria-label="${esc(t('sharePost'))}">${targets.map(target=>`<a href="${esc(target.href)}" target="_blank" rel="noopener noreferrer" class="share-platform share-${esc(target.name.toLowerCase())}" aria-label="${esc(target.name)}" title="${esc(target.name)}">${socialShareIcon(target.name)}<span class="sr-only">${esc(target.name)}</span></a>`).join('')}</div><div class="share-link-row"><input id="share-url" type="text" readonly aria-label="${esc(t('copyLink'))}" value="${esc(url)}">${button(t('copyLink'),'share-copy','','primary')}</div>${typeof navigator.share==='function'?`<div class="share-native">${button(icon('share')+t('shareSystem'),'share-native')}</div>`:''}`);
+}
+async function showShareTopic(c){
  if(!c||c.status!=='published')return;
- const url=topicShareUrl(c.id,location.origin),targets=socialShareTargets(c.title,url);
- modal(`<h2>${esc(t('sharePost'))}</h2><p>${esc(t('sharePostHint'))}</p><div class="share-grid">${targets.map(target=>`<a href="${esc(target.href)}" target="_blank" rel="noopener noreferrer" class="share-platform">${esc(target.name)}</a>`).join('')}</div><div class="share-link-row"><input id="share-url" type="text" readonly aria-label="${esc(t('copyLink'))}" value="${esc(url)}">${button(t('copyLink'),'share-copy','','primary')}</div>${typeof navigator.share==='function'?`<div class="share-native">${button(icon('share')+t('shareSystem'),'share-native')}</div>`:''}`);
+ const url=topicShareUrl(c.id,location.origin);
+ // Invoke Web Share immediately in the click gesture. iOS Safari requires a
+ // transient user activation; an intermediate modal or async work may lose it.
+ if(typeof navigator.share==='function'){
+  try{
+   await navigator.share({title:c.title||'Spine Community',url});
+   return;
+  }catch(e){
+   // A cancelled native share leaves the fallback choices available.
+   shareTopicDialog(c,url);
+   if(e?.name!=='AbortError')toast(t('shareSystemError'));
+   return;
+  }
+ }
+ shareTopicDialog(c,url);
 }
 function route(){return {path:location.pathname==='/index.html'?'/':location.pathname,params:new URLSearchParams(location.search)};}
 function navigate(path){const url=new URL(path,location.origin);if(url.origin!==location.origin||url.pathname.startsWith('/api/'))return;if(url.pathname+url.search+url.hash===location.pathname+location.search+location.hash)return;history.pushState(null,'',url.pathname+url.search+url.hash);window.scrollTo({top:0});return render();}
