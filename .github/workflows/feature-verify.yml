@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -33,7 +33,11 @@ jobs:
       - name: Install browser for list return regression
         run: |
           npm install --prefix "$RUNNER_TEMP/spine-navigation" --no-package-lock --no-save --ignore-scripts playwright@1.58.2
-          node "$RUNNER_TEMP/spine-navigation/node_modules/playwright/cli.js" install --with-deps chromium
+          if command -v google-chrome >/dev/null 2>&1; then
+            echo "CHROME_BIN=$(command -v google-chrome)" >> "$GITHUB_ENV"
+          else
+            node "$RUNNER_TEMP/spine-navigation/node_modules/playwright/cli.js" install --with-deps chromium
+          fi
           echo "PW_MODULE=$RUNNER_TEMP/spine-navigation/node_modules/playwright/index.mjs" >> "$GITHUB_ENV"
       - name: Verify list position and deployed Preview (read-only)
         env:
