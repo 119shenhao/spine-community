@@ -56,7 +56,6 @@ const chineseShareNames={WeChat:'微信',QQ:'QQ',Douyin:'抖音',Bilibili:'B站'
 const sharePlatformName=name=>locale.startsWith('zh')?(chineseShareNames[name]||name):name;
 function shareTopicDialog(c,url){
  const targets=socialShareTargets(c.title,url);
- const chinese=new Set(Object.keys(chineseShareNames));
  const card=target=>{
   const name=sharePlatformName(target.name),mark=socialShareIcon(target.name);
   const label=target.method==='copy'?t('shareCopyToApp').replace('{app}',name):name;
@@ -65,12 +64,7 @@ function shareTopicDialog(c,url){
    ?`<button type="button" ${attrs} data-action="share-app-copy" data-platform="${esc(target.name)}">${mark}<span class="sr-only">${esc(label)}</span></button>`
    :`<a href="${esc(target.href)}" target="_blank" rel="noopener noreferrer" ${attrs}>${mark}<span class="sr-only">${esc(label)}</span></a>`;
  };
- const group=(title,items)=>`<section class="share-group"><h3 class="share-group-heading">${esc(title)}</h3><div class="share-grid" role="group" aria-label="${esc(title)}">${items.map(card).join('')}</div></section>`;
- const domestic=targets.filter(target=>chinese.has(target.name)),global=targets.filter(target=>!chinese.has(target.name));
- const groups=locale.startsWith('zh')
-  ?group(t('shareChina'),domestic)+group(t('shareGlobal'),global)
-  :group(t('shareGlobal'),global)+group(t('shareChina'),domestic);
- modal(`<h2>${esc(t('sharePost'))}</h2><p>${esc(t('sharePostHint'))}</p>${groups}<p class="subtle share-app-note">${esc(t('shareAppHint'))}</p><div class="share-link-row"><input id="share-url" type="text" readonly aria-label="${esc(t('copyLink'))}" value="${esc(url)}">${button(t('copyLink'),'share-copy','','primary')}</div>${typeof navigator.share==='function'?`<div class="share-native">${button(icon('share')+t('shareSystem'),'share-native')}</div>`:''}`);
+ modal(`<h2>${esc(t('sharePost'))}</h2><p>${esc(t('sharePostHint'))}</p><div class="share-grid" role="group" aria-label="${esc(t('sharePost'))}">${targets.map(card).join('')}</div><p class="subtle share-app-note">${esc(t('shareAppHint'))}</p><div class="share-link-row"><input id="share-url" type="text" readonly aria-label="${esc(t('copyLink'))}" value="${esc(url)}">${button(t('copyLink'),'share-copy','','primary')}</div>${typeof navigator.share==='function'?`<div class="share-native">${button(icon('share')+t('shareSystem'),'share-native')}</div>`:''}`);
 }
 async function showShareTopic(c){
  if(!c||c.status!=='published')return;
