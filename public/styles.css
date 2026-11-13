@@ -200,14 +200,23 @@ footer {font-size:13px}
 @media(max-width:480px){.contributor-totals{gap:5px}.contributor-totals strong{font-size:19px}.contributor-totals span{font-size:10px}}
 
 
-/* Topic sharing uses an on-demand dialog; no embedded social widgets or remote assets. */
+/* Native sharing is the primary action on supported phones.
+   This compact panel is the fallback when Web Share is absent/cancelled. */
 .topic-share-row{display:flex;justify-content:flex-end;margin:-8px 0 12px}
 .topic-share-row .button,.share-native .button{display:inline-flex;align-items:center;gap:6px}
-.share-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:18px 0}
-.share-platform{display:flex;align-items:center;justify-content:center;min-height:44px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--paper);font-size:14px;font-weight:600;text-align:center}
-.share-platform:hover,.share-platform:focus-visible{background:var(--mint);text-decoration:none}
+.share-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px 10px;justify-items:center;align-items:center;margin:20px auto;max-width:390px;width:100%}
+.share-platform{display:flex;align-items:center;justify-content:center;aspect-ratio:1;min-height:0;width:min(100%,66px);padding:12px;border:1px solid var(--border);border-radius:18px;background:var(--paper);color:var(--green);text-decoration:none;transition:background .16s ease,transform .16s ease}
+.share-platform svg{display:block;width:100%;height:100%;max-width:39px;max-height:39px;fill:currentColor;flex-shrink:0}
+.share-platform:hover,.share-platform:focus-visible{background:var(--mint);text-decoration:none;transform:translateY(-2px)}
+.share-platform.share-facebook{color:#1877f2}
+.share-platform.share-x{color:var(--ink)}
+.share-platform.share-reddit{color:#ff4500}
+.share-platform.share-linkedin{color:#0a66c2}
+.share-platform.share-whatsapp{color:#128c4c}
+.share-platform.share-telegram{color:#229ed9}
+.share-platform.share-bluesky{color:#1185fe}
 .share-link-row{display:flex;gap:8px;align-items:stretch;margin-top:14px}
 .share-link-row input{min-width:0;flex:1;width:100%;padding:9px;border:1px solid var(--border);border-radius:9px;background:var(--bg);font-size:16px}
 .share-link-row button{flex-shrink:0}
 .share-native{margin-top:12px}
-@media(max-width:420px){.share-grid{gap:8px}.share-link-row{flex-wrap:wrap}.share-link-row button{width:100%}}
+@media(max-width:420px){.share-grid{gap:10px 6px}.share-platform{border-radius:14px;padding:9px;width:min(100%,58px)}.share-link-row{flex-wrap:wrap}.share-link-row button{width:100%}}
