@@ -202,7 +202,7 @@ footer {font-size:13px}
 
 /* Native sharing is the primary action on supported phones.
    This compact panel is the fallback when Web Share is absent/cancelled. */
-.topic-share-row{display:flex;justify-content:flex-end;margin:-8px 0 12px}
+.topic-share-row{display:flex;justify-content:flex-end;margin:20px 0 0;padding-top:14px;border-top:1px solid var(--border)}
 .topic-share-row .button,.share-native .button{display:inline-flex;align-items:center;gap:6px}
 .share-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px 10px;justify-items:center;align-items:center;margin:20px auto;max-width:390px;width:100%}
 .share-platform{display:flex;align-items:center;justify-content:center;aspect-ratio:1;min-height:0;width:min(100%,66px);padding:12px;border:1px solid var(--border);border-radius:18px;background:var(--paper);color:var(--green);text-decoration:none;transition:background .16s ease,transform .16s ease}
