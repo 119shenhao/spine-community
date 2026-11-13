@@ -24,7 +24,7 @@ export function socialShareTargets(title,url){
   {name:'LinkedIn',href:query('https://www.linkedin.com/sharing/share-offsite/',{url:link})},
   {name:'WhatsApp',href:query('https://wa.me/',{text:text+'\n'+link})},
   {name:'Telegram',href:query('https://t.me/share/url',{url:link,text})},
-  {name:'Bluesky',href:query('https://bsky.app/intent/compose',{text:text+'\\n'+link})},
+  {name:'Bluesky',href:query('https://bsky.app/intent/compose',{text:text+'\n'+link})},
   // Public QQ/Qzone/Weibo share pages take normal web URLs. WeChat,
   // Douyin and Bilibili do not expose a verified generic article-share URL.
   {name:'WeChat',method:'copy'},
