@@ -1,5 +1,6 @@
 import {Env,Row,all,one,stmt,now,id,fail,json,body,textField,requireRole,locales,analyticsEnabled} from './core';
 import {contentStatistics} from './content-statistics';
+import {contributorRanking,contributorSort} from './contributors';
 import {purge,notify} from './content';
 import {verificationWrite} from './language-state';
 import {proposeHistoricalLanguage} from './historical-language';
@@ -10,8 +11,9 @@ export async function adminRoute(req:Request,env:Env,user:Row|null,path:string):
   const u=requireRole(user),url=new URL(req.url);
   if(path==='/api/admin/overview'&&req.method==='GET'){
     const days=url.searchParams.get('days')==='30'?30:7;
+    const rank=contributorSort(url.searchParams.get('rank'));
     const content=await contentStatistics(env.DB,days);
-    return json({contentTotals:content.current,contentUndated:content.undated,reports:await all(env.DB,`SELECT r.*,CASE WHEN r.topic_id IS NOT NULL THEN t.title ELSE substr(c.body,1,150) END preview FROM reports r LEFT JOIN topics t ON t.id=r.topic_id LEFT JOIN comments c ON c.id=r.comment_id WHERE r.status IN ('open','reviewing') ORDER BY r.priority DESC,r.created_at LIMIT 100`),
+    return json({days,contributorSort:rank,contributors:await contributorRanking(env.DB,rank),contentTotals:content.current,contentUndated:content.undated,reports:await all(env.DB,`SELECT r.*,CASE WHEN r.topic_id IS NOT NULL THEN t.title ELSE substr(c.body,1,150) END preview FROM reports r LEFT JOIN topics t ON t.id=r.topic_id LEFT JOIN comments c ON c.id=r.comment_id WHERE r.status IN ('open','reviewing') ORDER BY r.priority DESC,r.created_at LIMIT 100`),
       queue:await all(env.DB,`SELECT id,'topic' type,author_id,title,body,status,created_at FROM topics WHERE status IN ('pending_review','blocked','hidden') UNION ALL SELECT id,'comment',author_id,NULL,body,status,created_at FROM comments WHERE status IN ('pending_review','blocked','hidden') ORDER BY created_at DESC LIMIT 100`),
       appeals:await all(env.DB,"SELECT * FROM appeals WHERE status IN ('open','reviewing') ORDER BY created_at LIMIT 100"),
       logs:await all(env.DB,'SELECT m.*,u.nickname actor_name FROM moderation_actions m JOIN users u ON u.id=m.actor_id ORDER BY m.created_at DESC LIMIT 100'),

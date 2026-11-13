@@ -194,3 +194,7 @@ footer {font-size:13px}
   .hero p {font-size:15px}
   footer {font-size:13px}
 }
+
+/* Contributor rankings and public user pages */
+.contributors-section{margin:26px 0 30px}.contributors-section h3{margin:0 0 6px}.contributor-filters{margin:12px 0}.contributor-table th[scope="row"]{font-weight:600;max-width:220px;overflow-wrap:anywhere}.contributor-profile{margin-top:15px}.contributor-identity{display:flex;align-items:center;gap:15px}.contributor-identity .page-title{margin:0 0 4px;overflow-wrap:anywhere}.contributor-identity .subtle{margin:0}.contributor-avatar{width:50px;height:50px;font-size:20px;flex-shrink:0}.contributor-totals{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:21px}.contributor-totals>div{background:var(--mint);border-radius:9px;text-align:center;padding:10px 6px;display:flex;flex-direction:column}.contributor-totals strong{font-size:22px;font-weight:600}.contributor-totals span{font-size:11px;color:var(--muted)}.author-link{color:inherit;font-weight:inherit;text-decoration:underline;text-decoration-color:transparent;text-underline-offset:2px}.author-link:hover,.author-link:focus-visible{text-decoration-color:currentColor}
+@media(max-width:480px){.contributor-totals{gap:5px}.contributor-totals strong{font-size:19px}.contributor-totals span{font-size:10px}}
