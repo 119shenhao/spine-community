@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -26,19 +26,39 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run verify
+      - name: Prepare navigation browser tests
+        run: |
+          npm install --prefix "$RUNNER_TEMP/spine-navigation" --no-package-lock --no-save --ignore-scripts playwright@1.58.2
+          if command -v google-chrome >/dev/null 2>&1; then
+            echo "CHROME_BIN=$(command -v google-chrome)" >> "$GITHUB_ENV"
+          else
+            node "$RUNNER_TEMP/spine-navigation/node_modules/playwright/cli.js" install --with-deps chromium
+          fi
+          echo "PW_MODULE=$RUNNER_TEMP/spine-navigation/node_modules/playwright/index.mjs" >> "$GITHUB_ENV"
+      - run: node tests/navigation.browser.mjs
 
   production-assets:
     name: Production assets smoke check
     needs: verify
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - name: Confirm deployed CSS and JS are the reviewed mobile-summary release
         shell: bash
         run: |
           python3 - <<'PY'
-          import json,re,time
+          import json,re,time,hashlib
+          from pathlib import Path
+          digest=hashlib.sha256()
+          for file in sorted(Path("public").iterdir()):
+              if file.suffix in (".js",".css"):
+                  digest.update(file.name.encode());digest.update(bytes([0]));digest.update(file.read_bytes())
+          expected=digest.hexdigest()[:16]
           from urllib.request import Request,urlopen
           root='https://spine.nbn369.com'
           def get(path):
@@ -54,6 +74,8 @@ jobs:
                   if not match or not script:raise RuntimeError('Production HTML is still using old unversioned assets')
                   if match.group(1).rsplit('/',1)[0]!=script.group(1).rsplit('/',1)[0]:
                       raise RuntimeError('Mismatched versioned frontend revision')
+                  revision=match.group(1).split('/')[2]
+                  if revision!=expected:raise RuntimeError(f'Waiting for reviewed revision {expected}, received {revision}')
                   css=get(match.group(1))
                   app=get(script.group(1))
                   module=get(script.group(1).rsplit('/',1)[0]+'/feed-preview.js')
@@ -74,3 +96,18 @@ jobs:
                   if attempt==24:raise
                   time.sleep(10)
           PY
+
+
+      - name: Prepare navigation browser tests
+        run: |
+          npm install --prefix "$RUNNER_TEMP/spine-navigation" --no-package-lock --no-save --ignore-scripts playwright@1.58.2
+          if command -v google-chrome >/dev/null 2>&1; then
+            echo "CHROME_BIN=$(command -v google-chrome)" >> "$GITHUB_ENV"
+          else
+            node "$RUNNER_TEMP/spine-navigation/node_modules/playwright/cli.js" install --with-deps chromium
+          fi
+          echo "PW_MODULE=$RUNNER_TEMP/spine-navigation/node_modules/playwright/index.mjs" >> "$GITHUB_ENV"
+      - name: Verify production list return positions (read-only)
+        env:
+          PREVIEW_URL: https://spine.nbn369.com
+        run: node tests/navigation.browser.mjs
