@@ -1,4 +1,5 @@
 import {dictionaries,languages} from './i18n.js';
+import {topicShareUrl,socialShareTargets,socialShareIcon} from './share-ui.js';
 import {initialLocale} from './locale.js';
 import {defaultReadingPreferences,loadReadingPreferences,applyReadingPreferences,saveReadingPreferences,readingLabels} from './reading-preferences.js';
 import {postingLanguage,profilePostingLanguageOptions} from './posting-language.js';
@@ -29,6 +30,7 @@ const historicalLanguageAfter={topic:'',comment:''};
 const t=k=>dictionaries[locale][k]||k;
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const svg={home:'<path d="m3 9 9-7 9 7v12H3Z"/><path d="M9 21v-8h6v8"/>',search:'<circle cx="10.5" cy="10.5" r="7"/><path d="m16 16 5 5"/>',neck:'<path d="M9 3c-2 3 0 5 1 7s-2 4-3 5-1 4-1 6M15 3c-2 3 0 5 1 7s-2 4-3 5-1 4-1 6M9 5h6M10 10h6M7 16h6M6 21h6"/>',story:'<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 7h8M8 11h8M8 15h5"/>',user:'<circle cx="12" cy="8" r="4"/><path d="M4 21c0-9 16-9 16 0"/>',bell:'<path d="M5 17h14l-2-4V9a5 5 0 0 0-10 0v4ZM10 21h4"/>',heart:'<path d="M20 5c-3-3-7-1-8 1-1-2-5-4-8-1-4 4 2 10 8 15 6-5 12-11 8-15Z"/>',chat:'<path d="M21 11a9 9 0 0 1-9 9H4l-2 2V11a9 9 0 0 1 19 0Z"/>',bookmark:'<path d="M6 3h12v19l-6-4-6 4Z"/>',follow:'<path d="M6 17c-6-6 3-14 6-5 3-9 12-1 6 5l-6 5Z"/><path d="M12 2v4M2 5l3 3M22 5l-3 3"/>',leaf:'<path d="M5 19C-2 5 15 2 21 3c0 13-7 19-16 16Zm0 0L17 7"/>',check:'<path d="m4 12 5 5L20 6"/>',arrow:'<path d="M4 12h16m-5-5 5 5-5 5"/>',shield:'<path d="m12 2 9 4v7c-2 5-5 7-9 9-4-2-7-4-9-9V6Z"/><path d="m8 12 3 3 5-6"/>',plus:'<path d="M12 4v16M4 12h16"/>',globe:'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c-6 6-6 12 0 18 6-6 6-12 0-18Z"/>'};
+svg.share='<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m9 11 6-4M9 13l6 4"/>';
 const icon=k=>`<span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24">${svg[k]||svg.story}</svg></span>`;
 const button=(label,action,attrs='',kind='')=>`<button type="button" class="button ${kind}" data-action="${action}" ${attrs}>${label}</button>`;
 const date=n=>new Intl.DateTimeFormat(locale,{month:'short',day:'numeric',year:'numeric'}).format(new Date(n*1000));
@@ -51,6 +53,38 @@ function readingSettingsCard(){
 function needUser(){if(state.user)return true;showLogin();return false;}
 const isPreview=()=>state.health?.environment==='preview'||(!state.health?.environment&&(location.hostname.startsWith('feature-')||['localhost','127.0.0.1'].includes(location.hostname)));
 function showLogin(){modal(`<h2>${t('login')}</h2><p>${t('loginNote')}</p>${state.google?`<a class="button primary" href="/api/auth/google">G &nbsp; ${t('google')}</a>`:`<div class="notice">${t('loginSetup')}</div>`}${isPreview()?`<p class="subtle">${t('previewOnly')}</p>`:''}`);}
+const chineseShareNames={WeChat:'微信',QQ:'QQ',Douyin:'抖音',Bilibili:'B站',Weibo:'微博',Qzone:'QQ空间'};
+const sharePlatformName=name=>locale.startsWith('zh')?(chineseShareNames[name]||name):name;
+function shareTopicDialog(c,url){
+ const targets=socialShareTargets(c.title,url);
+ const card=target=>{
+  const name=sharePlatformName(target.name),mark=socialShareIcon(target.name);
+  const label=target.method==='copy'?t('shareCopyToApp').replace('{app}',name):name;
+  const attrs=`class="share-platform share-${esc(target.name.toLowerCase())}" aria-label="${esc(label)}" title="${esc(label)}"`;
+  return target.method==='copy'
+   ?`<button type="button" ${attrs} data-action="share-app-copy" data-platform="${esc(target.name)}">${mark}<span class="sr-only">${esc(label)}</span></button>`
+   :`<a href="${esc(target.href)}" target="_blank" rel="noopener noreferrer" ${attrs}>${mark}<span class="sr-only">${esc(label)}</span></a>`;
+ };
+ modal(`<h2>${esc(t('sharePost'))}</h2><p>${esc(t('sharePostHint'))}</p><div class="share-grid" role="group" aria-label="${esc(t('sharePost'))}">${targets.map(card).join('')}</div><p class="subtle share-app-note">${esc(t('shareAppHint'))}</p><div class="share-link-row"><input id="share-url" type="text" readonly aria-label="${esc(t('copyLink'))}" value="${esc(url)}">${button(t('copyLink'),'share-copy','','primary')}</div>${typeof navigator.share==='function'?`<div class="share-native">${button(icon('share')+t('shareSystem'),'share-native')}</div>`:''}`);
+}
+async function showShareTopic(c){
+ if(!c||c.status!=='published')return;
+ const url=topicShareUrl(c.id,location.origin);
+ // Invoke Web Share immediately in the click gesture. iOS Safari requires a
+ // transient user activation; an intermediate modal or async work may lose it.
+ if(typeof navigator.share==='function'){
+  try{
+   await navigator.share({title:c.title||'Spine Community',url});
+   return;
+  }catch(e){
+   // A cancelled native share leaves the fallback choices available.
+   shareTopicDialog(c,url);
+   if(e?.name!=='AbortError')toast(t('shareSystemError'));
+   return;
+  }
+ }
+ shareTopicDialog(c,url);
+}
 function route(){return {path:location.pathname==='/index.html'?'/':location.pathname,params:new URLSearchParams(location.search)};}
 function navigate(path){const url=new URL(path,location.origin);if(url.origin!==location.origin||url.pathname.startsWith('/api/'))return;if(url.pathname+url.search+url.hash===location.pathname+location.search+location.hash)return;history.pushState(null,'',url.pathname+url.search+url.hash);window.scrollTo({top:0});return render();}
 function highlight(value){let raw=String(value||'');const words=[...new Set(state.highlights.filter(s=>s.length>1))].sort((a,b)=>b.length-a.length).slice(0,120);if(!words.length)return esc(raw);const regex=new RegExp(words.map(w=>w.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('|'),'giu');let out='',last=0;for(const m of raw.matchAll(regex)){out+=esc(raw.slice(last,m.index))+'<mark>'+esc(m[0])+'</mark>';last=m.index+m[0].length;}return out+esc(raw.slice(last));}
@@ -120,7 +154,7 @@ function sourcePayload(fields){
 }
 async function showTopic(n,topicId,params,force){$('#main').innerHTML='<div class="loading"><span class="spinner"></span></div>';try{const p=new URLSearchParams();if(params.get('comment'))p.set('focus',params.get('comment'));if(params.get('progress'))p.set('progress','1');const data=await (force?api('/api/topics/'+encodeURIComponent(topicId)+'?'+p):publicReads().topic(topicId,p));if(n!==sequence)return;translations.markPage(data);await translations.prime([['topic',data.topic],...data.progress.map(row=>['comment',row,'preview']),...data.comments.slice(0,4).map(row=>['comment',row])]);if(n!==sequence)return;state.topicVersion=data.projectionVersion||null;state.commentPage=1;state.topic=data.topic;state.comments=data.comments;state.progress=data.progress;state.commentNext=data.next;renderTopic(data.progress);translateVisible(n);if(params.get('comment'))setTimeout(()=>$('[data-comment="'+CSS.escape(params.get('comment'))+'"]')?.scrollIntoView({block:'center'}),150);}catch(e){if(n===sequence)$('#main').innerHTML=errorPanel(e);}}
 function commentHtml(c){let depth=0,parent=c.parent_comment_id,seen=new Set();while(parent&&!seen.has(parent)){seen.add(parent);depth++;parent=state.comments.find(x=>x.id===parent)?.parent_comment_id;}return `<article class="comment ${depth?'nested':''}" class-depth="${Math.min(depth,4)}" id="comment-${esc(c.id)}" data-comment="${esc(c.id)}"><div class="topic-meta"><span class="avatar">${esc(displayAuthor(c).slice(0,1))}</span><strong>${authorLink(c)}</strong><time>${date(c.created_at)}</time>${c.kind==='progress'?`<span class="tag">${t('progress')} #${c.progress_seq}</span>`:''}${c.parent_comment_id?`<a href="/topic/${esc(c.topic_id)}?comment=${esc(c.parent_comment_id)}">↳ ${t('reply')}</a>`:''}${statusHtml(c.status)}</div><div class="prose ${c.status==='deleted'?'deleted':''}" data-body="${esc(c.id)}">${c.status==='deleted'?t('deletedComment'):esc(c.body)}</div>${translationShell('comment',c)}${actions(c,'comment')}</article>`;}
-function renderTopic(progress=[]){const c=state.topic,deleted=c.status==='deleted';$('#main').innerHTML=`<a href="/" class="back-link">← ${t('backLink')}</a><article class="panel"><div class="topic-meta"><span class="avatar">${esc(displayAuthor(c).slice(0,1))}</span><strong>${authorLink(c)}</strong><time>${date(c.created_at)}</time><span>${esc(c.source_lang)}</span>${c.public_region?`<span>${esc(c.public_region)}</span>`:''}${statusHtml(c.status)}</div><h1 class="article-title ${deleted?'deleted':''}" data-title="${esc(c.id)}">${deleted?t('deletedTopic'):esc(c.title)}</h1>${tagHtml(c.terms)}<div class="prose" data-body="${esc(c.id)}">${deleted?'':esc(c.body)}</div>${translationShell('topic',c)}${actions(c)}${c.status==='published'?`<div class="stack">${button(icon('follow')+t(c.followed?'followed':'follow'),'follow',`data-id="${esc(c.id)}" data-type="topic" data-active="${c.followed?'true':'false'}" aria-pressed="${c.followed?'true':'false'}"`,c.followed?'active':'')}${state.user?.id===c.author_id?button(icon('plus')+t('update'),'progress','','primary'):''}</div>`:''}${progress.length?`<section class="progress-panel"><h3>${t('progress')}</h3>${progress.map(p=>progressItem(c.id,p)).join('')}<a href="/topic/${esc(c.id)}?progress=1" class="subtle">${t('allProgress')} →</a></section>`:''}</article><div class="feed-heading"><h2>${t('comments')} <span class="subtle" data-reply-count>${c.reply_count}</span></h2>${route().params.get('progress')?`<a href="/topic/${esc(c.id)}">${t('comments')}</a>`:''}</div><section class="panel" id="comments">${state.comments.length?state.comments.map(commentHtml).join(''):`<p class="subtle empty-comments">${t('emptyList')}</p>`}</section>${state.commentNext?button(t('loadMore'),'load-comments','','load-more'):''}${c.status==='published'?`<section class="panel">${state.user?`<form id="root-reply" class="form-grid"><label>${t('reply')}<textarea class="short" name="body" required maxlength="12000" placeholder="${t('commentPlaceholder')}"></textarea></label>${sourceFields()}<small>${t('publicNote')} ${t('translationPrivacy')}</small><div class="form-actions"><button class="button primary" type="submit">${t('reply')}</button></div></form>`:`<p class="subtle">${t('loginNote')}</p>${button(t('google'),'login','','primary')}`}</section>`:''}`;}
+function renderTopic(progress=[]){const c=state.topic,deleted=c.status==='deleted';$('#main').innerHTML=`<a href="/" class="back-link">← ${t('backLink')}</a><article class="panel"><div class="topic-meta"><span class="avatar">${esc(displayAuthor(c).slice(0,1))}</span><strong>${authorLink(c)}</strong><time>${date(c.created_at)}</time><span>${esc(c.source_lang)}</span>${c.public_region?`<span>${esc(c.public_region)}</span>`:''}${statusHtml(c.status)}</div><h1 class="article-title ${deleted?'deleted':''}" data-title="${esc(c.id)}">${deleted?t('deletedTopic'):esc(c.title)}</h1>${tagHtml(c.terms)}<div class="prose" data-body="${esc(c.id)}">${deleted?'':esc(c.body)}</div>${translationShell('topic',c)}${actions(c)}${c.status==='published'?`<div class="stack">${button(icon('follow')+t(c.followed?'followed':'follow'),'follow',`data-id="${esc(c.id)}" data-type="topic" data-active="${c.followed?'true':'false'}" aria-pressed="${c.followed?'true':'false'}"`,c.followed?'active':'')}${state.user?.id===c.author_id?button(icon('plus')+t('update'),'progress','','primary'):''}</div>`:''}${progress.length?`<section class="progress-panel"><h3>${t('progress')}</h3>${progress.map(p=>progressItem(c.id,p)).join('')}<a href="/topic/${esc(c.id)}?progress=1" class="subtle">${t('allProgress')} →</a></section>`:''}${c.status==='published'?`<div class="topic-share-row">${button(icon('share')+t('sharePost'),'share-topic',`data-id="${esc(c.id)}"`,'small')}</div>`:''}</article><div class="feed-heading"><h2>${t('comments')} <span class="subtle" data-reply-count>${c.reply_count}</span></h2>${route().params.get('progress')?`<a href="/topic/${esc(c.id)}">${t('comments')}</a>`:''}</div><section class="panel" id="comments">${state.comments.length?state.comments.map(commentHtml).join(''):`<p class="subtle empty-comments">${t('emptyList')}</p>`}</section>${state.commentNext?button(t('loadMore'),'load-comments','','load-more'):''}${c.status==='published'?`<section class="panel">${state.user?`<form id="root-reply" class="form-grid"><label>${t('reply')}<textarea class="short" name="body" required maxlength="12000" placeholder="${t('commentPlaceholder')}"></textarea></label>${sourceFields()}<small>${t('publicNote')} ${t('translationPrivacy')}</small><div class="form-actions"><button class="button primary" type="submit">${t('reply')}</button></div></form>`:`<p class="subtle">${t('loginNote')}</p>${button(t('google'),'login','','primary')}`}</section>`:''}`;}
 function progressItem(topicId,p){
  return `<div class="progress-item"><a href="/topic/${esc(topicId)}?comment=${esc(p.id)}">${t('update')} #${p.progress_seq} · ${date(p.created_at)}</a><span data-body="${esc(p.id)}">${esc([...p.body].slice(0,180).join(''))}</span>${translationShell('comment',p,'preview',true)}</div>`;
 }
@@ -128,7 +162,7 @@ function updateProgressPanel(){
  const current=$('.progress-panel');
  if(!state.progress?.length){current?.remove();return;}
  const topicId=esc(state.topic.id),html=`<section class="progress-panel"><h3>${t('progress')}</h3>${state.progress.map(p=>progressItem(state.topic.id,p)).join('')}<a href="/topic/${topicId}?progress=1" class="subtle">${t('allProgress')} →</a></section>`;
- if(current)current.outerHTML=html;else $('#main > article.panel')?.insertAdjacentHTML('beforeend',html);
+ if(current)current.outerHTML=html;else {const article=$('#main > article.panel'),share=$('.topic-share-row',article);if(share)share.insertAdjacentHTML('beforebegin',html);else article?.insertAdjacentHTML('beforeend',html);}
 }
 function updateReplyUI(result,editing=false){
  const {comment,insert}=applyReplyResult(state,result,editing),section=$('#comments');
@@ -228,6 +262,22 @@ function rememberAnalyticsFilters(){
  history.replaceState(history.state,'',url.pathname+url.search+url.hash);
 }
 async function clicked(el,event){const action=el.dataset.action,{id,type,active}=el.dataset;
+ if(action==='share-topic')return showShareTopic(findContent('topic',id));
+ if(action==='share-copy'||action==='share-app-copy'){
+  const input=$('#share-url');if(!input)return;
+  try{
+   if(navigator.clipboard?.writeText)await navigator.clipboard.writeText(input.value);
+   else{input.focus();input.select();if(!document.execCommand('copy'))throw new Error('copy failed');}
+   closeModal();toast(action==='share-app-copy'?t('shareAppCopied').replace('{app}',sharePlatformName(el.dataset.platform)):t('linkCopied'));
+  }catch{input.focus();input.select();toast(t('shareCopyError'));}
+  return;
+ }
+ if(action==='share-native'){
+  const input=$('#share-url');if(!input||typeof navigator.share!=='function')return;
+  try{await navigator.share({title:state.topic?.title||'Spine Community',url:input.value});closeModal();}
+  catch(e){if(e?.name!=='AbortError')toast(t('shareSystemError'));}
+  return;
+ }
  if(action==='login')return showLogin();
  if(action==='reading-options')return showReadingSettings();
  if(action==='reading-reset'){readingPreferences=saveReadingPreferences(readingStorage,document.documentElement,defaultReadingPreferences);return showReadingSettings();}if(action==='close-modal')return closeModal();if(action==='retry')return render();if(action==='compose')return composer();if(action==='privacy'){return navigate('/privacy');}
