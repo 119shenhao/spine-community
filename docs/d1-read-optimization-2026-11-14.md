@@ -82,3 +82,4 @@ https://github.com/119shenhao/spine-community/actions/runs/43533045471/attempts/
 - **尚未在本轮发布生产**，不得将开发库索引/汇总情况视为生产库已应用。
 - 生产发布必须沿用既定「发布新版本」流程，先审查 0017/0018 对生产 D1 的写入负担和备份点，完成迁移后再发布新代码，避免代码期待汇总表但表尚不存在。
 - 生产发布后至少用 24–48 小时 D1 Insights/GraphQL 对比 rowsRead，同时关注 rowsWritten：增量触发器用适量写入换取大量读取节省，不能只盯读取量。
+- 进一步通过只读审计 `43539680586` 逐组验证 **source='imported'/'user'/'unknown' 与 topic/comment 统计完全匹配原始 SQL**。核查当时开发库：帖子 896 篇（导入 895、用户 1），回复 4,078 条（导入 4,074、用户 4），缺少来源记录 0。https://github.com/119shenhao/spine-community/actions/runs/43539680586
