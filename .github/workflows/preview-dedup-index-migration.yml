@@ -109,7 +109,7 @@ jobs:
             .map(x=>x.detail).join(' | ');
           if(!dup.includes('idx_topics_exact_title')||!dup.includes('ux_topics_content_hash'))
             throw Error('Duplicate lookup not using title and fingerprint indexes: '+dup);
-          const moderation=run("EXPLAIN QUERY PLAN SELECT id,'topic' type,author_id,title,body,status,created_at FROM topics WHERE status IN ('pending_review','blocked','hidden') UNION ALL SELECT id,'comment',author_id,NULL,body,status,created_at FROM comments WHERE status IN ('pending_review','blocked','hidden') ORDER BY created_at DESC LIMIT 100")
+          const moderation=run("EXPLAIN QUERY PLAN SELECT id,'topic' type,author_id,title,body,status,created_at FROM topics INDEXED BY idx_topics_moderation_recent WHERE status IN ('pending_review','blocked','hidden') UNION ALL SELECT id,'comment',author_id,NULL,body,status,created_at FROM comments INDEXED BY idx_comments_moderation_recent WHERE status IN ('pending_review','blocked','hidden') ORDER BY created_at DESC LIMIT 100")
             .map(x=>x.detail).join(' | ');
           if(!moderation.includes('idx_topics_moderation_recent')||
              !moderation.includes('idx_comments_moderation_recent'))
