@@ -3452,12 +3452,12 @@ test('materialized aggregates reconcile with original SQL under imports, hiding,
  await reconcile();
  DB.db.prepare("UPDATE topics SET status='published' WHERE id=?").run(a);
  await reconcile();
- DB.db.prepare("UPDATE topics SET status='deleted' WHERE id=?").run(a);
+ DB.db.prepare("UPDATE topics SET status='deleted',title=NULL,body=NULL WHERE id=?").run(a);
  await reconcile();
- DB.db.prepare("UPDATE topics SET status='published' WHERE id=?").run(a);
- DB.db.prepare("UPDATE comments SET status='deleted' WHERE id=?").run(reply.data.id);
+ DB.db.prepare("UPDATE topics SET status='published',title='Restored test',body='Restored synthetic body' WHERE id=?").run(a);
+ DB.db.prepare("UPDATE comments SET status='deleted',body=NULL WHERE id=?").run(reply.data.id);
  await reconcile();
- DB.db.prepare("UPDATE comments SET status='published',author_id='carol' WHERE id=?").run(reply.data.id);
+ DB.db.prepare("UPDATE comments SET status='published',body='Restored reply',author_id='carol' WHERE id=?").run(reply.data.id);
  await reconcile();
  DB.db.prepare("UPDATE content_origins SET source='imported',entered_at=NULL WHERE content_type='comment' AND content_id=?").run(reply.data.id);
  await reconcile();
