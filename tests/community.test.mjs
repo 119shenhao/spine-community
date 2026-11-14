@@ -3122,7 +3122,7 @@ test('unchanged SQL sync writer is counted at local entry time and retry is idem
 
 test('origin migration backfills stable writer evidence, skips duplicate receipts and preserves unknown dates',()=>{
  const db=new DatabaseSync(':memory:');db.exec('PRAGMA foreign_keys=ON');
- for(const file of readdirSync('migrations/v1').filter(f=>f.endsWith('.sql')&&!f.startsWith('0014')&&!f.startsWith('0015')).sort())db.exec(readFileSync('migrations/v1/'+file,'utf8'));
+ for(const file of readdirSync('migrations/v1').filter(f=>f.endsWith('.sql')&&!f.startsWith('0014')&&!f.startsWith('0015')&&!f.startsWith('0017')).sort())db.exec(readFileSync('migrations/v1/'+file,'utf8'));
  db.exec("INSERT INTO users(id,nickname) VALUES('legacy-user','Anonymous'); INSERT INTO topics(id,author_id,title,body,status,created_at) VALUES('legacy-web','legacy-user','Web fixture','Fictional body','published',1000000),('legacy-sync','system-unknown-import','Sync fixture','Fictional body','published',1000000),('legacy-import','system-unknown-import','Import fixture','Fictional body','published',1000000)");
  db.prepare('INSERT INTO import_batches(request_hash,result_json,created_at) VALUES(?,?,?)').run('batch',JSON.stringify({results:[{type:'topic',id:'legacy-import'},{type:'topic',id:'legacy-sync',skipped:true}]}),2000000);
  db.exec(readFileSync('migrations/v1/0014_content_origin_statistics.sql','utf8'));
@@ -3144,7 +3144,7 @@ test('statistics UI presents all six counts with separate period labels in every
 
 test('legacy reply dates need a local nonduplicate collection window, not just a parent timestamp',()=>{
  const db=new DatabaseSync(':memory:');
- for(const f of readdirSync('migrations/v1').filter(f=>f.endsWith('.sql')&&!f.startsWith('0014')&&!f.startsWith('0015')).sort())db.exec(readFileSync('migrations/v1/'+f,'utf8'));
+ for(const f of readdirSync('migrations/v1').filter(f=>f.endsWith('.sql')&&!f.startsWith('0014')&&!f.startsWith('0015')&&!f.startsWith('0017')).sort())db.exec(readFileSync('migrations/v1/'+f,'utf8'));
  db.exec("INSERT INTO topics(id,author_id,title,body,status) VALUES('collected','system-unknown-import','Fictional collection','Fictional body','published'); INSERT INTO comments(id,topic_id,author_id,body,status,created_at) VALUES('within-window','collected','system-unknown-import','First collected reply','published',200),('later-reply','collected','system-unknown-import','Later imported reply','published',400)");
  db.exec("INSERT INTO collect_sources(site,source_id,state,completion_token_hash,topic_id,claimed_at,completed_at) VALUES('test','1','completed','hash','collected',100,300)");
  db.exec(readFileSync('migrations/v1/0014_content_origin_statistics.sql','utf8'));
