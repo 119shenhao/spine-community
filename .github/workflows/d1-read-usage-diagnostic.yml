@@ -68,6 +68,64 @@ jobs:
           done
           echo "FAILURES=$failures" >> "$GITHUB_ENV"
 
+      - name: Read account D1 rows-read totals by UTC date (GraphQL Analytics, no SQL execution)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,os
+          from urllib.request import Request,urlopen
+          from urllib.error import HTTPError, URLError
+          query = '''query($accountTag: string!, $start: Date!, $end: Date!) {
+            viewer {
+              accounts(filter: { accountTag: $accountTag }) {
+                d1AnalyticsAdaptiveGroups(
+                  limit: 10000,
+                  filter: {date_geq: $start, date_leq: $end}
+                ) {
+                  dimensions { date databaseId }
+                  sum { rowsRead rowsWritten readQueries writeQueries }
+                }
+              }
+            }
+          }'''
+          payload={'query':query,'variables':{
+            'accountTag':os.environ['CLOUDFLARE_ACCOUNT_ID'],
+            'start':'2026-11-12','end':'2026-11-14'}}
+          req=Request('https://api.cloudflare.com/client/v4/graphql',
+            data=json.dumps(payload).encode('utf8'),
+            headers={'Authorization':'Bearer '+os.environ['CLOUDFLARE_API_TOKEN'],
+              'Content-Type':'application/json'},method='POST')
+          report=['## Account D1 daily totals (Cloudflare GraphQL)','']
+          try:
+            with urlopen(req,timeout=40) as resp:
+              result=json.load(resp)
+            errs=result.get('errors') or []
+            if errs:
+              report.append('GraphQL returned errors; check Account Analytics Read permission.')
+              for err in errs[:3]:
+                report.append('- '+str(err.get('message','unspecified'))[:250].replace('|','/'))
+            else:
+              accounts=result.get('data',{}).get('viewer',{}).get('accounts',[])
+              values=accounts[0].get('d1AnalyticsAdaptiveGroups',[]) if accounts else []
+              names={'5919ff78-b8fc-46ab-85f0-01fe5e6a41b0':'production','4362537a-5748-4a05-b0c4-219c3db36996':'preview'}
+              totals={}
+              for row in values:
+                dims=row.get('dimensions',{})
+                key=(dims.get('date','unknown'),names.get(dims.get('databaseId',''),dims.get('databaseId','unknown')))
+                item=totals.setdefault(key,dict(rowsRead=0,rowsWritten=0,readQueries=0,writeQueries=0))
+                for k in item: item[k]+=int((row.get('sum',{}) or {}).get(k) or 0)
+              report.extend(['Groups returned: '+str(len(values)),'','| UTC day | Database | Rows read | Rows written | Read queries | Write queries |','|---|---|---:|---:|---:|---:|'])
+              for key,row in sorted(totals.items()):
+                report.append(f'| {key[0]} | {key[1]} | {row["rowsRead"]} | {row["rowsWritten"]} | {row["readQueries"]} | {row["writeQueries"]} |')
+              if not values:report.append('No records returned. Verify permissions, account ID and data retention.')
+          except (HTTPError,URLError,TimeoutError,ValueError) as exc:
+            report.append('GraphQL request failed: '+type(exc).__name__+' (HTTP code '+str(getattr(exc,'code','n/a'))+').')
+          message='\n'.join(report)+'\n'
+          print(message)
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a',encoding='utf8') as f:f.write(message)
+          PY
+
       - name: Report top reading queries with SQL literals redacted
         shell: bash
         run: |
@@ -89,7 +147,9 @@ jobs:
               try:
                   payload=json.loads(p.read_text('utf8'))
                   if isinstance(payload,list): rows=payload
-                  elif isinstance(payload,dict): rows=payload.get('result',payload.get('data',payload.get('queries',[])))
+                  elif isinstance(payload,dict):
+                      rows=payload.get('result',payload.get('data',payload.get('queries',[])))
+                      report.append('Response object keys: '+', '.join(sorted(payload.keys())))
                   else: rows=[]
                   if not isinstance(rows,list): raise ValueError('Unrecognized insights format')
               except (ValueError,KeyError,TypeError) as e:
