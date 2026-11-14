@@ -3463,7 +3463,8 @@ test('materialized aggregates reconcile with original SQL under imports, hiding,
  await reconcile();
  DB.db.prepare("UPDATE content_origins SET source='user',entered_at=unixepoch() WHERE content_type='comment' AND content_id=?").run(reply.data.id);
  await reconcile();
- DB.db.prepare("DELETE FROM comments WHERE id=?").run(reply.data.id);
+ // Synthetic directly imported topic has no notification FK references.
+ DB.db.exec("DELETE FROM topics WHERE id='direct-import'");
  await reconcile();
 });
 
