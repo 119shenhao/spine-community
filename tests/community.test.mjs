@@ -3111,7 +3111,7 @@ test('unchanged SQL sync writer is counted at local entry time and retry is idem
 
 test('origin migration backfills stable writer evidence, skips duplicate receipts and preserves unknown dates',()=>{
  const db=new DatabaseSync(':memory:');db.exec('PRAGMA foreign_keys=ON');
- for(const file of readdirSync('migrations/v1').filter(f=>f.endsWith('.sql')&&!f.startsWith('0014')&&!f.startsWith('0015')).sort())db.exec(readFileSync('migrations/v1/'+file,'utf8'));
+ for(const file of readdirSync('migrations/v1').filter(f=>f.endsWith('.sql')&&!f.startsWith('0014')&&!f.startsWith('0015')&&!f.startsWith('0017')).sort())db.exec(readFileSync('migrations/v1/'+file,'utf8'));
  db.exec("INSERT INTO users(id,nickname) VALUES('legacy-user','Anonymous'); INSERT INTO topics(id,author_id,title,body,status,created_at) VALUES('legacy-web','legacy-user','Web fixture','Fictional body','published',1000000),('legacy-sync','system-unknown-import','Sync fixture','Fictional body','published',1000000),('legacy-import','system-unknown-import','Import fixture','Fictional body','published',1000000)");
  db.prepare('INSERT INTO import_batches(request_hash,result_json,created_at) VALUES(?,?,?)').run('batch',JSON.stringify({results:[{type:'topic',id:'legacy-import'},{type:'topic',id:'legacy-sync',skipped:true}]}),2000000);
  db.exec(readFileSync('migrations/v1/0014_content_origin_statistics.sql','utf8'));
@@ -3133,7 +3133,7 @@ test('statistics UI presents all six counts with separate period labels in every
 
 test('legacy reply dates need a local nonduplicate collection window, not just a parent timestamp',()=>{
  const db=new DatabaseSync(':memory:');
- for(const f of readdirSync('migrations/v1').filter(f=>f.endsWith('.sql')&&!f.startsWith('0014')&&!f.startsWith('0015')).sort())db.exec(readFileSync('migrations/v1/'+f,'utf8'));
+ for(const f of readdirSync('migrations/v1').filter(f=>f.endsWith('.sql')&&!f.startsWith('0014')&&!f.startsWith('0015')&&!f.startsWith('0017')).sort())db.exec(readFileSync('migrations/v1/'+f,'utf8'));
  db.exec("INSERT INTO topics(id,author_id,title,body,status) VALUES('collected','system-unknown-import','Fictional collection','Fictional body','published'); INSERT INTO comments(id,topic_id,author_id,body,status,created_at) VALUES('within-window','collected','system-unknown-import','First collected reply','published',200),('later-reply','collected','system-unknown-import','Later imported reply','published',400)");
  db.exec("INSERT INTO collect_sources(site,source_id,state,completion_token_hash,topic_id,claimed_at,completed_at) VALUES('test','1','completed','hash','collected',100,300)");
  db.exec(readFileSync('migrations/v1/0014_content_origin_statistics.sql','utf8'));
@@ -3356,4 +3356,179 @@ test('sharing: independent topic URL, encoded social targets, preview origin and
  assert(!targets.some(x=>x.href?.includes('utm_')));
  const {dictionaries,languages}=await import('../public/i18n.js');
  for(const lang of languages)for(const key of ['sharePost','sharePostHint','copyLink','linkCopied','shareSystem','shareSystemError','shareCopyError','shareChina','shareGlobal','shareAppHint','shareCopyToApp','shareAppCopied'])assert(dictionaries[lang][key],lang+' missing '+key);
+});
+
+test('indexed translation cache lookup preserves public versions, language and parent visibility',async()=>{
+ const {DB,topic,call}=await fixture();
+ const {readItems}=await import('../.test-build/translation.js');
+ const tid=await topic('Read plan topic','The original English text');
+ const reply=await call('/api/topics/'+tid+'/comments','POST',{body:'A published reply'},'bob');
+ assert.equal(reply.status,201);
+ DB.db.prepare("INSERT INTO topic_translations(topic_id,locale,scope,source_version,title_text,body_text,provider) VALUES(?,'zh-CN','full',1,'翻译标题','翻译正文','test')").run(tid);
+ DB.db.prepare("INSERT INTO comment_translations(comment_id,locale,scope,source_version,body_text,provider) VALUES(?,'zh-CN','full',1,'回复译文','test')").run(reply.data.id);
+ const requested=[
+  {type:'topic',id:tid,scope:'full',version:1,token:null,page:null},
+  {type:'comment',id:reply.data.id,scope:'full',version:1,token:null,page:null}
+ ];
+ const items=await readItems(DB,requested,'zh-CN');
+ assert.equal(items.length,2);
+ const byType=Object.fromEntries(items.map(x=>[x.type,x]));
+ assert.equal(byType.topic.body_text,'翻译正文');
+ assert.equal(byType.comment.body_text,'回复译文');
+ assert.equal(byType.topic.source_lang,'en');
+ // A hidden root may never leak either cached translation.
+ await call('/api/admin/content','POST',{type:'topic',id:tid,action:'hide',reason:'test'},'admin');
+ assert.deepEqual(await readItems(DB,requested,'zh-CN'),[]);
+ const sql=readFileSync('src/translation.ts','utf8');
+ assert.match(sql,/FROM requested r CROSS JOIN topics t ON t.id=r.id/);
+ assert.match(sql,/FROM requested r CROSS JOIN comments c ON c.id=r.id/);
+});
+
+test('empty public projection demand does not issue a costly lease UPDATE',async()=>{
+ const {DB,env}=await fixture();
+ const {drainPublicContent}=await import('../.test-build/projection-demand.js');
+ enableProjection(env,projectionBucket());
+ Object.assign(env,{PUBLIC_CONTENT_ON_DEMAND:'true',PUBLIC_CONTENT_FALLBACK:'true'});
+ const seen=[],original=DB.prepare.bind(DB);
+ DB.prepare=(sql)=>{seen.push(sql);return original(sql);};
+ const result=await drainPublicContent(env,2);
+ assert.equal(result.processed,0);
+ assert.equal(result.failed,0);
+ assert(seen.some(sql=>sql.includes('SELECT')&&sql.includes('public_projection_demand d')));
+ assert(!seen.some(sql=>sql.includes('UPDATE public_projection SET lease=')));
+ assert(DB.db.prepare("PRAGMA index_list('public_projection')").all().some(i=>i.name==='idx_public_projection_pending_due'));
+});
+
+
+test('materialized aggregates reconcile with original SQL under imports, hiding, deletions and origin reclassification',async()=>{
+ const {DB,call,topic}=await fixture();
+ const reconcile=async()=>{
+  const expected=DB.db.prepare(`SELECT o.content_type,o.source,count(*) n FROM content_origins o
+    JOIN (SELECT 'topic' content_type,id FROM topics WHERE status='published'
+      UNION ALL SELECT 'comment',c.id FROM comments c JOIN topics t ON t.id=c.topic_id
+      WHERE c.status='published' AND t.status IN ('published','deleted')) c
+    ON c.content_type=o.content_type AND c.id=o.content_id
+    GROUP BY o.content_type,o.source ORDER BY o.content_type,o.source`).all();
+  const actual=DB.db.prepare(`SELECT content_type,source,n FROM visible_content_totals
+    WHERE n>0 ORDER BY content_type,source`).all();
+  assert.deepEqual(actual,expected);
+  const daily=DB.db.prepare(`SELECT COALESCE(date(entered_at,'unixepoch'),'') day_utc,
+    content_type,source,count(*) n FROM content_origins
+    GROUP BY 1,content_type,source ORDER BY 1,content_type,source`).all();
+  const storedDaily=DB.db.prepare(`SELECT day_utc,content_type,source,n FROM content_origin_day_totals
+    WHERE n>0 ORDER BY 1,2,3`).all();
+  assert.deepEqual(storedDaily,daily);
+  const expectedAuthors=DB.db.prepare(`SELECT author_id,
+    sum(content_type='topic') posts,sum(content_type='comment') replies
+    FROM (SELECT t.author_id,'topic' content_type FROM topics t
+      JOIN content_origins o ON o.content_type='topic' AND o.content_id=t.id
+      WHERE t.status='published' AND o.source='user'
+      UNION ALL SELECT c.author_id,'comment' FROM comments c
+      JOIN content_origins o ON o.content_type='comment' AND o.content_id=c.id
+      JOIN topics t ON t.id=c.topic_id WHERE o.source='user'
+      AND c.status='published' AND t.status IN ('published','deleted'))
+    GROUP BY author_id ORDER BY author_id`).all();
+  const storedAuthors=DB.db.prepare(`SELECT author_id,posts,replies FROM visible_contributor_totals
+    WHERE posts+replies>0 ORDER BY author_id`).all();
+  assert.deepEqual(storedAuthors,expectedAuthors);
+  const overview=await call('/api/admin/overview','GET',undefined,'admin');
+  assert.equal(overview.status,200,JSON.stringify(overview));
+  assert.equal(overview.data.contentTotals.topics,expected.filter(x=>x.content_type==='topic').reduce((s,x)=>s+x.n,0));
+  assert.equal(overview.data.contentTotals.comments,expected.filter(x=>x.content_type==='comment').reduce((s,x)=>s+x.n,0));
+  assert.equal(overview.data.contentUndated.topics,DB.db.prepare("SELECT count(*) n FROM content_origins WHERE entered_at IS NULL AND content_type='topic'").get().n);
+ };
+ await reconcile();
+ const a=await topic('Fixture rank a','Long enough for ordinary post checks');
+ const reply=await call('/api/topics/'+a+'/comments','POST',{body:'Answer in a new test'},'bob');
+ assert.equal(reply.status,201);
+ DB.db.exec("INSERT INTO topics(id,author_id,title,body,status) VALUES('direct-import','system-unknown-import','Imported fixture','Original content','published')");
+ await reconcile();
+ DB.db.prepare("UPDATE topics SET status='hidden' WHERE id=?").run(a);
+ await reconcile();
+ DB.db.prepare("UPDATE topics SET status='published' WHERE id=?").run(a);
+ await reconcile();
+ DB.db.prepare("UPDATE topics SET status='deleted',title=NULL,body=NULL WHERE id=?").run(a);
+ await reconcile();
+ DB.db.prepare("UPDATE topics SET status='published',title='Restored test',body='Restored synthetic body' WHERE id=?").run(a);
+ DB.db.prepare("UPDATE comments SET status='deleted',body=NULL WHERE id=?").run(reply.data.id);
+ await reconcile();
+ DB.db.prepare("UPDATE comments SET status='published',body='Restored reply',author_id='carol' WHERE id=?").run(reply.data.id);
+ await reconcile();
+ DB.db.prepare("UPDATE content_origins SET source='imported',entered_at=NULL WHERE content_type='comment' AND content_id=?").run(reply.data.id);
+ await reconcile();
+ DB.db.prepare("UPDATE content_origins SET source='user',entered_at=unixepoch() WHERE content_type='comment' AND content_id=?").run(reply.data.id);
+ await reconcile();
+ // Synthetic directly imported topic has no notification FK references.
+ DB.db.exec("DELETE FROM topics WHERE id='direct-import'");
+ await reconcile();
+});
+
+test('Cloudflare API limiter removes D1 read-request writes but retains strict writes and fallback',async()=>{
+ const {env,DB,call}=await fixture();
+ let calls=0;
+ env.API_RATE_LIMITER={limit:async({key})=>{calls++;assert.match(key,/api:/);return {success:true};}};
+ const before=DB.db.prepare('SELECT count(*) n FROM rate_limits').get().n;
+ assert.equal((await call('/api/topics','GET',undefined,null)).status,200);
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM rate_limits').get().n,before);
+ assert(calls>0);
+ const created=await call('/api/topics','POST',{title:'Native limit keeps writes safe',body:'Non-test published content is synthetic'},'alice');
+ assert.equal(created.status,201,JSON.stringify(created));
+ assert(DB.db.prepare('SELECT count(*) n FROM rate_limits').get().n>before);
+ env.API_RATE_LIMITER={limit:async()=>({success:false})};
+ assert.equal((await call('/api/topics','GET',undefined,null)).status,429);
+ env.API_RATE_LIMITER={limit:async()=>{throw Error('Native edge unavailable')}};
+ assert.equal((await call('/api/topics','GET',undefined,null)).status,200);
+ assert(DB.db.prepare("SELECT count(*) n FROM rate_limits WHERE key LIKE 'api:%'").get().n>=1);
+});
+
+test('health schema is cached while dynamic analytics toggle stays live',async()=>{
+ const {DB,call}=await fixture();
+ let schemaQueries=0;
+ const original=DB.prepare.bind(DB);
+ DB.prepare=(sql)=>{if(sql.includes('pragma_table_info'))schemaQueries++;return original(sql);};
+ const first=await call('/api/health');
+ assert.equal(first.status,200,JSON.stringify(first));
+ assert.equal(first.data.analyticsEnabled,false);
+ DB.db.exec("INSERT OR REPLACE INTO settings(key,value) VALUES('analytics_enabled','true')");
+ const second=await call('/api/health');
+ assert.equal(second.status,200);
+ assert.equal(second.data.analyticsEnabled,true);
+ assert.equal(schemaQueries,1);
+});
+
+
+test('legacy exact-title dedup and moderation queue use index-driven execution plans',async()=>{
+ const {DB,call}=await fixture();
+ const old=DB.db.prepare("INSERT INTO topics(id,author_id,title,body,status,created_at) VALUES(?, 'alice', ?, ?, ?, ?)");
+ for(let i=0;i<500;i++)old.run('perf-fixture-'+i,'Synthetic title '+i,'Synthetic historical body '+i,i%50===0?'hidden':'published',1000+i);
+ old.run('perf-legacy','Legacy duplicate exact title','Legacy duplicate exact body','published',2000);
+ const add=await call('/api/topics','POST',
+   {title:'Legacy duplicate exact title',body:'Legacy duplicate exact body',source_lang:'en'},'bob');
+ assert.equal(add.status,409,'Legacy NULL-hash topics must still prevent duplicates');
+ DB.db.prepare("INSERT INTO comments(id,topic_id,author_id,body,status,created_at) VALUES(?,'perf-legacy','bob',?,'pending_review',?)")
+   .run('perf-review','Synthetic comment awaiting moderation',3000);
+ DB.db.exec('ANALYZE');
+ const explain=(sql,args)=>DB.db.prepare('EXPLAIN QUERY PLAN '+sql).all(...args).map(r=>r.detail).join(' / ');
+ const duplicate=explain('SELECT id,status FROM topics WHERE content_hash=? OR (title=? AND body=?) LIMIT 2',
+   ['a'.repeat(64),'Legacy duplicate exact title','Legacy duplicate exact body']);
+ assert.match(duplicate,/idx_topics_exact_title/,duplicate);
+ assert.match(duplicate,/ux_topics_content_hash/,duplicate);
+ const sync=explain('SELECT id FROM topics WHERE content_hash=? OR (title=? AND body=?) OR id=? LIMIT 3',
+   ['a'.repeat(64),'Legacy duplicate exact title','Legacy duplicate exact body','perf-legacy']);
+ assert.match(sync,/idx_topics_exact_title/,sync);
+ assert.match(sync,/ux_topics_content_hash/,sync);
+ const queueSQL=`SELECT id,'topic' type,author_id,title,body,status,created_at
+   FROM topics INDEXED BY idx_topics_moderation_recent WHERE status IN ('pending_review','blocked','hidden')
+   UNION ALL
+   SELECT id,'comment',author_id,NULL,body,status,created_at
+   FROM comments INDEXED BY idx_comments_moderation_recent WHERE status IN ('pending_review','blocked','hidden')
+   ORDER BY created_at DESC LIMIT 100`;
+ const plan=explain(queueSQL,[]);
+ assert.match(plan,/idx_topics_moderation_recent/,plan);
+ assert.match(plan,/idx_comments_moderation_recent/,plan);
+ const queue=DB.db.prepare(queueSQL).all();
+ assert.equal(queue[0].id,'perf-review');
+ assert(queue.some(r=>r.id==='perf-fixture-0'));
+ assert(!queue.some(r=>r.id==='perf-legacy'));
+ assert.equal(DB.db.prepare("PRAGMA foreign_key_check").all().length,0);
 });

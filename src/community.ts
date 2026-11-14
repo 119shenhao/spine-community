@@ -69,9 +69,7 @@ export async function communityRoute(req:Request,env:Env,u:Row|null,path:string)
     await env.DB.batch([
       stmt(env.DB,`INSERT INTO traffic_visitors VALUES(?,?,?) ON CONFLICT(day_utc,visitor_hash) DO UPDATE SET last_seen=excluded.last_seen`,day,visitor,now()),
       stmt(env.DB,`INSERT INTO hourly_traffic_metrics VALUES(?,1) ON CONFLICT(hour_start_utc) DO UPDATE SET pv=pv+1`,hour),
-      stmt(env.DB,`INSERT INTO daily_traffic_metrics(day_utc,uv_estimate,pv,peak_active_5m_estimate,peak_hour_utc,peak_hour_pv) VALUES(?,?,1,1,?,1) ON CONFLICT(day_utc) DO UPDATE SET uv_estimate=(SELECT count(*) FROM traffic_visitors WHERE day_utc=?),pv=pv+1,peak_active_5m_estimate=MAX(peak_active_5m_estimate,(SELECT count(*) FROM traffic_visitors WHERE day_utc=? AND last_seen>=?)),peak_hour_utc=CASE WHEN (SELECT pv FROM hourly_traffic_metrics WHERE hour_start_utc=?)>peak_hour_pv THEN ? ELSE peak_hour_utc END,peak_hour_pv=MAX(peak_hour_pv,(SELECT pv FROM hourly_traffic_metrics WHERE hour_start_utc=?))`,day,seen?0:1,Math.floor(hour/3600)%24,day,day,now()-300,hour,Math.floor(hour/3600)%24,hour),
-      stmt(env.DB,"DELETE FROM traffic_visitors WHERE day_utc<date('now','-2 days')"),
-      stmt(env.DB,'DELETE FROM rate_limits WHERE expires_at<?',now()-86400)
+      stmt(env.DB,`INSERT INTO daily_traffic_metrics(day_utc,uv_estimate,pv,peak_active_5m_estimate,peak_hour_utc,peak_hour_pv) VALUES(?,?,1,1,?,1) ON CONFLICT(day_utc) DO UPDATE SET uv_estimate=(SELECT count(*) FROM traffic_visitors WHERE day_utc=?),pv=pv+1,peak_active_5m_estimate=MAX(peak_active_5m_estimate,(SELECT count(*) FROM traffic_visitors WHERE day_utc=? AND last_seen>=?)),peak_hour_utc=CASE WHEN (SELECT pv FROM hourly_traffic_metrics WHERE hour_start_utc=?)>peak_hour_pv THEN ? ELSE peak_hour_utc END,peak_hour_pv=MAX(peak_hour_pv,(SELECT pv FROM hourly_traffic_metrics WHERE hour_start_utc=?))`,day,seen?0:1,Math.floor(hour/3600)%24,day,day,now()-300,hour,Math.floor(hour/3600)%24,hour)
     ]);
     return json({ok:true,recorded:true},200,{'set-cookie':`sc_visitor=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400${url.protocol==='https:'?'; Secure':''}`});
   }
