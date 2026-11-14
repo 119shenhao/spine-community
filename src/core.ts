@@ -10,6 +10,9 @@ export interface Env {
   PUBLIC_TRANSLATION_DIRECT?: string; PUBLIC_TRANSLATION_SEPARATE?: string; PUBLIC_CONTENT_PAGE_SIZE?: string;
   PUBLIC_CONTENT_ENABLED?: string; PUBLIC_CONTENT_READS?: string; PUBLIC_CONTENT_FALLBACK?: string; PUBLIC_CONTENT_ON_DEMAND?: string;
   CDN_ZONE_ID?: string; CDN_PURGE_API_TOKEN?: string;
+  // Native Cloudflare limiter replaces the D1 write on routine API reads.
+  // If absent or unavailable, the existing strict D1 limiter is retained.
+  API_RATE_LIMITER?: {limit(input:{key:string}):Promise<{success:boolean}>};
 }
 export type Row = Record<string, any>;
 export const locales = ['en','zh-CN','zh-TW','es','pt-BR','de','fr','ja'];
