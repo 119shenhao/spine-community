@@ -58,6 +58,30 @@ export async function rate(db: D1Database,key: string,limit: number,seconds=60) 
   const r=await one(db,`INSERT INTO rate_limits(key,bucket,count,expires_at) VALUES(?,?,1,?) ON CONFLICT(key,bucket) DO UPDATE SET count=count+1 WHERE count<? RETURNING count`,key,bucket,(bucket+1)*seconds,limit);
   if(!r)fail(429,'rate_limit');
 }
+// Prefer an edge-native per-location throttle on ordinary API reads.
+// Write operations still use strict D1 rate buckets, and any native failure
+// falls back to the original D1 limiter rather than allowing unbounded traffic.
+export async function apiRate(env:Env,req:Request):Promise<void>{
+ const ip=req.headers.get('cf-connecting-ip')||'local';
+ const key='api:'+await hash(ip+new Date().toISOString().slice(0,10));
+ if(env.API_RATE_LIMITER){
+   try{
+     const response=await env.API_RATE_LIMITER.limit({key:(env.APP_ENV||'production')+':'+key});
+     if(!response.success)fail(429,'rate_limit');
+   }catch(error){
+     if(error instanceof HttpError)throw error;
+     await rate(env.DB,key,180);
+     return;
+   }
+   // Sensitive writes retain account-wide D1 protection. Anonymous pageview
+   // collection has its own strict daily limits when analytics is enabled.
+   if(!['GET','HEAD'].includes(req.method) &&
+     new URL(req.url).pathname!=='/api/pageview')await rate(env.DB,key,180);
+   return;
+ }
+ await rate(env.DB,key,180);
+}
+
 export async function currentUser(req: Request, env: Env): Promise<Row|null> {
   const token=cookie(req,'sc_session');if(!token)return null;
   const user=await one(env.DB,`SELECT u.*,s.id session_id FROM user_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>? AND s.revoked_at IS NULL AND u.status='active' AND u.is_system=0`,await hash(token),now());
