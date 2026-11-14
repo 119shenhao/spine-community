@@ -3403,3 +3403,99 @@ test('empty public projection demand does not issue a costly lease UPDATE',async
  assert(!seen.some(sql=>sql.includes('UPDATE public_projection SET lease=')));
  assert(DB.db.prepare("PRAGMA index_list('public_projection')").all().some(i=>i.name==='idx_public_projection_pending_due'));
 });
+
+
+test('materialized aggregates reconcile with original SQL under imports, hiding, deletions and origin reclassification',async()=>{
+ const {DB,call,topic}=await fixture();
+ const reconcile=async()=>{
+  const expected=DB.db.prepare(`SELECT o.content_type,o.source,count(*) n FROM content_origins o
+    JOIN (SELECT 'topic' content_type,id FROM topics WHERE status='published'
+      UNION ALL SELECT 'comment',c.id FROM comments c JOIN topics t ON t.id=c.topic_id
+      WHERE c.status='published' AND t.status IN ('published','deleted')) c
+    ON c.content_type=o.content_type AND c.id=o.content_id
+    GROUP BY o.content_type,o.source ORDER BY o.content_type,o.source`).all();
+  const actual=DB.db.prepare(`SELECT content_type,source,n FROM visible_content_totals
+    WHERE n>0 ORDER BY content_type,source`).all();
+  assert.deepEqual(actual,expected);
+  const daily=DB.db.prepare(`SELECT COALESCE(date(entered_at,'unixepoch'),'') day_utc,
+    content_type,source,count(*) n FROM content_origins
+    GROUP BY 1,content_type,source ORDER BY 1,content_type,source`).all();
+  const storedDaily=DB.db.prepare(`SELECT day_utc,content_type,source,n FROM content_origin_day_totals
+    WHERE n>0 ORDER BY 1,2,3`).all();
+  assert.deepEqual(storedDaily,daily);
+  const expectedAuthors=DB.db.prepare(`SELECT author_id,
+    sum(content_type='topic') posts,sum(content_type='comment') replies
+    FROM (SELECT t.author_id,'topic' content_type FROM topics t
+      JOIN content_origins o ON o.content_type='topic' AND o.content_id=t.id
+      WHERE t.status='published' AND o.source='user'
+      UNION ALL SELECT c.author_id,'comment' FROM comments c
+      JOIN content_origins o ON o.content_type='comment' AND o.content_id=c.id
+      JOIN topics t ON t.id=c.topic_id WHERE o.source='user'
+      AND c.status='published' AND t.status IN ('published','deleted'))
+    GROUP BY author_id ORDER BY author_id`).all();
+  const storedAuthors=DB.db.prepare(`SELECT author_id,posts,replies FROM visible_contributor_totals
+    WHERE posts+replies>0 ORDER BY author_id`).all();
+  assert.deepEqual(storedAuthors,expectedAuthors);
+  const overview=await call('/api/admin/overview','GET',undefined,'admin');
+  assert.equal(overview.status,200,JSON.stringify(overview));
+  assert.equal(overview.data.contentTotals.topics,expected.filter(x=>x.content_type==='topic').reduce((s,x)=>s+x.n,0));
+  assert.equal(overview.data.contentTotals.comments,expected.filter(x=>x.content_type==='comment').reduce((s,x)=>s+x.n,0));
+  assert.equal(overview.data.contentUndated.topics,DB.db.prepare("SELECT count(*) n FROM content_origins WHERE entered_at IS NULL AND content_type='topic'").get().n);
+ };
+ await reconcile();
+ const a=await topic('Fixture rank a','Long enough for ordinary post checks');
+ const reply=await call('/api/topics/'+a+'/comments','POST',{body:'Answer in a new test'},'bob');
+ assert.equal(reply.status,201);
+ DB.db.exec("INSERT INTO topics(id,author_id,title,body,status) VALUES('direct-import','system-unknown-import','Imported fixture','Original content','published')");
+ await reconcile();
+ DB.db.prepare("UPDATE topics SET status='hidden' WHERE id=?").run(a);
+ await reconcile();
+ DB.db.prepare("UPDATE topics SET status='published' WHERE id=?").run(a);
+ await reconcile();
+ DB.db.prepare("UPDATE topics SET status='deleted' WHERE id=?").run(a);
+ await reconcile();
+ DB.db.prepare("UPDATE topics SET status='published' WHERE id=?").run(a);
+ DB.db.prepare("UPDATE comments SET status='deleted' WHERE id=?").run(reply.data.id);
+ await reconcile();
+ DB.db.prepare("UPDATE comments SET status='published',author_id='carol' WHERE id=?").run(reply.data.id);
+ await reconcile();
+ DB.db.prepare("UPDATE content_origins SET source='imported',entered_at=NULL WHERE content_type='comment' AND content_id=?").run(reply.data.id);
+ await reconcile();
+ DB.db.prepare("UPDATE content_origins SET source='user',entered_at=unixepoch() WHERE content_type='comment' AND content_id=?").run(reply.data.id);
+ await reconcile();
+ DB.db.prepare("DELETE FROM comments WHERE id=?").run(reply.data.id);
+ await reconcile();
+});
+
+test('Cloudflare API limiter removes D1 read-request writes but retains strict writes and fallback',async()=>{
+ const {env,DB,call}=await fixture();
+ let calls=0;
+ env.API_RATE_LIMITER={limit:async({key})=>{calls++;assert.match(key,/api:/);return {success:true};}};
+ const before=DB.db.prepare('SELECT count(*) n FROM rate_limits').get().n;
+ assert.equal((await call('/api/topics','GET',undefined,null)).status,200);
+ assert.equal(DB.db.prepare('SELECT count(*) n FROM rate_limits').get().n,before);
+ assert(calls>0);
+ const created=await call('/api/topics','POST',{title:'Native limit keeps writes safe',body:'Non-test published content is synthetic'},'alice');
+ assert.equal(created.status,201,JSON.stringify(created));
+ assert(DB.db.prepare('SELECT count(*) n FROM rate_limits').get().n>before);
+ env.API_RATE_LIMITER={limit:async()=>({success:false})};
+ assert.equal((await call('/api/topics','GET',undefined,null)).status,429);
+ env.API_RATE_LIMITER={limit:async()=>{throw Error('Native edge unavailable')}};
+ assert.equal((await call('/api/topics','GET',undefined,null)).status,200);
+ assert(DB.db.prepare("SELECT count(*) n FROM rate_limits WHERE key LIKE 'api:%'").get().n>=1);
+});
+
+test('health schema is cached while dynamic analytics toggle stays live',async()=>{
+ const {DB,call}=await fixture();
+ let schemaQueries=0;
+ const original=DB.prepare.bind(DB);
+ DB.prepare=(sql)=>{if(sql.includes('pragma_table_info'))schemaQueries++;return original(sql);};
+ const first=await call('/api/health');
+ assert.equal(first.status,200,JSON.stringify(first));
+ assert.equal(first.data.analyticsEnabled,false);
+ DB.db.exec("INSERT OR REPLACE INTO settings(key,value) VALUES('analytics_enabled','true')");
+ const second=await call('/api/health');
+ assert.equal(second.status,200);
+ assert.equal(second.data.analyticsEnabled,true);
+ assert.equal(schemaQueries,1);
+});
