@@ -1,4 +1,5 @@
 name: Preview D1 exact-dedup and moderation indexes
+# Guarded rerun after index-plan regression tests passed on the feature branch.
 
 on:
   push:
