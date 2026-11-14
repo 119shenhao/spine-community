@@ -81,31 +81,41 @@ jobs:
         if: steps.preflight.outputs.apply == 'true'
         run: npx wrangler d1 migrations apply PREVIEW_DB --remote --config wrangler.preview-migrations.jsonc
 
-      - name: Reconcile persisted aggregates with source counts
+      - name: Reconcile persisted aggregates with source counts (read-only)
         shell: bash
         run: |
           set -euo pipefail
-          npx wrangler d1 execute PREVIEW_DB --remote --config wrangler.preview-migrations.jsonc --json \
-            --command "SELECT (SELECT count(*) FROM visible_content_index) indexed,
-              (SELECT coalesce(sum(n),0) FROM visible_content_totals) totals,
-              (SELECT count(*) FROM topics t JOIN content_origins o ON o.content_type='topic' AND o.content_id=t.id WHERE t.status='published')
-              +(SELECT count(*) FROM comments c JOIN topics t ON t.id=c.topic_id JOIN content_origins o ON o.content_type='comment' AND o.content_id=c.id WHERE c.status='published' AND t.status IN ('published','deleted')) source_rows,
-              (SELECT coalesce(sum(n),0) FROM content_origin_day_totals) historical,
-              (SELECT count(*) FROM content_origins) source_historical,
-              (SELECT coalesce(sum(posts+replies),0) FROM visible_contributor_totals) ranked,
-              (SELECT count(*) FROM visible_content_index WHERE source='user') source_ranked;
-              SELECT name FROM d1_migrations WHERE name IN ('0017_materialized_content_stats.sql','0018_rate_limit_expiry_index.sql');
-              SELECT name FROM sqlite_master WHERE type='index' AND name='idx_rate_limits_expires';" > "$RUNNER_TEMP/stats-verify.json"
           node --input-type=module <<'JS'
           import fs from 'node:fs';
-          const rows=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/stats-verify.json','utf8'));
-          if(rows.length!==3)throw Error('Unexpected D1 verification response');
-          const r=rows[0].results[0];
-          if(r.indexed!==r.totals||r.indexed!==r.source_rows||
+          import {spawnSync} from 'node:child_process';
+          const cfg='wrangler.preview-migrations.jsonc';
+          const read=sql=>{
+            const p=spawnSync(process.execPath,
+              ['node_modules/wrangler/bin/wrangler.js','d1','execute','PREVIEW_DB',
+                '--remote','--config',cfg,'--command',sql,'--json'],{encoding:'utf8'});
+            if(p.status!==0)throw Error('Preview read-only check failed: '+(p.stderr||p.stdout).slice(-350));
+            const result=JSON.parse(p.stdout);
+            if(result.length!==1||result[0].success!==true)throw Error('D1 read-only statement was rejected');
+            return result[0].results;
+          };
+          const sql=`SELECT
+            (SELECT count(*) FROM visible_content_index) indexed,
+            (SELECT coalesce(sum(n),0) FROM visible_content_totals) totals,
+            (SELECT count(*) FROM topics t JOIN content_origins o ON o.content_type='topic' AND o.content_id=t.id WHERE t.status='published')
+              +(SELECT count(*) FROM comments c JOIN topics t ON t.id=c.topic_id JOIN content_origins o ON o.content_type='comment' AND o.content_id=c.id WHERE c.status='published' AND t.status IN ('published','deleted')) source_rows,
+            (SELECT coalesce(sum(n),0) FROM content_origin_day_totals) historical,
+            (SELECT count(*) FROM content_origins) source_historical,
+            (SELECT coalesce(sum(posts+replies),0) FROM visible_contributor_totals) ranked,
+            (SELECT count(*) FROM visible_content_index WHERE source='user') source_ranked`;
+          const r=read(sql)[0];
+          const migrations=read("SELECT name FROM d1_migrations WHERE name IN ('0017_materialized_content_stats.sql','0018_rate_limit_expiry_index.sql')");
+          const indexes=read("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_rate_limits_expires'");
+          if(!r||r.indexed!==r.totals||r.indexed!==r.source_rows||
               r.historical!==r.source_historical||r.ranked!==r.source_ranked||
-              rows[1].results.length!==2||rows[2].results.length!==1)
-            throw Error('Preview aggregate reconciliation failed: '+JSON.stringify(r));
+              migrations.length!==2||indexes.length!==1)
+            throw Error('Preview aggregate reconciliation failed: '+JSON.stringify({r,migrations:migrations.length,indexes:indexes.length}));
           const info=JSON.stringify({previewOnly:true,verified:true,counts:r},null,2);
           console.log(info);
-          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,'### Verified preview D1 aggregate counters\n\n```json\n'+info+'\n```\n');
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            '### Verified preview D1 aggregate counters\n\n```json\n'+info+'\n```\n');
           JS
