@@ -83,3 +83,27 @@ https://github.com/119shenhao/spine-community/actions/runs/43533045471/attempts/
 - 生产发布必须沿用既定「发布新版本」流程，先审查 0017/0018 对生产 D1 的写入负担和备份点，完成迁移后再发布新代码，避免代码期待汇总表但表尚不存在。
 - 生产发布后至少用 24–48 小时 D1 Insights/GraphQL 对比 rowsRead，同时关注 rowsWritten：增量触发器用适量写入换取大量读取节省，不能只盯读取量。
 - 进一步通过只读审计 `43539680586` 逐组验证 **source='imported'/'user'/'unknown' 与 topic/comment 统计完全匹配原始 SQL**。核查当时开发库：帖子 896 篇（导入 895、用户 1），回复 4,078 条（导入 4,074、用户 4），缺少来源记录 0。https://github.com/119shenhao/spine-community/actions/runs/43539680586
+
+
+## 第三批 D1 优化（2026-11-14，开发环境已验证）
+
+### 基于真实 D1 Insights 的下一处热点
+2026-11-14 只读诊断中的 2 天 SQL 汇总，除了前两批已处理的翻译/CDN/统计热点，还包括：
+- 采集端精确去重：`SELECT id,status FROM topics WHERE content_hash=? OR (title=? AND body=?) LIMIT 2`，开发库约 **115,085 行 / 141 次**；`SELECT id FROM topics ...` 约 **24,360 行 / 30 次**。
+- 生产版帖子同步同样用 `content_hash OR (title AND body) OR id`，原日志有多个不同 SQL 字面量实例，各次通常读约数百到一千余行。**没有改写受控同步脚本**。
+- 后台审核待处理列表（topics 和 comments 合并、按时间排序）：生产库约 **58,386 行 / 16 次**，开发库约 **7,510 行 / 2 次**。
+- 上述是旧 SQL 历史数据，而非本轮上线后的节省量。
+
+### 执行的改动
+- 新建 `migrations/v1/0019_dedup_moderation_indexes.sql`：
+  - `idx_topics_exact_title ON topics(title)`：标题长度受现有数据约束保护（1–200 字符），不为可达 30,000 字符的正文建宽索引。查询仍**同时检查标题与正文完全一致**，保留旧帖 `content_hash IS NULL` 的兼容去重语义。
+  - `idx_topics_moderation_recent` 和 `idx_comments_moderation_recent`：仅涵盖 `pending_review / blocked / hidden`，按创建时间倒序排序，不对占大多数的 `published / deleted` 建索引条目。
+- `src/admin.ts`：待审核队列对两个分支使用 `INDEXED BY` 明确选用专用 partial index。原因是旧的 `idx_topics_public_new(status,created_at)` 在实际优化器选择中优先命中，且产生临时排序；明确的新索引让队列按时间流式合并。
+- `tests/community.test.mjs`：通过 `EXPLAIN QUERY PLAN` 回归验证历史 NULL 指纹去重、`MULTI-INDEX OR`、指纹索引、标题索引和两个审核队列 partial index；验证审核列表排序、状态过滤与外键完整性。
+
+### 实际验收
+- GitHub Actions 全功能自动验证（TypeScript、SQLite、Wrangler dry-run、浏览器）：[运行 43540384534](https://github.com/119shenhao/spine-community/actions/runs/43540384534) **success**。
+- GitHub Actions 专门的开发 D1 验证：[运行 43540555535](https://github.com/119shenhao/spine-community/actions/runs/43540555535) **success**。真实开发 D1 的预检返回 `Pending reviewed migration: []`，即 0019 **已应用，不作重复迁移**；三个索引均存在，`EXPLAIN QUERY PLAN` 对去重与审核索引选择也成功。
+- 开发分支的代码 SHA 截至这次验收：`c6f6b11b618a897b0dc0a1badc6939fd3d450f0c`。
+- **生产未发布、生产库迁移 0019 未执行**。固定发布流程必须在生产 D1 先完成待应用的 0016–0019 迁移与备份核对，然后发布引用这些新索引/汇总表的新代码；不可先部署 `INDEXED BY` 代码而没有索引。
+- 上线后对比每条 SQL 的 `totalRowsRead`、`numberOfTimesRun`、`avgRowsRead` 以及 `rowsWritten`；新增索引会增加少量写入和存储，实际节省比例要靠线上统计验证，不能据本地执行计划直接声称。
