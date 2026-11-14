@@ -3500,3 +3500,40 @@ test('health schema is cached while dynamic analytics toggle stays live',async()
  assert.equal(second.data.analyticsEnabled,true);
  assert.equal(schemaQueries,1);
 });
+
+
+test('legacy exact-title dedup and moderation queue use index-driven execution plans',async()=>{
+ const {DB,call}=await fixture();
+ const old=DB.db.prepare("INSERT INTO topics(id,author_id,title,body,status,created_at) VALUES(?, 'alice', ?, ?, ?, ?)");
+ for(let i=0;i<500;i++)old.run('perf-fixture-'+i,'Synthetic title '+i,'Synthetic historical body '+i,i%50===0?'hidden':'published',1000+i);
+ old.run('perf-legacy','Legacy duplicate exact title','Legacy duplicate exact body','published',2000);
+ const add=await call('/api/topics','POST',
+   {title:'Legacy duplicate exact title',body:'Legacy duplicate exact body',source_lang:'en'},'bob');
+ assert.equal(add.status,409,'Legacy NULL-hash topics must still prevent duplicates');
+ DB.db.prepare("INSERT INTO comments(id,topic_id,author_id,body,status,created_at) VALUES(?,'perf-legacy','bob',?,'pending_review',?)")
+   .run('perf-review','Synthetic comment awaiting moderation',3000);
+ DB.db.exec('ANALYZE');
+ const explain=(sql,args)=>DB.db.prepare('EXPLAIN QUERY PLAN '+sql).all(...args).map(r=>r.detail).join(' / ');
+ const duplicate=explain('SELECT id,status FROM topics WHERE content_hash=? OR (title=? AND body=?) LIMIT 2',
+   ['a'.repeat(64),'Legacy duplicate exact title','Legacy duplicate exact body']);
+ assert.match(duplicate,/idx_topics_exact_title/,duplicate);
+ assert.match(duplicate,/ux_topics_content_hash/,duplicate);
+ const sync=explain('SELECT id FROM topics WHERE content_hash=? OR (title=? AND body=?) OR id=? LIMIT 3',
+   ['a'.repeat(64),'Legacy duplicate exact title','Legacy duplicate exact body','perf-legacy']);
+ assert.match(sync,/idx_topics_exact_title/,sync);
+ assert.match(sync,/ux_topics_content_hash/,sync);
+ const queueSQL=`SELECT id,'topic' type,author_id,title,body,status,created_at
+   FROM topics WHERE status IN ('pending_review','blocked','hidden')
+   UNION ALL
+   SELECT id,'comment',author_id,NULL,body,status,created_at
+   FROM comments WHERE status IN ('pending_review','blocked','hidden')
+   ORDER BY created_at DESC LIMIT 100`;
+ const plan=explain(queueSQL,[]);
+ assert.match(plan,/idx_topics_moderation_recent/,plan);
+ assert.match(plan,/idx_comments_moderation_recent/,plan);
+ const queue=DB.db.prepare(queueSQL).all();
+ assert.equal(queue[0].id,'perf-review');
+ assert(queue.some(r=>r.id==='perf-fixture-0'));
+ assert(!queue.some(r=>r.id==='perf-legacy'));
+ assert.equal(DB.db.prepare("PRAGMA foreign_key_check").all().length,0);
+});
