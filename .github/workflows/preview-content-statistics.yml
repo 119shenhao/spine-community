@@ -32,13 +32,19 @@ jobs:
         run: |
           node --input-type=module <<'JS'
           import {spawnSync} from 'node:child_process';
-          const sql="SELECT name FROM d1_migrations WHERE name='0014_content_origin_statistics.sql'; SELECT name FROM sqlite_master WHERE type='trigger' AND name IN ('content_origin_topic_insert','content_origin_comment_insert'); SELECT c.content_type,COALESCE(o.source,'missing') source,count(*) count,sum(o.entered_at IS NULL) undated FROM (SELECT 'topic' content_type,id FROM topics WHERE status='published' UNION ALL SELECT 'comment',c.id FROM comments c JOIN topics t ON t.id=c.topic_id WHERE c.status='published' AND t.status IN ('published','deleted')) c LEFT JOIN content_origins o ON o.content_type=c.content_type AND o.content_id=c.id GROUP BY c.content_type,o.source; SELECT count(*) count FROM (SELECT 'topic' type,id FROM topics UNION ALL SELECT 'comment',id FROM comments) c LEFT JOIN content_origins o ON o.content_type=c.type AND o.content_id=c.id WHERE o.content_id IS NULL;";
+          const sql="SELECT name FROM d1_migrations WHERE name='0014_content_origin_statistics.sql'; SELECT name FROM sqlite_master WHERE type='trigger' AND name IN ('content_origin_topic_insert','content_origin_comment_insert'); SELECT c.content_type,COALESCE(o.source,'missing') source,count(*) count,sum(o.entered_at IS NULL) undated FROM (SELECT 'topic' content_type,id FROM topics WHERE status='published' UNION ALL SELECT 'comment',c.id FROM comments c JOIN topics t ON t.id=c.topic_id WHERE c.status='published' AND t.status IN ('published','deleted')) c LEFT JOIN content_origins o ON o.content_type=c.content_type AND o.content_id=c.id GROUP BY c.content_type,o.source; SELECT count(*) count FROM (SELECT 'topic' type,id FROM topics UNION ALL SELECT 'comment',id FROM comments) c LEFT JOIN content_origins o ON o.content_type=c.type AND o.content_id=c.id WHERE o.content_id IS NULL; SELECT content_type,source,n count FROM visible_content_totals WHERE n>0;";
           const p=spawnSync(process.execPath,['node_modules/wrangler/bin/wrangler.js','d1','execute','PREVIEW_DB','--remote','--config','wrangler.preview-migrations.jsonc','--command',sql,'--json'],{encoding:'utf8'});
           if(p.status!==0)throw Error(p.stderr||p.stdout);
           const r=JSON.parse(p.stdout);
-          if(r.some(x=>x.success===false)||r.length!==4||r[0].results.length!==1||r[1].results.length!==2||r[3].results[0].count!==0)throw Error('Schema or provenance audit failed: '+p.stdout);
+          if(r.some(x=>x.success===false)||r.length!==5||r[0].results.length!==1||r[1].results.length!==2||r[3].results[0].count!==0)throw Error('Schema or provenance audit failed: '+p.stdout);
           const totals={topics:0,comments:0};
           for(const row of r[2].results){if(!['imported','user','unknown'].includes(row.source))throw Error('Missing source');totals[row.content_type==='topic'?'topics':'comments']+=row.count;}
+          const normalize=x=>x.map(v=>({content_type:v.content_type,source:v.source,count:Number(v.count)}))
+            .sort((a,b)=>(a.content_type+':'+a.source).localeCompare(b.content_type+':'+b.source));
+          const sourceGroups=normalize(r[2].results),cacheGroups=normalize(r[4].results);
+          if(JSON.stringify(sourceGroups)!==JSON.stringify(cacheGroups))
+            throw Error('Materialized totals disagree with original source groups: '+JSON.stringify({sourceGroups,cacheGroups}));
+          console.log('Live per-source aggregates exactly match original SQL.');
           console.log(JSON.stringify({previewDatabase:'4362537a-5748-4a05-b0c4-219c3db36996',migrationApplied:true,triggers:2,currentBySource:r[2].results,currentTotals:totals,missingOrigins:0},null,2));
           JS
       - name: Optional whole-database FK check (manual deep audit only)
