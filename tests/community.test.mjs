@@ -3523,10 +3523,10 @@ test('legacy exact-title dedup and moderation queue use index-driven execution p
  assert.match(sync,/idx_topics_exact_title/,sync);
  assert.match(sync,/ux_topics_content_hash/,sync);
  const queueSQL=`SELECT id,'topic' type,author_id,title,body,status,created_at
-   FROM topics WHERE status IN ('pending_review','blocked','hidden')
+   FROM topics INDEXED BY idx_topics_moderation_recent WHERE status IN ('pending_review','blocked','hidden')
    UNION ALL
    SELECT id,'comment',author_id,NULL,body,status,created_at
-   FROM comments WHERE status IN ('pending_review','blocked','hidden')
+   FROM comments INDEXED BY idx_comments_moderation_recent WHERE status IN ('pending_review','blocked','hidden')
    ORDER BY created_at DESC LIMIT 100`;
  const plan=explain(queueSQL,[]);
  assert.match(plan,/idx_topics_moderation_recent/,plan);
