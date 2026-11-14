@@ -1,8 +1,9 @@
 {
   "repository": "119shenhao/spine-community",
-  "operation": "inspect",
+  "operation": "apply",
   "migration_sha": "f50db88883d0bfe668483217aadfca75ace81624",
   "production_db_id": "5919ff78-b8fc-46ab-85f0-01fe5e6a41b0",
-  "confirmation": "",
-  "request_id": "d1-opt-release-inspect-20261114-01"
+  "confirmation": "spine-community-db",
+  "user_authorized": true,
+  "request_id": "d1-opt-release-apply-20261114-01"
 }
