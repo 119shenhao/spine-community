@@ -1,0 +1,122 @@
+name: Spine D1 Read Usage Diagnostics (read-only)
+
+on:
+  push:
+    branches:
+      - feature/v1-community-build-20261106
+    paths:
+      - .github/workflows/d1-read-usage-diagnostic.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    if: github.repository == '119shenhao/spine-community'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_ACCOUNT_ID: 289976272520a38732bef34108585e11
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PROD_D1_API_TOKEN }}
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - name: Validate read-only analytics prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+            echo "::error::Missing CLOUDFLARE_PROD_D1_API_TOKEN"
+            exit 1
+          fi
+          echo 'No SQL execute, migrations, database writes, or deployments will run.'
+
+      - name: Setup Node 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Install pinned Wrangler
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/d1-insights-tool" --ignore-scripts --no-audit --no-fund wrangler@4.135.0
+          "$RUNNER_TEMP/d1-insights-tool/node_modules/.bin/wrangler" --version
+
+      - name: Fetch account and individual D1 SQL insights (no D1 queries executed)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/d1-insights"
+          WR="$RUNNER_TEMP/d1-insights-tool/node_modules/.bin/wrangler"
+          failures=0
+          for target in account production preview; do
+            args=()
+            case "$target" in
+              production) args+=('5919ff78-b8fc-46ab-85f0-01fe5e6a41b0');;
+              preview) args+=('4362537a-5748-4a05-b0c4-219c3db36996');;
+            esac
+            echo "::group::Read-only insights: $target"
+            if "$WR" d1 insights "${args[@]}" --time-period=2d --sort-by=reads --sort-type=sum --sort-direction=DESC --limit=35 --json > "$RUNNER_TEMP/d1-insights/$target.json" 2>"$RUNNER_TEMP/d1-insights/$target.err"; then
+              echo "Success: $target"
+            else
+              echo "::warning::$target insights unavailable (check Account Analytics Read permission and API token scope)."
+              # Do not print errors or raw SQL that could include sensitive values.
+              failures=$((failures+1))
+            fi
+            echo "::endgroup::"
+          done
+          echo "FAILURES=$failures" >> "$GITHUB_ENV"
+
+      - name: Report top reading queries with SQL literals redacted
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,os,re
+          from pathlib import Path
+          folder=Path(os.environ['RUNNER_TEMP'])/'d1-insights'
+          labels={'account':'Account-wide top 35','production':'Production D1 top 35','preview':'Preview D1 top 35'}
+          dbs={'5919ff78-b8fc-46ab-85f0-01fe5e6a41b0':'production','4362537a-5748-4a05-b0c4-219c3db36996':'preview'}
+          report=['# Spine D1 read usage (analytics only)','', 'Last 2 days, sampled Cloudflare query insights. Top-query totals are partial, not total daily billing. No database query executed.','']
+          successes=0
+          for name,heading in labels.items():
+              report.extend(['## '+heading,''])
+              p=folder/(name+'.json')
+              if not p.exists():
+                  report.extend(['Could not retrieve insights. Likely token needs **Account Analytics Read** or API scope does not allow this operation.',''])
+                  continue
+              try:
+                  payload=json.loads(p.read_text('utf8'))
+                  if isinstance(payload,list): rows=payload
+                  elif isinstance(payload,dict): rows=payload.get('result',payload.get('data',payload.get('queries',[])))
+                  else: rows=[]
+                  if not isinstance(rows,list): raise ValueError('Unrecognized insights format')
+              except (ValueError,KeyError,TypeError) as e:
+                  report.extend(['Invalid or unsupported insights response format: '+type(e).__name__,''])
+                  continue
+              successes+=1
+              report.extend(['Rows: '+str(len(rows)), '', '| # | D1 | Total rows read | Runs | Avg rows read | Efficiency | SQL pattern |','|---:|---|---:|---:|---:|---:|---|'])
+              for i,r in enumerate(rows[:35],1):
+                  if not isinstance(r,dict): continue
+                  dbid=r.get('databaseId','')
+                  db=dbs.get(dbid,'other' if dbid else name)
+                  sql=str(r.get('query',''))
+                  sql=re.sub(r"'(?:''|[^'])*'", "'?'", sql,flags=re.S)
+                  sql=re.sub(r'\b[\w.+-]+@[\w.-]+\.\w+\b','[email]',sql)
+                  sql=re.sub(r'https?://\S+','[url]',sql)
+                  sql=' '.join(sql.split()).replace('|','/')
+                  sql=sql[:220]
+                  total=r.get('totalRowsRead','?')
+                  runs=r.get('numberOfTimesRun','?')
+                  avg=r.get('avgRowsRead','?')
+                  efficiency=r.get('queryEfficiency','?')
+                  report.append(f'| {i} | {db} | {total} | {runs} | {avg} | {efficiency} | `{sql}` |')
+              report.append('')
+          report.append('Successful analytics groups: '+str(successes)+'/3')
+          report.append('Failed CLI calls: '+os.environ.get('FAILURES','unknown')+'/3')
+          out='\n'.join(report)+'\n'
+          print(out)
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a',encoding='utf8') as f:f.write(out)
+          if successes==0:raise SystemExit('No analytics available: verify Cloudflare token Account Analytics Read permission')
+          PY
