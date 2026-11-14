@@ -3361,3 +3361,45 @@ test('sharing: independent topic URL, encoded social targets, preview origin and
  const {dictionaries,languages}=await import('../public/i18n.js');
  for(const lang of languages)for(const key of ['sharePost','sharePostHint','copyLink','linkCopied','shareSystem','shareSystemError','shareCopyError','shareChina','shareGlobal','shareAppHint','shareCopyToApp','shareAppCopied'])assert(dictionaries[lang][key],lang+' missing '+key);
 });
+
+
+test('indexed translation cache lookup preserves public versions, language and parent visibility',async()=>{
+ const {DB,topic,call}=await fixture();
+ const {readItems}=await import('../.test-build/translation.js');
+ const tid=await topic('Read plan topic','The original English text');
+ const reply=await call('/api/topics/'+tid+'/comments','POST',{body:'A published reply'},'bob');
+ assert.equal(reply.status,201);
+ DB.db.prepare("INSERT INTO topic_translations(topic_id,locale,scope,source_version,title_text,body_text,provider) VALUES(?,'zh-CN','full',1,'翻译标题','翻译正文','test')").run(tid);
+ DB.db.prepare("INSERT INTO comment_translations(comment_id,locale,scope,source_version,body_text,provider) VALUES(?,'zh-CN','full',1,'回复译文','test')").run(reply.data.id);
+ const requested=[
+  {type:'topic',id:tid,scope:'full',version:1,token:null,page:null},
+  {type:'comment',id:reply.data.id,scope:'full',version:1,token:null,page:null}
+ ];
+ const items=await readItems(DB,requested,'zh-CN');
+ assert.equal(items.length,2);
+ const byType=Object.fromEntries(items.map(x=>[x.type,x]));
+ assert.equal(byType.topic.body_text,'翻译正文');
+ assert.equal(byType.comment.body_text,'回复译文');
+ assert.equal(byType.topic.source_lang,'en');
+ // A hidden root may never leak either cached translation.
+ await call('/api/admin/content','POST',{type:'topic',id:tid,action:'hide',reason:'test'},'admin');
+ assert.deepEqual(await readItems(DB,requested,'zh-CN'),[]);
+ const sql=readFileSync('src/translation.ts','utf8');
+ assert.match(sql,/FROM requested r CROSS JOIN topics t ON t.id=r.id/);
+ assert.match(sql,/FROM requested r CROSS JOIN comments c ON c.id=r.id/);
+});
+
+test('empty public projection demand does not issue a costly lease UPDATE',async()=>{
+ const {DB,env}=await fixture();
+ const {drainPublicContent}=await import('../.test-build/projection-demand.js');
+ enableProjection(env,projectionBucket());
+ Object.assign(env,{PUBLIC_CONTENT_ON_DEMAND:'true',PUBLIC_CONTENT_FALLBACK:'true'});
+ const seen=[],original=DB.prepare.bind(DB);
+ DB.prepare=(sql)=>{seen.push(sql);return original(sql);};
+ const result=await drainPublicContent(env,2);
+ assert.equal(result.processed,0);
+ assert.equal(result.failed,0);
+ assert(seen.some(sql=>sql.includes('SELECT')&&sql.includes('public_projection_demand d')));
+ assert(!seen.some(sql=>sql.includes('UPDATE public_projection SET lease=')));
+ assert(DB.db.prepare("PRAGMA index_list('public_projection')").all().some(i=>i.name==='idx_public_projection_pending_due'));
+});
