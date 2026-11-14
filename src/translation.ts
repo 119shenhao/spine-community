@@ -92,8 +92,7 @@ export async function readItems(db:D1Database,items:Item[],locale:string) {
       CASE WHEN r.token=x.projection_token THEN x.projection_key END projection_key,
       CASE WHEN r.token IS NULL OR r.token IS NOT x.projection_token THEN x.title_text END title_text,
       CASE WHEN r.token IS NULL OR r.token IS NOT x.projection_token THEN x.body_text END body_text
-    -- Force the tiny JSON request set to drive indexed PK lookups; otherwise
-    -- SQLite may scan the entire topics table before filtering requested IDs.
+    -- Drive the short requested list through indexed topic primary keys.
     FROM requested r CROSS JOIN topics t ON t.id=r.id AND t.status='published'
     LEFT JOIN topic_translations x ON x.topic_id=t.id AND x.locale=? AND x.source_version=t.content_version AND x.scope=r.scope
       AND (r.scope<>'summary' OR x.provider<>'azure' OR x.engine_type=?)
@@ -252,8 +251,8 @@ async function generate(env:Env,entry:Item,row:Row,locale:string,config:Settings
     const other=topic?await one(db,`SELECT title_text,body_text FROM topic_translations WHERE topic_id=? AND locale=?
       AND source_version=? AND scope<>? AND provider='azure' AND product_id=? AND source_language=?`,
       c.id,locale,version,entry.scope,PRODUCT,source):null;
-    const cap=entry.scope==='summary'?TRANSLATION_SUMMARY_LIMIT:entry.scope==='preview'?180:null;
-    const text=entry.scope==='summary'?translationSummaryText(c.body):cap===null?c.body:excerptText(c.body,cap,false);
+    const text=entry.scope==='summary'?translationSummaryText(c.body):
+      entry.scope==='preview'?[...c.body].slice(0,180).join(''):c.body;
     const title=topic&&!other?c.title:null;
     const teaser=topic?260:180;
     const sameBody=c.body.length<=teaser*2&&[...c.body].length<=teaser;
