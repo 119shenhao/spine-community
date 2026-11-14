@@ -1,0 +1,109 @@
+name: Preview D1 materialized stats migration (verified)
+
+on:
+  push:
+    branches: [feature/v1-community-build-20261106]
+    paths:
+      - .github/workflows/preview-materialized-stats-migration.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spine-community-preview-d1-migrations
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    if: github.repository == '119shenhao/spine-community' && github.ref == 'refs/heads/feature/v1-community-build-20261106'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CLOUDFLARE_ACCOUNT_ID: '289976272520a38732bef34108585e11'
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PREVIEW_D1_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+
+      - name: Verify all migrations and behavior before remote changes
+        run: npm run verify
+
+      - name: Verify isolated preview target and approved migration set
+        id: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import {spawnSync} from 'node:child_process';
+          const cfgFile='wrangler.preview-migrations.jsonc',cfg=JSON.parse(fs.readFileSync(cfgFile,'utf8'));
+          if(cfg.d1_databases?.length!==1||cfg.d1_databases[0].binding!=='PREVIEW_DB'||
+             cfg.d1_databases[0].database_id!=='4362537a-5748-4a05-b0c4-219c3db36996'||
+             cfg.d1_databases[0].migrations_dir!=='migrations/v1')throw Error('Wrong D1 target, refusing write');
+          if(!process.env.CLOUDFLARE_API_TOKEN)throw Error('Missing isolated preview-only D1 secret');
+          const result=spawnSync(process.execPath,['node_modules/wrangler/bin/wrangler.js',
+            'd1','execute','PREVIEW_DB','--remote','--config',cfgFile,
+            '--command','SELECT name FROM d1_migrations ORDER BY id','--json'],{encoding:'utf8'});
+          if(result.status!==0)throw Error('Could not inspect preview migration history: '+result.stderr.slice(-450));
+          const installed=new Set(JSON.parse(result.stdout)[0].results.map(r=>r.name));
+          const all=fs.readdirSync('migrations/v1').filter(f=>f.endsWith('.sql'));
+          const pending=all.filter(f=>!installed.has(f)).sort();
+          const allowed=['0017_materialized_content_stats.sql','0018_rate_limit_expiry_index.sql'];
+          if(pending.some(name=>!allowed.includes(name)))throw Error('Unrelated pending migration detected: '+pending.join(','));
+          if(pending.includes(allowed[0])&&!pending.includes(allowed[1]))throw Error('Expected rate index migration too');
+          console.log('Reviewed pending migrations:',JSON.stringify(pending));
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,'apply='+(pending.length?'true':'false')+'\n');
+          JS
+
+      - name: Record preview restore point
+        if: steps.preflight.outputs.apply == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./node_modules/.bin/wrangler d1 time-travel info PREVIEW_DB --config wrangler.preview-migrations.jsonc --json > "$RUNNER_TEMP/preview-bookmark.json"
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          const r=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/preview-bookmark.json','utf8'));
+          if(typeof r.bookmark!=='string'||!r.bookmark)throw Error('No safe preview restore bookmark; refusing migration');
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,'Preview restore bookmark: `'+r.bookmark+'`\n\n');
+          JS
+
+      - name: Apply approved migrations 0017 and 0018 to preview only
+        if: steps.preflight.outputs.apply == 'true'
+        run: npx wrangler d1 migrations apply PREVIEW_DB --remote --config wrangler.preview-migrations.jsonc
+
+      - name: Reconcile persisted aggregates with source counts
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler d1 execute PREVIEW_DB --remote --config wrangler.preview-migrations.jsonc --json \
+            --command "SELECT (SELECT count(*) FROM visible_content_index) indexed,
+              (SELECT coalesce(sum(n),0) FROM visible_content_totals) totals,
+              (SELECT count(*) FROM topics t JOIN content_origins o ON o.content_type='topic' AND o.content_id=t.id WHERE t.status='published')
+              +(SELECT count(*) FROM comments c JOIN topics t ON t.id=c.topic_id JOIN content_origins o ON o.content_type='comment' AND o.content_id=c.id WHERE c.status='published' AND t.status IN ('published','deleted')) source_rows,
+              (SELECT coalesce(sum(n),0) FROM content_origin_day_totals) historical,
+              (SELECT count(*) FROM content_origins) source_historical,
+              (SELECT coalesce(sum(posts+replies),0) FROM visible_contributor_totals) ranked,
+              (SELECT count(*) FROM visible_content_index WHERE source='user') source_ranked;
+              SELECT name FROM d1_migrations WHERE name IN ('0017_materialized_content_stats.sql','0018_rate_limit_expiry_index.sql');
+              SELECT name FROM sqlite_master WHERE type='index' AND name='idx_rate_limits_expires';" > "$RUNNER_TEMP/stats-verify.json"
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          const rows=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/stats-verify.json','utf8'));
+          if(rows.length!==3)throw Error('Unexpected D1 verification response');
+          const r=rows[0].results[0];
+          if(r.indexed!==r.totals||r.indexed!==r.source_rows||
+              r.historical!==r.source_historical||r.ranked!==r.source_ranked||
+              rows[1].results.length!==2||rows[2].results.length!==1)
+            throw Error('Preview aggregate reconciliation failed: '+JSON.stringify(r));
+          const info=JSON.stringify({previewOnly:true,verified:true,counts:r},null,2);
+          console.log(info);
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,'### Verified preview D1 aggregate counters\n\n```json\n'+info+'\n```\n');
+          JS
