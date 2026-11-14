@@ -114,6 +114,18 @@ async function drainDemand(env:Env,config:Config,limit:number) {
   const db=env.DB;
   let processed=0,failed=0,followUp=false;
   for(let i=0;i<limit;i++){
+    // Avoid an expensive UPDATE + correlated full queue scan on the hot empty path.
+    // A cheap due-time probe is sufficient to decide whether a claim is possible.
+    // Both checks stay in D1, so leases remain atomically owned by the UPDATE below.
+    const due=now();
+    const ready=await one(db,`SELECT
+      EXISTS(SELECT 1 FROM public_projection p
+        WHERE ${pendingInvalidation} AND p.due_at<=? AND p.lease_until<=? LIMIT 1) invalidation,
+      EXISTS(SELECT 1 FROM public_projection_demand d
+        JOIN public_projection p ON p.scope=d.scope AND p.target=d.target
+        WHERE d.pending=1 AND d.due_at<=? AND p.lease_until<=? AND p.state<>'dead' LIMIT 1) demand`,
+      due,due,due,due);
+    if(!ready?.invalidation&&!ready?.demand)break;
     const token=id();
     const task=await one(db,`UPDATE public_projection SET lease=?,lease_until=?
       WHERE (scope,target)=(SELECT p.scope,p.target FROM public_projection p WHERE ${pendingInvalidation}

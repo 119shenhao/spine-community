@@ -78,7 +78,7 @@ function parseItem(raw:unknown,legacy=false):Item {
     page:typeof x.page==='string'&&x.page.length<=220?x.page:null};
 }
 
-async function readItems(db:D1Database,items:Item[],locale:string) {
+export async function readItems(db:D1Database,items:Item[],locale:string) {
   // The request may contain stale CDN ciphertext. Return its key only when
   // the same cache row and original version still have anonymous read access.
   return all(db,`WITH requested AS (
@@ -92,7 +92,9 @@ async function readItems(db:D1Database,items:Item[],locale:string) {
       CASE WHEN r.token=x.projection_token THEN x.projection_key END projection_key,
       CASE WHEN r.token IS NULL OR r.token IS NOT x.projection_token THEN x.title_text END title_text,
       CASE WHEN r.token IS NULL OR r.token IS NOT x.projection_token THEN x.body_text END body_text
-    FROM requested r JOIN topics t ON t.id=r.id AND t.status='published'
+    -- Force the tiny JSON request set to drive indexed PK lookups; otherwise
+    -- SQLite may scan the entire topics table before filtering requested IDs.
+    FROM requested r CROSS JOIN topics t ON t.id=r.id AND t.status='published'
     LEFT JOIN topic_translations x ON x.topic_id=t.id AND x.locale=? AND x.source_version=t.content_version AND x.scope=r.scope
       AND (r.scope<>'summary' OR x.provider<>'azure' OR x.engine_type=?)
     LEFT JOIN content_language_verifications v ON v.content_type='topic' AND v.content_id=t.id AND v.content_version=t.content_version
@@ -103,7 +105,7 @@ async function readItems(db:D1Database,items:Item[],locale:string) {
       x.provider,x.created_at,c.topic_id,
       CASE WHEN r.token=x.projection_token THEN x.projection_key END,NULL,
       CASE WHEN r.token IS NULL OR r.token IS NOT x.projection_token THEN x.body_text END
-    FROM requested r JOIN comments c ON c.id=r.id AND c.status='published'
+    FROM requested r CROSS JOIN comments c ON c.id=r.id AND c.status='published'
     JOIN topics root ON root.id=c.topic_id AND ${allowedComment}
     LEFT JOIN comment_translations x ON x.comment_id=c.id AND x.locale=? AND x.source_version=c.content_version AND x.scope=r.scope
     LEFT JOIN content_language_verifications v ON v.content_type='comment' AND v.content_id=c.id AND v.content_version=c.content_version
@@ -250,8 +252,8 @@ async function generate(env:Env,entry:Item,row:Row,locale:string,config:Settings
     const other=topic?await one(db,`SELECT title_text,body_text FROM topic_translations WHERE topic_id=? AND locale=?
       AND source_version=? AND scope<>? AND provider='azure' AND product_id=? AND source_language=?`,
       c.id,locale,version,entry.scope,PRODUCT,source):null;
-    const text=entry.scope==='summary'?translationSummaryText(c.body):
-      entry.scope==='preview'?[...c.body].slice(0,180).join(''):c.body;
+    const cap=entry.scope==='summary'?TRANSLATION_SUMMARY_LIMIT:entry.scope==='preview'?180:null;
+    const text=entry.scope==='summary'?translationSummaryText(c.body):cap===null?c.body:excerptText(c.body,cap,false);
     const title=topic&&!other?c.title:null;
     const teaser=topic?260:180;
     const sameBody=c.body.length<=teaser*2&&[...c.body].length<=teaser;

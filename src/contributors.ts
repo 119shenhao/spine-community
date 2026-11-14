@@ -10,19 +10,10 @@ export function contributorSort(value:string|null):ContributorSort {
 }
 export async function contributorRanking(db:D1Database,sort:ContributorSort='topics'):Promise<Row[]> {
  const order=sort==='comments'?'replies':sort==='total'?'total':'posts';
- return all(db,`SELECT u.id,u.nickname,
-   SUM(a.posts) posts,SUM(a.replies) replies,SUM(a.posts+a.replies) total
-  FROM (
-   SELECT t.author_id user_id,1 posts,0 replies FROM topics t
-    ${topicOrigin} WHERE t.status='published'
-   UNION ALL
-   SELECT c.author_id user_id,0 posts,1 replies FROM comments c
-    ${commentOrigin} JOIN topics t ON t.id=c.topic_id
-    WHERE c.status='published' AND t.status IN ('published','deleted')
-  ) a JOIN users u ON u.id=a.user_id
-  WHERE u.status='active' AND u.is_system=0
-  GROUP BY u.id,u.nickname
-  ORDER BY ${order} DESC,posts DESC,replies DESC,u.id ASC LIMIT 20`);
+ return all(db,`SELECT u.id,u.nickname,s.posts,s.replies,s.posts+s.replies total
+  FROM visible_contributor_totals s JOIN users u ON u.id=s.author_id
+  WHERE u.status='active' AND u.is_system=0 AND s.posts+s.replies>0
+  ORDER BY ${order} DESC,s.posts DESC,s.replies DESC,u.id ASC LIMIT 20`);
 }
 export async function contributorRoute(req:Request,env:Env,_user:Row|null,path:string):Promise<Response|null> {
  const match=path.match(/^\/api\/users\/([^/]+)$/);

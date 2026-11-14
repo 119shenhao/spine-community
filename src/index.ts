@@ -1,4 +1,6 @@
-import {Env,HttpError,now,hash,rate,json,fail,sameOrigin,currentUser,one,all,stmt} from './core';
+import {Env,HttpError,now,hash,apiRate,json,fail,sameOrigin,currentUser,one,all,stmt} from './core';
+import {healthSchema} from './health-schema';
+import {scheduleMaintenance} from './maintenance';
 import {authRoute} from './auth';
 import {contentRoute} from './content';
 import {searchRoute} from './search';
@@ -56,16 +58,20 @@ export default {
     let ready=false,projectionReady=false,translationReady=false,translationEnabled=false,translationCacheAvailable=false,languageSchemaReady=false,trafficEnabled=false;
     const config=projectionConfig(env);
     try{
-     const row=env.DB&&await one(env.DB,`SELECT value,EXISTS(SELECT 1 FROM sqlite_master WHERE type='table'
-       AND name='public_projection_scan_count') projection,EXISTS(SELECT 1 FROM sqlite_master WHERE type='table'
-       AND name='public_projection_demand') demand,
-       EXISTS(SELECT 1 FROM sqlite_master WHERE type='table'
-       AND name='content_language_verifications') languageSchema,
-       EXISTS(SELECT 1 FROM pragma_table_info('topic_translations') WHERE name='projection_key') translation,
-       (SELECT value FROM settings WHERE key='translation_enabled') translationEnabled,
-       (SELECT value FROM settings WHERE key='analytics_enabled') trafficEnabled,
-       EXISTS(SELECT 1 FROM topic_translations) OR EXISTS(SELECT 1 FROM comment_translations) cachedTranslations FROM settings WHERE key='schema_version' AND value='1'`);
-     languageSchemaReady=Boolean(row?.languageSchema);ready=Boolean(row&&languageSchemaReady);translationReady=Boolean(row?.translation&&languageSchemaReady);translationEnabled=row?.translationEnabled==='true';trafficEnabled=row?.trafficEnabled==='true';translationCacheAvailable=Boolean(row?.cachedTranslations);projectionReady=Boolean(row?.projection&&(!config?.onDemand||row?.demand));
+     if(env.DB){
+       const schema=await healthSchema(env.DB);
+       // Feature switches and cached-translation presence are live even when
+       // the immutable schema capability snapshot is cached.
+       const flags=await one(env.DB,`SELECT
+         (SELECT value FROM settings WHERE key='translation_enabled') translationEnabled,
+         (SELECT value FROM settings WHERE key='analytics_enabled') trafficEnabled,
+         EXISTS(SELECT 1 FROM topic_translations) OR EXISTS(SELECT 1 FROM comment_translations) cachedTranslations`);
+       languageSchemaReady=schema.languageSchema;ready=schema.ready;
+       translationReady=Boolean(schema.translation&&schema.languageSchema);
+       projectionReady=Boolean(schema.projection&&(!config?.onDemand||schema.demand));
+       translationEnabled=flags?.translationEnabled==='true';trafficEnabled=flags?.trafficEnabled==='true';
+       translationCacheAvailable=Boolean(flags?.cachedTranslations);
+     }
     }catch{}
     const projectionEnabled=Boolean(projectionReady&&config?.enabled&&config.purgeReady);
     const publicContent={
@@ -80,8 +86,8 @@ export default {
    }
    if(!env.DB)fail(503,'database_not_configured');
    if(!['GET','HEAD'].includes(req.method))sameOrigin(req);
-   const ip=req.headers.get('cf-connecting-ip')||'local';
-   await rate(env.DB,'api:'+await hash(ip+new Date().toISOString().slice(0,10)),180);
+   await apiRate(env,req);
+   scheduleMaintenance(env.DB,ctx);
    const user=await currentUser(req,env);
    for(const route of [authRoute,contributorRoute,communityRoute,contentRoute,searchRoute,translationRoute,projectionViewerRoute,projectionAdminRoute,adminRoute]){
     const response=await route(req,env,user,path,ctx);
