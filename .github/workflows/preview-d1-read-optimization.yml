@@ -1,0 +1,77 @@
+name: Preview D1 read optimization index (one-time)
+
+on:
+  push:
+    branches: [feature/v1-community-build-20261106]
+    paths:
+      - .github/workflows/preview-d1-read-optimization.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spine-community-preview-d1-migrations
+  cancel-in-progress: false
+
+jobs:
+  apply-preview-index:
+    if: github.repository == '119shenhao/spine-community' && github.ref == 'refs/heads/feature/v1-community-build-20261106'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_ACCOUNT_ID: '289976272520a38732bef34108585e11'
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PREVIEW_D1_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Restrict to preview D1 and solely pending 0016 index migration
+        id: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import {spawnSync} from 'node:child_process';
+          const file='wrangler.preview-migrations.jsonc',cfg=JSON.parse(fs.readFileSync(file,'utf8'));
+          if(cfg.d1_databases?.length!==1 || cfg.d1_databases[0].binding!=='PREVIEW_DB' ||
+              cfg.d1_databases[0].database_id!=='4362537a-5748-4a05-b0c4-219c3db36996' ||
+              cfg.d1_databases[0].migrations_dir!=='migrations/v1')throw Error('Not isolated preview D1');
+          if(!process.env.CLOUDFLARE_API_TOKEN)throw Error('Missing preview-only D1 token');
+          const migration='0016_projection_pending_due_index.sql';
+          const expected="-- Keep on-demand public projection queue polling inexpensive when no task is due.";
+          if(!fs.readFileSync('migrations/v1/'+migration,'utf8').startsWith(expected))throw Error('Unreviewed index migration');
+          const sql='SELECT name FROM d1_migrations ORDER BY id';
+          const p=spawnSync(process.execPath,['node_modules/wrangler/bin/wrangler.js','d1','execute','PREVIEW_DB','--remote','--config',file,'--command',sql,'--json'],{encoding:'utf8'});
+          if(p.status!==0)throw Error('Cannot read migration history: '+p.stderr.slice(-600));
+          const result=JSON.parse(p.stdout),names=new Set(result[0].results.map(x=>x.name));
+          const expectedFiles=fs.readdirSync('migrations/v1').filter(x=>x.endsWith('.sql'));
+          const missing=expectedFiles.filter(x=>!names.has(x));
+          console.log('Pending v1 migrations:',JSON.stringify(missing));
+          if(missing.length===0){fs.appendFileSync(process.env.GITHUB_OUTPUT,'apply=false\n');process.exit(0);}
+          if(missing.length!==1||missing[0]!==migration)throw Error('Refusing to apply unrelated migrations');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,'apply=true\n');
+          JS
+
+      - name: Apply reviewed index to preview D1 only
+        if: steps.preflight.outputs.apply == 'true'
+        run: npx wrangler d1 migrations apply PREVIEW_DB --remote --config wrangler.preview-migrations.jsonc
+
+      - name: Verify preview index exists and no topic data changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler d1 execute PREVIEW_DB --remote --config wrangler.preview-migrations.jsonc --json \
+            --command "SELECT name FROM d1_migrations WHERE name='0016_projection_pending_due_index.sql'; SELECT name FROM sqlite_master WHERE type='index' AND name='idx_public_projection_pending_due';" > "$RUNNER_TEMP/index-check.json"
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          const r=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/index-check.json','utf8'));
+          if(r.length!==2||r[0].results.length!==1||r[1].results.length!==1)throw Error('Preview index validation failed');
+          console.log('Verified: migration 0016 applied, pending projection index is present in isolated preview D1. No data modification queries performed.');
+          JS
