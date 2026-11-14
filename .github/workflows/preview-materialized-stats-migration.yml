@@ -99,7 +99,7 @@ jobs:
             return result[0].results;
           };
           const sql=`SELECT
-            (SELECT count(*) FROM visible_content_index) indexed,
+            (SELECT count(*) FROM visible_content_index) indexed_count,
             (SELECT coalesce(sum(n),0) FROM visible_content_totals) totals,
             (SELECT count(*) FROM topics t JOIN content_origins o ON o.content_type='topic' AND o.content_id=t.id WHERE t.status='published')
               +(SELECT count(*) FROM comments c JOIN topics t ON t.id=c.topic_id JOIN content_origins o ON o.content_type='comment' AND o.content_id=c.id WHERE c.status='published' AND t.status IN ('published','deleted')) source_rows,
@@ -110,7 +110,7 @@ jobs:
           const r=read(sql)[0];
           const migrations=read("SELECT name FROM d1_migrations WHERE name IN ('0017_materialized_content_stats.sql','0018_rate_limit_expiry_index.sql')");
           const indexes=read("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_rate_limits_expires'");
-          if(!r||r.indexed!==r.totals||r.indexed!==r.source_rows||
+          if(!r||r.indexed_count!==r.totals||r.indexed_count!==r.source_rows||
               r.historical!==r.source_historical||r.ranked!==r.source_ranked||
               migrations.length!==2||indexes.length!==1)
             throw Error('Preview aggregate reconciliation failed: '+JSON.stringify({r,migrations:migrations.length,indexes:indexes.length}));
