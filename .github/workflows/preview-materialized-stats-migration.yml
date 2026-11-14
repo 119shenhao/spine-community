@@ -1,4 +1,6 @@
 name: Preview D1 materialized stats migration (verified)
+# Automatically applies only reviewed 0017/0018 migrations to isolated preview D1.
+# Production DB and content sync are deliberately outside this workflow.
 
 on:
   push:
