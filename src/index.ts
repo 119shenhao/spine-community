@@ -1,5 +1,6 @@
 import {Env,HttpError,now,hash,apiRate,json,fail,sameOrigin,currentUser,one,all,stmt} from './core';
 import {healthSchema} from './health-schema';
+import {scheduleMaintenance} from './maintenance';
 import {authRoute} from './auth';
 import {contentRoute} from './content';
 import {searchRoute} from './search';
@@ -86,6 +87,7 @@ export default {
    if(!env.DB)fail(503,'database_not_configured');
    if(!['GET','HEAD'].includes(req.method))sameOrigin(req);
    await apiRate(env,req);
+   scheduleMaintenance(env.DB,ctx);
    const user=await currentUser(req,env);
    for(const route of [authRoute,contributorRoute,communityRoute,contentRoute,searchRoute,translationRoute,projectionViewerRoute,projectionAdminRoute,adminRoute]){
     const response=await route(req,env,user,path,ctx);
