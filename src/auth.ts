@@ -166,6 +166,7 @@ async function identityRoute(req:Request,env:Env,url:URL){
   if(!response.ok){
     if(response.status===400&&data?.error==='invalid_grant')fail(401,'login_failed');
     if(response.status===403&&data?.error==='access_denied')fail(403,'account_unavailable');
+    if(env.APP_ENV==='preview')fail(503,data?.error==='invalid_client'?'identity_client_rejected':`identity_exchange_http_${response.status}`);
     fail(503,'identity_provider_unavailable');
   }
   const claims=await verifyIdToken(data?.id_token,config.clientId,saved.nonce,[config.issuer],config.issuer+'/.well-known/jwks.json');

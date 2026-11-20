@@ -160,6 +160,8 @@ jobs:
           const callback=forum+'/api/auth/identity/callback?'+new URLSearchParams({state,code:randomBytes(32).toString('base64url')});
           const result=await fetch(callback,{headers:{cookie},redirect:'manual',signal:AbortSignal.timeout(15000)});
           const payload=await result.json();
+          console.log('Development code exchange',JSON.stringify({status:result.status,
+            code:/^(?:login_failed|identity_[a-z0-9_]+)$/.test(payload.error)?payload.error:'unexpected'}));
           assert.equal(result.status,401,'Forum Worker did not receive an authenticated invalid-grant response');
           assert.equal(payload.error,'login_failed');
           assert.equal(result.headers.has('set-cookie'),false,'Invalid authorization code created a session cookie');
