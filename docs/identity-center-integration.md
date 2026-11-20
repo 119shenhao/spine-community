@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-开发预览已启用统一登录。线上 Worker 凭证、无效授权码和重复回调检查已通过。正式站尚未切换，真实 Google 账号授权后的成功回跳仍待验收。
+开发预览已启用统一登录。线上 Worker 凭证、无效授权码和重复回调检查已通过。正式站尚未切换。用户在开发预览反馈退出后重新使用 Google 登录成功，并在后台找到新增的有效会话。该结果来自用户浏览器反馈，旧论坛用户 ID 和管理员权限仍需单独核对。
 
 ## 已确认范围
 
@@ -39,3 +39,10 @@
 - 论坛开发 Worker 已配置应用密钥，认证中心已启用 `spine-community-dev`，已回读精确回调及唯一有效摘要。论坛开发 D1 已验证迁移 `0100_identity_center.sql`，临时配置回执与脚本已清理。 [启用记录](https://github.com/119shenhao/identity-center/actions/runs/44739637845) · [清理提交](https://github.com/119shenhao/spine-community/commit/d964ae9a6b8c7be9d6097ca9a01937dc4b1e8aa3)
 - 线上复测发现十六进制摘要与运行时格式不一致，已转换为 Base64URL。论坛开发配置启用 `global_fetch_strictly_public`，经公开 HTTPS 入口访问认证中心预览。 [摘要修正](https://github.com/119shenhao/identity-center/actions/runs/44749011105) · [论坛修正](https://github.com/119shenhao/spine-community/commit/e920e5a5a081d6ae6d0af9bb835f017c29abf88b)
 - 复测确认论坛 Worker 凭证被接受，无效授权码与重复回调均被拒绝。浏览器已验证从论坛进入 Google 账号选择页。剩余验收需用真实 Google 账号完成回跳，并核对开发论坛的用户 ID 和权限。 [线上复测](https://github.com/119shenhao/spine-community/actions/runs/44749466919/attempts/2)
+
+### 开发预览的会话行为与用户反馈
+
+- 认证中心和论坛各自管理自己的会话。后台撤销指定中心会话后，论坛自身已签发的 Cookie 当前不会随之失效。退出论坛结束当前论坛会话。
+- 开发预览通过统一认证中心重新登录会新建中心会话，旧记录保留「已撤销」状态。直接 Google 登录只产生论坛会话。
+- 用户已反馈重新登录成功，并在会话管理中找到新的有效记录。独立的旧账号 ID 与管理员权限线上核对仍待完成。
+- 认证中心开发后台已改为按会话创建时间倒序，每页 50 条，增加「创建时间」列。 [开发预览 CI](https://github.com/119shenhao/identity-center/actions/runs/44757425955)
