@@ -112,3 +112,25 @@ jobs:
           assert.match(page.headers.get('x-robots-tag')||'',/noindex/,'Dynamic public profile shell must not be indexed without SSR');
           console.log('Deployed contributor API and author profile route verified');
           JS
+
+      - name: Verify development login binding (read-only)
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import {setTimeout as delay} from 'node:timers/promises';
+          const origin='https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev';
+          let ready=false;
+          for(let attempt=0;attempt<12;attempt++){
+            const response=await fetch(origin+'/api/me',{signal:AbortSignal.timeout(10000),redirect:'error'}).catch(()=>null);
+            const data=await response?.json().catch(()=>null);
+            ready=response?.status===200&&data?.identityConfigured===true;
+            console.log('Development login readiness',JSON.stringify({status:response?.status??null,configured:ready}));
+            if(ready)break;
+            await delay(5000);
+          }
+          assert.equal(ready,true,'Identity preview secret is not configured');
+          const callback=await fetch(origin+'/api/auth/identity/callback',{signal:AbortSignal.timeout(10000),redirect:'error'});
+          assert.equal(callback.status,401);
+          assert.equal((await callback.json()).error,'invalid_oauth_state');
+          assert(!callback.headers.has('set-cookie'),'Invalid callback must not create a forum session');
+          JS
