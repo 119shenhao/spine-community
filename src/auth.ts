@@ -162,8 +162,12 @@ async function identityRoute(req:Request,env:Env,url:URL){
     response=await fetch(config.issuer+'/oauth/token',{method:'POST',headers:{authorization:'Basic '+btoa(config.clientId+':'+config.clientSecret),
       'content-type':'application/x-www-form-urlencoded',accept:'application/json'},body:form.toString(),redirect:'manual',signal:AbortSignal.timeout(10000)});
   }catch{return fail(503,'identity_provider_unavailable');}
-  if(!response.ok)fail(response.status>=500?503:401,'login_failed');
-  const data=await response.json().catch(()=>null) as {id_token?:string}|null;
+  const data=await response.json().catch(()=>null) as {id_token?:string,error?:string}|null;
+  if(!response.ok){
+    if(response.status===400&&data?.error==='invalid_grant')fail(401,'login_failed');
+    if(response.status===403&&data?.error==='access_denied')fail(403,'account_unavailable');
+    fail(503,'identity_provider_unavailable');
+  }
   const claims=await verifyIdToken(data?.id_token,config.clientId,saved.nonce,[config.issuer],config.issuer+'/.well-known/jwks.json');
   if(!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(claims.sub)||
       typeof claims.spine_google_sub!=='string'||!/^[\x21-\x7e]{1,255}$/.test(claims.spine_google_sub))fail(401,'invalid_identity');

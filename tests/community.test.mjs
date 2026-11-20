@@ -57,7 +57,7 @@ test('unified Google login retains existing members and roles, creates new membe
  await call('/api/topics/'+existingTopic+'/bookmark','PUT',{},'admin');
  await call('/api/topics/'+existingTopic+'/comments','POST',{body:'An existing reply'},'admin');
  const back='/topic/'+existingTopic+'?from=list';
- let issuedClaims={},exchanges=0,expectedChallenge='';
+ let issuedClaims={},exchanges=0,expectedChallenge='',exchangeError=null;
  t.mock.method(globalThis,'fetch',async (url,options)=>{
    assert.equal(options.redirect,'manual');
    if(url===issuer+'/.well-known/jwks.json')return Response.json({keys:[jwk]});
@@ -70,6 +70,7 @@ test('unified Google login retains existing members and roles, creates new membe
    const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(form.get('code_verifier')));
    assert.equal(Buffer.from(digest).toString('base64url'),expectedChallenge);
    exchanges++;
+   if(exchangeError)return Response.json({error:exchangeError.code},{status:exchangeError.status});
    return Response.json({id_token:await sign(issuedClaims),access_token:'unused'});
  });
 
@@ -139,6 +140,15 @@ test('unified Google login retains existing members and roles, creates new membe
  assert.equal((await send(mismatched.request,{cookie:mismatched.cookie})).status,409);
  assert.equal(DB.db.prepare("SELECT count(*) n FROM auth_identities WHERE provider='identity_center'").get().n,2);
  assert.equal(DB.db.prepare('SELECT sum(new_users) n FROM daily_community_metrics').get().n,1);
+ for(const [status,code,expected,message] of [[400,'invalid_grant',401,'login_failed'],
+   [401,'invalid_client',503,'identity_provider_unavailable'],[403,'access_denied',403,'account_unavailable']]){
+   exchangeError={status,code};
+   const attempt=await start();
+   const response=await send(attempt.request,{cookie:attempt.cookie});
+   assert.equal(response.status,expected);
+   assert.equal((await response.json()).error,message);
+   assert.equal(session(response),undefined);
+ }
  env.IDENTITY_LOGIN_ENABLED='false';
  assert.equal((await call('/api/me','GET',undefined,null)).data.identityConfigured,false);
 });

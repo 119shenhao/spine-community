@@ -1,4 +1,4 @@
-name: Preview language upgrade health (read-only)
+name: Preview language and authentication health
 on:
   push:
     branches: [feature/v1-community-build-20261106]
@@ -140,4 +140,31 @@ jobs:
           assert.equal(callback.status,401);
           assert.equal((await callback.json()).error,'invalid_oauth_state');
           assert(!callback.headers.has('set-cookie'),'Invalid callback must not create a forum session');
+          JS
+
+      - name: Verify Worker-to-Worker client authentication rejects an invalid code
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import {randomBytes} from 'node:crypto';
+          const forum='https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev';
+          const issuer='https://dev-identity-center.119shenhao.workers.dev';
+          const start=await fetch(forum+'/api/auth/identity?return_to=%2F',{redirect:'manual',signal:AbortSignal.timeout(10000)});
+          assert.equal(start.status,302);
+          const authorize=new URL(start.headers.get('location'));
+          assert.equal(authorize.origin+authorize.pathname,issuer+'/oauth/authorize');
+          assert.equal(authorize.searchParams.get('client_id'),'spine-community-dev');
+          const cookie=start.headers.get('set-cookie')?.split(';',1)[0];
+          const state=authorize.searchParams.get('state');
+          assert.equal(Boolean(cookie?.startsWith('__Host-sc_identity_oauth=')&&state),true);
+          const callback=forum+'/api/auth/identity/callback?'+new URLSearchParams({state,code:randomBytes(32).toString('base64url')});
+          const result=await fetch(callback,{headers:{cookie},redirect:'manual',signal:AbortSignal.timeout(15000)});
+          const payload=await result.json();
+          assert.equal(result.status,401,'Forum Worker did not receive an authenticated invalid-grant response');
+          assert.equal(payload.error,'login_failed');
+          assert.equal(result.headers.has('set-cookie'),false,'Invalid authorization code created a session cookie');
+          const replay=await fetch(callback,{headers:{cookie},redirect:'manual',signal:AbortSignal.timeout(10000)});
+          assert.equal(replay.status,401);
+          assert.equal((await replay.json()).error,'invalid_oauth_state');
+          console.log('Live development Worker-to-Worker client authentication, invalid code rejection and state replay protection verified.');
           JS
