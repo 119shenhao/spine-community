@@ -1,9 +1,11 @@
 import {Env,Row,all,one,stmt,now,id,fail,json,body,textField,lang,locales,requireUser,writable,rate,hash,randomToken,cookie,safeUser,analyticsEnabled} from './core';
 import {getContent,decorate,purge,notify} from './content';
 import {excerptText,FEED_EXCERPT_LIMIT} from './excerpt';
+import {identityLoginConfig} from './auth';
 export async function communityRoute(req:Request,env:Env,u:Row|null,path:string):Promise<Response|null>{
   const method=req.method,url=new URL(req.url);
-  if(path==='/api/me'&&method==='GET')return json({user:safeUser(u),googleConfigured:Boolean(env.GOOGLE_CLIENT_ID&&env.GOOGLE_CLIENT_SECRET),imageUploadsEnabled:false});
+  if(path==='/api/me'&&method==='GET')return json({user:safeUser(u),googleConfigured:Boolean(env.GOOGLE_CLIENT_ID&&env.GOOGLE_CLIENT_SECRET),
+    identityConfigured:Boolean(identityLoginConfig(env,url.origin)),imageUploadsEnabled:false});
   if(path==='/api/me'&&method==='PATCH'){
     const user=requireUser(u),b=await body(req),nickname=textField(b.nickname,1,80,'nickname');
      const mode=b.preferred_locale==='auto'?'auto':'manual';
