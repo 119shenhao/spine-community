@@ -1,5 +1,9 @@
 # 颈椎腰椎论坛接入统一身份认证中心
 
+## 当前状态
+
+开发预览已启用统一登录。线上 Worker 凭证、无效授权码和重复回调检查已通过。正式站尚未切换，真实 Google 账号授权后的成功回跳仍待验收。
+
 ## 已确认范围
 
 - 先在 `feature/v1-community-build-20261106` 与认证中心 `dev` 联调网页版 Google 登录。用户已批准开发和开发环境验收。正式站切换、生产部署与生产 D1 写入另行批准。
@@ -29,3 +33,9 @@
 - 两个 Cloudflare 开发预览均构建成功。[论坛 Cloudflare 构建](https://dash.cloudflare.com/289976272520a38732bef34108585e11/workers/services/view/spine-community/production/previews/feature-v1-community-build-20261106/builds/a0f66d16-1d99-439c-8540-53e89f5143a7) · [论坛 GitHub CI](https://github.com/119shenhao/spine-community/actions/runs/44737893400) · [线上健康与新前端资源回读](https://github.com/119shenhao/spine-community/actions/runs/44737893405) · [认证中心 CI](https://github.com/119shenhao/identity-center/actions/runs/44737830648)。
 - 用两个仓库的实际 Worker 请求处理器、隔离 SQLite 和模拟 Google 签名做了跨服务端到端测试。直接 Google 登录建立的测试账号，经统一身份登录仍保留原论坛用户 ID 和管理员权限。重复回调和登出后的旧会话均被拒绝。
 - 已验证 D1 凭据访问论坛 Worker Preview 配置返回 HTTP 403。[权限检查](https://github.com/119shenhao/identity-center/actions/runs/44738311142)。改用论坛自身的预览构建部署权限保存应用机密，认证中心沿用原 D1 受控工作流登记单向校验摘要。真实 Google 浏览器登录仍需单独验收。
+
+### 2026-11-20 · 开发应用启用与线上复测
+
+- 论坛开发 Worker 已配置应用密钥，认证中心已启用 `spine-community-dev`，已回读精确回调及唯一有效摘要。论坛开发 D1 已验证迁移 `0100_identity_center.sql`，临时配置回执与脚本已清理。 [启用记录](https://github.com/119shenhao/identity-center/actions/runs/44739637845) · [清理提交](https://github.com/119shenhao/spine-community/commit/d964ae9a6b8c7be9d6097ca9a01937dc4b1e8aa3)
+- 线上复测发现十六进制摘要与运行时格式不一致，已转换为 Base64URL。论坛开发配置启用 `global_fetch_strictly_public`，经公开 HTTPS 入口访问认证中心预览。 [摘要修正](https://github.com/119shenhao/identity-center/actions/runs/44749011105) · [论坛修正](https://github.com/119shenhao/spine-community/commit/e920e5a5a081d6ae6d0af9bb835f017c29abf88b)
+- 复测确认论坛 Worker 凭证被接受，无效授权码与重复回调均被拒绝。浏览器已验证从论坛进入 Google 账号选择页。剩余验收需用真实 Google 账号完成回跳，并核对开发论坛的用户 ID 和权限。 [线上复测](https://github.com/119shenhao/spine-community/actions/runs/44749466919/attempts/2)
