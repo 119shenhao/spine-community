@@ -27,7 +27,6 @@ if(process.env.WORKERS_CI==='1'&&process.env.WORKERS_CI_BRANCH===expectedBranch)
  run([...cli,'migrations','apply',...common]);
  run([...cli,'execute',...common,'--command',"SELECT value FROM settings WHERE key='schema_version'; SELECT id,nickname,is_system FROM users WHERE id='system-unknown-import'; PRAGMA foreign_key_check;",'--json']);
  console.log('Preview-only migration verified for '+PREVIEW);
- run(['scripts/provision-preview-identity.mjs']);
 }else console.log('Remote migration skipped outside the named Cloudflare preview build.');
 
 function createVersionedFrontend() {

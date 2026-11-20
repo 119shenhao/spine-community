@@ -2,7 +2,14 @@ name: Preview language upgrade health (read-only)
 on:
   push:
     branches: [feature/v1-community-build-20261106]
-    paths: [.github/workflows/preview-language-health.yml, src/contributors.ts, public/contributors-ui.js, public/app.js]
+    paths:
+      - .github/workflows/preview-language-health.yml
+      - src/contributors.ts
+      - src/auth.ts
+      - public/contributors-ui.js
+      - public/app.js
+      - scripts/prepare-build.mjs
+      - wrangler.jsonc
   workflow_dispatch:
 permissions:
   contents: read
