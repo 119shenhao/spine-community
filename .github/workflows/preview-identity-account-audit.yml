@@ -1,0 +1,104 @@
+name: Preview identity legacy-account read-only acceptance audit
+on:
+  push:
+    branches: [feature/v1-community-build-20261106]
+    paths: [.github/workflows/preview-identity-account-audit.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    if: github.repository == '119shenhao/spine-community' && github.ref == 'refs/heads/feature/v1-community-build-20261106'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      CLOUDFLARE_ACCOUNT_ID: '289976272520a38732bef34108585e11'
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PREVIEW_D1_API_TOKEN }}
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Audit existing Identity Center links without exposing member IDs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo 'Missing preview D1 token'; exit 1; }
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import {spawnSync} from 'node:child_process';
+          const config='wrangler.preview-migrations.jsonc';
+          const cfg=JSON.parse(fs.readFileSync(config,'utf8'));
+          if(cfg.d1_databases?.length!==1 ||
+             cfg.d1_databases[0].binding!=='PREVIEW_DB' ||
+             cfg.d1_databases[0].database_id!=='4362537a-5748-4a05-b0c4-219c3db36996')
+            throw Error('Audit target must be the isolated forum preview D1');
+          // All statements are SELECT only. No user identifiers, Google subjects,
+          // personal information, session tokens, or post text are emitted.
+          const queries=[
+            `SELECT COUNT(*) linked_accounts,
+               COALESCE(SUM(CASE WHEN EXISTS (SELECT 1 FROM auth_identities g
+                 WHERE g.provider='google' AND g.user_id=i.user_id) THEN 1 ELSE 0 END),0) matched_google,
+               COALESCE(SUM(CASE WHEN EXISTS (SELECT 1 FROM auth_identities g
+                 WHERE g.provider='google' AND g.user_id=i.user_id AND g.created_at<i.created_at)
+                 THEN 1 ELSE 0 END),0) earlier_google_identity,
+               COALESCE(SUM(CASE WHEN u.created_at<i.created_at THEN 1 ELSE 0 END),0) earlier_member,
+               COALESCE(SUM(CASE WHEN u.status='active' THEN 1 ELSE 0 END),0) active_accounts,
+               COALESCE(SUM(CASE WHEN EXISTS (SELECT 1 FROM user_roles r
+                 WHERE r.user_id=i.user_id AND r.role='admin') THEN 1 ELSE 0 END),0) admins,
+               COALESCE(SUM(CASE WHEN EXISTS (SELECT 1 FROM user_roles r
+                 WHERE r.user_id=i.user_id AND r.role='moderator') THEN 1 ELSE 0 END),0) moderators,
+               COALESCE(SUM((SELECT COUNT(*) FROM topics t WHERE t.author_id=i.user_id)),0) topics,
+               COALESCE(SUM((SELECT COUNT(*) FROM comments c WHERE c.author_id=i.user_id)),0) comments,
+               COALESCE(SUM((SELECT COUNT(*) FROM bookmarks b WHERE b.user_id=i.user_id)),0) bookmarks
+               FROM auth_identities i JOIN users u ON u.id=i.user_id
+               WHERE i.provider='identity_center'`,
+            `SELECT COUNT(*) unmapped FROM auth_identities i
+               LEFT JOIN users u ON u.id=i.user_id
+               WHERE i.provider='identity_center' AND u.id IS NULL`,
+            `SELECT COUNT(*) duplicated_member_links FROM
+               (SELECT user_id FROM auth_identities WHERE provider='identity_center'
+                GROUP BY user_id HAVING COUNT(*)>1)`
+          ];
+          const q=queries.join('; ')+';';
+          const call=spawnSync(process.execPath,
+            ['node_modules/wrangler/bin/wrangler.js','d1','execute','PREVIEW_DB',
+             '--remote','--config',config,'--command',q,'--json','--yes'],
+            {encoding:'utf8',maxBuffer:1024*1024});
+          if(call.status!==0)throw Error('Read-only preview D1 query failed (raw output withheld)');
+          let blocks;
+          try{blocks=JSON.parse(call.stdout);}catch{throw Error('Cannot decode preview D1 JSON');}
+          if(!Array.isArray(blocks)||blocks.length!==3||blocks.some(b=>b.success===false))
+            throw Error('Unexpected preview D1 result');
+          const [a,b,c]=blocks.map(v=>v.results?.[0]);
+          if(!a||!b||!c)throw Error('Incomplete preview D1 audit');
+          const summary={
+            linkedAccounts:a.linked_accounts,
+            linkedToExistingGoogle:a.matched_google,
+            olderGoogleIdentity:a.earlier_google_identity,
+            olderForumMember:a.earlier_member,
+            activeAccounts:a.active_accounts,
+            adminAccounts:a.admins,
+            moderatorAccounts:a.moderators,
+            topicsCurrentlyAttributed:a.topics,
+            commentsCurrentlyAttributed:a.comments,
+            bookmarksCurrentlyAttributed:a.bookmarks,
+            orphanLinks:b.unmapped,
+            duplicateIdentityLinks:c.duplicated_member_links
+          };
+          console.log('Development forum D1 read-only account-link audit (aggregate data only):');
+          console.log(JSON.stringify(summary,null,2));
+          if(b.unmapped!==0||c.duplicated_member_links!==0 ||
+             a.linked_accounts!==a.matched_google)
+            throw Error('Legacy-account link integrity checks failed');
+          if(a.linked_accounts===0)throw Error('No real preview identity links found; actual account acceptance not yet complete');
+          console.log('PASS: all linked Identity Center members map to existing forum Google identities.');
+          console.log('Note: Current content counts cannot prove historical before/after equality without a baseline.');
+          JS
