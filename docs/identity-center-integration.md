@@ -17,3 +17,9 @@
 - 认证中心签发者：`https://dev-identity-center.119shenhao.workers.dev`
 - 已登记回调：`https://feature-v1-community-build-20261106-spine-community.119shenhao.workers.dev/api/auth/identity/callback`
 - [开发 D1 配置回执](https://github.com/119shenhao/identity-center/actions/runs/44735834152)
+
+### 2026-11-20 · 双仓库代码与本地测试
+
+- [认证中心身份签发](https://github.com/119shenhao/identity-center/commit/ecb5b42b594f82670f7624d0e454aec45071b674) · [认证中心取消授权回调](https://github.com/119shenhao/identity-center/commit/078dd63ccd3ace720c53dc93d72178352a936f49)。限定 Google 主体字段的客户端、回调和令牌类型。24 项测试与 D1 schema 检查通过，认证中心预览构建通过。
+- [论坛登录接入](https://github.com/119shenhao/spine-community/commit/28887ae1768e00e1908bf1336cc9bac7b5bb7362)。独立 OAuth 状态表、用户映射唯一约束、原页面回跳和会话复用已实现。验证了旧用户的帖子、回复、收藏、管理员权限，普通新用户、直接 Google 回退、重复或冲突绑定、取消退出和非法回跳拦截。TypeScript 检查和 151 项本地测试通过。
+- 论坛预览构建负责应用 `0100_identity_center.sql` 到独立预览 D1。上线证据、机密配置和真实 Google 浏览器验收另行记录。
