@@ -145,6 +145,9 @@ async function identityRoute(req:Request,env:Env,url:URL){
     ]);
     const params=new URLSearchParams({client_id:config.clientId,redirect_uri:config.redirectUri,response_type:'code',scope:'openid',
       state,nonce,code_challenge:await pkceChallenge(verifier),code_challenge_method:'S256'});
+    // Only select the Google provider; keep Identity Center's secure OAuth
+    // transaction, Google verification, and signed legacy account linking.
+    params.set('provider_hint','google');
     return redirect(config.issuer+'/oauth/authorize?'+params,flowCookie(state));
   }
 
