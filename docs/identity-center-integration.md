@@ -110,3 +110,10 @@
 **实施记录**：代码已提交开发分支 `feature/v1-community-build-20261106`（`src/auth.ts` / `tests/community.test.mjs`），并通过 [开发完整 CI #44886973516](https://github.com/119shenhao/spine-community/actions/runs/44886973516) 和 [预览认证/语言健康 #44886973502](https://github.com/119shenhao/spine-community/actions/runs/44886973502)。中心通用支持的开发 CI 见 [#44887010782](https://github.com/119shenhao/identity-center/actions/runs/44887010782)。
 
 **发布状态**：这一段只记录开发结果，**不得宣称 Spine 正式站已应用该改动**。生产必须从主分支单独挑选目标改动，通过 CI、线上预验收和用户既定批准流程后发布，不得合并开发分支其他业务功能，不涉及 D1 迁移或 Secret 轮换。正式上线和真实浏览器验收完成后追加记录。
+
+### 本次正式版定向发布单（未合并）
+
+- 已建立 [Identity Center 生产 PR #4](https://github.com/119shenhao/identity-center/pull/4)（Draft），[PR CI #44887221291](https://github.com/119shenhao/identity-center/actions/runs/44887221291) 通过；授权参数处理改为注册的 web_confidential 网站可用。
+- 已建立 [Spine 生产 PR #42](https://github.com/119shenhao/spine-community/pull/42)（Draft），[PR CI #44887266128](https://github.com/119shenhao/spine-community/actions/runs/44887266128) 通过。
+- 对比 `main` 后确认 Spine 生产 PR 仅 2 个文件：`src/auth.ts` 新增 3 行、`tests/community.test.mjs` 新增 1 行；认证中心 PR 仅 3 个文件；与开发分支的其他更改隔离。
+- **尚未正式发布**：按原正式发布规范待明确批准后才合并这两个 PR，依次完成生产上线 HTTP 双跳验证与真实浏览器验收。
