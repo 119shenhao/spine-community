@@ -144,7 +144,7 @@ async function identityRoute(req:Request,env:Env,url:URL){
       stmt(env.DB,'INSERT INTO identity_login_states(state_hash,nonce,verifier,return_path,expires_at) VALUES(?,?,?,?,?)',await hash(state),nonce,verifier,returnTo,current+600)
     ]);
     const params=new URLSearchParams({client_id:config.clientId,redirect_uri:config.redirectUri,response_type:'code',scope:'openid',
-      state,nonce,code_challenge:await pkceChallenge(verifier),code_challenge_method:'S256'});
+      state,nonce,code_challenge:await pkceChallenge(verifier),code_challenge_method:'S256',prompt:'select_account'});
     // This button explicitly requests Google via Identity Center. Google OAuth,
     // account mapping and browser sessions remain managed by the Center.
     // A registered web_confidential client may omit the provider chooser UI.
