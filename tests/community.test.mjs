@@ -29,6 +29,128 @@ async function fixture(){const DB=new D1();for(const uid of ['alice','bob','caro
 }
 test('schema and constraints: all DDL, FKs, progress author and cross-topic parent',async()=>{const {DB,topic,call}=await fixture();const a=await topic(),b=await topic('Other','Other body');const c=await call('/api/topics/'+a+'/comments','POST',{body:'reply'},'bob');assert.equal(c.status,201);assert.throws(()=>DB.db.prepare("INSERT INTO comments(id,topic_id,author_id,parent_comment_id,body,status) VALUES('bad',?,'alice',?,'bad','published')").run(b,c.data.id));assert.throws(()=>DB.db.prepare("INSERT INTO comments(id,topic_id,author_id,kind,progress_seq,body,status) VALUES('bad2',?,'bob','progress',1,'bad','published')").run(a));assert.equal(DB.db.prepare('PRAGMA foreign_key_check').all().length,0);});
 test('authentication, origin check, upload denial and ordinary publication',async()=>{const {call,topic}=await fixture();assert.equal((await call('/api/topics','POST',{title:'x',body:'y'},null)).status,401);assert.equal((await call('/api/topics','POST',{title:'x',body:'y'},'alice',{origin:'https://evil.test'})).status,403);assert.equal((await call('/api/uploads/a','GET',undefined,null)).status,403);assert.equal((await call('/api/auth/google','GET')).status,503);const id=await topic();const r=await call('/api/topics/'+id,'GET',undefined,null);assert.equal(r.status,200);assert.equal(r.data.topic.status,'published');assert.equal(r.data.topic.terms.length,0);});
+test('unified Google login retains existing members and roles, creates new members once, and fails closed',async t=>{
+ const {DB,env,call,topic}=await fixture();
+ const origin='https://preview.test',issuer='https://identity.preview.test',client='spine-community-dev';
+ const callback='/api/auth/identity/callback',clientSecret='s'.repeat(43),authCode='c'.repeat(48);
+ const send=(path,headers={},method='GET')=>worker.fetch(new Request(origin+path,{method,headers}),env);
+ Object.assign(env,{IDENTITY_LOGIN_ENABLED:'true',IDENTITY_ISSUER:issuer,IDENTITY_CLIENT_ID:client,IDENTITY_REDIRECT_URI:origin+callback});
+ assert.equal((await call('/api/me','GET',undefined,null)).data.identityConfigured,false);
+ assert.equal((await send('/api/auth/identity')).status,503);
+ env.IDENTITY_CLIENT_SECRET=clientSecret;
+ assert.equal((await call('/api/me','GET',undefined,null)).data.identityConfigured,true);
+ assert.equal((await worker.fetch(new Request('https://alias.preview.test/api/auth/identity'),env)).status,503);
+
+ const pair=await crypto.subtle.generateKey({name:'RSASSA-PKCS1-v1_5',modulusLength:2048,publicExponent:new Uint8Array([1,0,1]),hash:'SHA-256'},true,['sign','verify']);
+ const jwk={...await crypto.subtle.exportKey('jwk',pair.publicKey),kid:'identity-test',alg:'RS256'};
+ const encode=value=>Buffer.from(JSON.stringify(value)).toString('base64url');
+ const sign=async claims=>{
+   const content=encode({alg:'RS256',kid:jwk.kid})+'.'+encode(claims);
+   const signature=await crypto.subtle.sign('RSASSA-PKCS1-v1_5',pair.privateKey,new TextEncoder().encode(content));
+   return content+'.'+Buffer.from(signature).toString('base64url');
+ };
+ const adminSub='11111111-1111-4111-8111-111111111111',newSub='22222222-2222-4222-8222-222222222222';
+ const googleAdmin='fixture-google-admin',googleNew='fixture-google-new';
+ DB.db.prepare("INSERT INTO auth_identities(id,user_id,provider,provider_subject) VALUES(?,'admin','google',?)").run('google-admin',googleAdmin);
+ const existingTopic=await topic('An existing topic','An existing topic, with enough detail for the test','admin');
+ await call('/api/topics/'+existingTopic+'/bookmark','PUT',{},'admin');
+ await call('/api/topics/'+existingTopic+'/comments','POST',{body:'An existing reply'},'admin');
+ const back='/topic/'+existingTopic+'?from=list';
+ let issuedClaims={},exchanges=0,expectedChallenge='',exchangeError=null;
+ t.mock.method(globalThis,'fetch',async (url,options)=>{
+   assert.equal(options.redirect,'manual');
+   if(url===issuer+'/.well-known/jwks.json')return Response.json({keys:[jwk]});
+   assert.equal(url,issuer+'/oauth/token');
+   assert.equal(options.headers.authorization,'Basic '+btoa(client+':'+clientSecret));
+   const form=new URLSearchParams(options.body);
+   assert.equal(form.get('redirect_uri'),origin+callback);
+   assert.equal(form.get('grant_type'),'authorization_code');
+   assert.equal(form.get('code'),authCode);
+   const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(form.get('code_verifier')));
+   assert.equal(Buffer.from(digest).toString('base64url'),expectedChallenge);
+   exchanges++;
+   if(exchangeError)return Response.json({error:exchangeError.code},{status:exchangeError.status});
+   return Response.json({id_token:await sign(issuedClaims),access_token:'unused'});
+ });
+
+ const start=async (returnTo=back,sub=adminSub,googleSub=googleAdmin)=>{
+   const started=await send('/api/auth/identity?'+new URLSearchParams({return_to:returnTo}));
+   assert.equal(started.status,302);
+   assert.match(started.headers.get('set-cookie'),/^__Host-sc_identity_oauth=.*Path=\/; Max-Age=600; HttpOnly; Secure; SameSite=Lax/);
+   const target=new URL(started.headers.get('location'));
+   assert.equal(target.origin+target.pathname,issuer+'/oauth/authorize');
+   assert.equal(target.searchParams.get('scope'),'openid');
+   assert.equal(target.searchParams.get('code_challenge_method'),'S256');
+   assert.equal(target.searchParams.get('redirect_uri'),origin+callback);
+   expectedChallenge=target.searchParams.get('code_challenge');
+   const state=target.searchParams.get('state'),nonce=target.searchParams.get('nonce');
+   issuedClaims={iss:issuer,aud:client,sub,spine_google_sub:googleSub,nonce,iat:now(),exp:now()+600};
+   const cookie=started.headers.get('set-cookie').split(';')[0];
+   return {request:callback+'?'+new URLSearchParams({code:authCode,state}),cookie,state};
+ };
+ const me=async cookie=>await (await send('/api/me',{cookie})).json();
+ const session=r=>r.headers.getSetCookie().find(value=>value.startsWith('sc_session='))?.split(';')[0];
+ const first=await start();
+ assert.equal((await send(first.request)).status,401);
+ assert.equal(exchanges,0);
+ const signedIn=await send(first.request,{cookie:first.cookie});
+ assert.equal(signedIn.status,302);
+ assert.equal(signedIn.headers.get('location'),back);
+ assert.equal(signedIn.headers.get('referrer-policy'),'no-referrer');
+ assert.equal((await me(session(signedIn))).user.id,'admin');
+ assert.equal((await me(session(signedIn))).user.role,'admin');
+ for(const kind of ['topics','comments','bookmarks']){
+   const list=await (await send('/api/me/content?kind='+kind,{cookie:session(signedIn)})).json();
+   assert.equal(list.items.length,1);
+ }
+ assert.equal((await send(first.request,{cookie:first.cookie})).status,401);
+ assert.equal(exchanges,1);
+ const signout=await send('/api/auth/logout',{cookie:session(signedIn),origin},'POST');
+ assert.equal(signout.status,200);
+ assert.equal((await me(session(signedIn))).user,null);
+
+ const cancel=await start();
+ const denied=await send(callback+'?'+new URLSearchParams({error:'access_denied',state:cancel.state}),{cookie:cancel.cookie});
+ assert.equal(denied.status,302);
+ assert.equal(denied.headers.get('location'),back);
+ assert.equal(session(denied),undefined);
+ assert.equal(exchanges,1);
+ const unsafe=await start('/a/..//external.test');
+ const safe=await send(callback+'?'+new URLSearchParams({error:'access_denied',state:unsafe.state}),{cookie:unsafe.cookie});
+ assert.equal(safe.headers.get('location'),'/');
+ for(const rejectedClaims of [{iss:'https://wrong.test'},{aud:'different-app'},{nonce:'wrong'},{exp:now()-1},{spine_google_sub:undefined}]){
+   const attempt=await start(back,newSub,googleNew);
+   Object.assign(issuedClaims,rejectedClaims);
+   assert.equal((await send(attempt.request,{cookie:attempt.cookie})).status,401);
+ }
+
+ const created=await start(back,newSub,googleNew);
+ const newSession=await send(created.request,{cookie:created.cookie});
+ assert.equal(newSession.status,302);
+ const newUser=(await me(session(newSession))).user;
+ assert.equal(newUser.role,'member');
+ const again=await start(back,newSub,googleNew);
+ assert.equal((await me(session(await send(again.request,{cookie:again.cookie})))).user.id,newUser.id);
+ const direct=await login(new Request(origin),env,googleNew);
+ assert.equal((await me(session(direct))).user.id,newUser.id);
+ const conflict=await start(back,'33333333-3333-4333-8333-333333333333',googleAdmin);
+ assert.equal((await send(conflict.request,{cookie:conflict.cookie})).status,409);
+ const mismatched=await start(back,adminSub,googleNew);
+ assert.equal((await send(mismatched.request,{cookie:mismatched.cookie})).status,409);
+ assert.equal(DB.db.prepare("SELECT count(*) n FROM auth_identities WHERE provider='identity_center'").get().n,2);
+ assert.equal(DB.db.prepare('SELECT sum(new_users) n FROM daily_community_metrics').get().n,1);
+ for(const [status,code,expected,message] of [[400,'invalid_grant',401,'login_failed'],
+   [401,'invalid_client',503,'identity_provider_unavailable'],[403,'access_denied',403,'account_unavailable']]){
+   exchangeError={status,code};
+   const attempt=await start();
+   const response=await send(attempt.request,{cookie:attempt.cookie});
+   assert.equal(response.status,expected);
+   assert.equal((await response.json()).error,message);
+   assert.equal(session(response),undefined);
+ }
+ env.IDENTITY_LOGIN_ENABLED='false';
+ assert.equal((await call('/api/me','GET',undefined,null)).data.identityConfigured,false);
+});
 test('unique idempotent likes, self-likes, undo, no self-notifications',async()=>{const {call,topic,DB}=await fixture();const id=await topic();for(let i=0;i<2;i++)assert.equal((await call('/api/topics/'+id+'/like','PUT',{},'alice')).data.like_count,1);assert.equal((await call('/api/notifications','GET')).data.unread,0);await call('/api/topics/'+id+'/like','PUT',{},'bob');assert.equal((await call('/api/notifications','GET')).data.unread,1);assert.equal((await call('/api/topics/'+id+'/like','DELETE',{},'bob')).data.like_count,1);assert.equal((await call('/api/notifications','GET')).data.unread,0);assert.equal(DB.db.prepare('SELECT count(*) n FROM topic_likes').get().n,1);});
 test('progress authorship, independent bookmark/follow, notifications and direct replies',async()=>{const {call,topic}=await fixture();const id=await topic();await call('/api/topics/'+id+'/bookmark','PUT',{},'bob');await call('/api/topics/'+id+'/follow','PUT',{},'carol');assert.equal((await call('/api/topics/'+id+'/comments','POST',{body:'fake',kind:'progress'},'bob')).status,403);const p=await call('/api/topics/'+id+'/comments','POST',{body:'My first progress',kind:'progress'},'alice');assert.equal(p.status,201);assert.equal((await call('/api/notifications','GET',undefined,'bob')).data.unread,0);assert.equal((await call('/api/notifications','GET',undefined,'carol')).data.unread,1);assert.equal((await call('/api/notifications','GET',undefined,'alice')).data.unread,0);const r=await call('/api/topics/'+id+'/comments','POST',{body:'Thank you',parent_comment_id:p.data.id},'bob');assert.equal(r.status,201);const detail=await call('/api/topics/'+id);assert.equal(detail.data.progress[0].id,p.data.id);assert.equal(detail.data.comments.filter(c=>c.id===p.data.id).length,1);assert.equal(detail.data.comments[0].progress_seq,1);});
 test('deletion removes source, cached translations and FTS but preserves other replies',async()=>{const {call,topic,DB}=await fixture();const id=await topic('Sensitive heading','Sensitive body'),reply=await call('/api/topics/'+id+'/comments','POST',{body:'Other participant'},'bob');DB.db.prepare("INSERT INTO topic_translations(topic_id,locale,source_version,title_text,body_text,provider) VALUES(?,'zh-CN',1,'缓存标题','缓存正文','test')").run(id);assert.equal((await call('/api/topics/'+id,'DELETE',{},'bob')).status,403);await call('/api/topics/'+id,'DELETE',{},'alice');const r=await call('/api/topics/'+id,'GET',undefined,null);assert.equal(r.data.topic.body,null);assert.equal(r.data.topic.title,null);assert.equal(r.data.comments[0].id,reply.data.id);assert.equal(DB.db.prepare('SELECT count(*) n FROM topic_translations').get().n,0);assert.equal(DB.db.prepare('SELECT count(*) n FROM topics_search WHERE topic_id=?').get(id).n,0);assert.equal((await call('/api/translate','POST',{id,type:'topic',locale:'zh-CN'})).status,404);assert.equal((await call('/api/topics?q=Sensitive')).data.topics.length,0);});
