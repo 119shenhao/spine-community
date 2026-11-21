@@ -1,0 +1,46 @@
+name: Spine production unified-login deployment smoke
+on:
+  push:
+    branches: [main]
+    paths:
+      - src/auth.ts
+      - src/community.ts
+      - wrangler.jsonc
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Verify production remains ready with unified login explicitly disabled
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json,time,urllib.request,urllib.error
+          origin="https://spine.nbn369.com"
+          def call(path):
+            req=urllib.request.Request(origin+path,headers={"User-Agent":"SpineUnifiedLoginProductionSmoke/1.0","Accept":"application/json","Cache-Control":"no-cache"})
+            try:
+              with urllib.request.urlopen(req,timeout=12) as res:
+                return res.status,json.load(res)
+            except urllib.error.HTTPError as err:
+              return err.code,json.load(err)
+          for i in range(1,25):
+            try:
+              code,health=call("/api/health")
+              assert code==200 and health.get("status")=="ok" and health.get("environment")=="production" and health.get("databaseReady") is True,"Production health unavailable"
+              code,me=call("/api/me")
+              assert code==200 and me.get("identityConfigured") is False and me.get("googleConfigured") is True,"Login setup or existing Google fallback invalid"
+              code,error=call("/api/auth/identity")
+              assert code==503 and error.get("error")=="identity_not_configured","Unified login must remain disabled until credential and user acceptance"
+              print("PASS: production forum health, D1, direct Google fallback, and disabled unified login gate")
+              with open("/tmp/prod-smoke-result","w") as f:f.write("Production readiness PASS; unified login remains disabled pending Worker Secret and real Google account acceptance.\n")
+              break
+            except Exception as exc:
+              print("Attempt",i,"not yet verified:",str(exc),flush=True)
+              if i==24:raise
+              time.sleep(10)
+          PY
+          cat /tmp/prod-smoke-result >> "$GITHUB_STEP_SUMMARY"
