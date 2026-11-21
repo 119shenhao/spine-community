@@ -39,7 +39,7 @@ function wrangler(args,stdin){
   if(result.error||result.status!==0){
     // Never expose CLI output: it may contain secret-related details.
     const output=(result.stderr||"")+"\n"+(result.stdout||"");
-    const reason=/\\b403\\b|permission|forbidden|unauthorized/i.test(output)?"permission_denied":
+    const reason=/403|permission|forbidden|unauthorized/i.test(output)?"permission_denied":
       /unknown argument|unknown option|unrecognized option|invalid option/i.test(output)?"unsupported_cli_option":"remote_operation_failed";
     const operation=args[0]==="secret"?"Worker Secret":args[0]==="d1"?"D1":"Cloudflare";
     throw new Error(operation+" bootstrap failed ("+reason+"). No secret values were logged.");
