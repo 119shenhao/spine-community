@@ -38,7 +38,11 @@ function wrangler(args,stdin){
   });
   if(result.error||result.status!==0){
     // Never expose CLI output: it may contain secret-related details.
-    throw new Error("Cloudflare build credential cannot complete "+args[0]+" operation (no secret details logged).");
+    const output=(result.stderr||"")+"\n"+(result.stdout||"");
+    const reason=/\\b403\\b|permission|forbidden|unauthorized/i.test(output)?"permission_denied":
+      /unknown argument|unknown option|unrecognized option|invalid option/i.test(output)?"unsupported_cli_option":"remote_operation_failed";
+    const operation=args[0]==="secret"?"Worker Secret":args[0]==="d1"?"D1":"Cloudflare";
+    throw new Error(operation+" bootstrap failed ("+reason+"). No secret values were logged.");
   }
   return result.stdout;
 }
@@ -53,7 +57,7 @@ function query(sql){
   return result[0].results;
 }
 function hasSecret(){
-  const response=JSON.parse(wrangler(["secret","list","--name",WORKER,"--config","wrangler.jsonc","--json"]));
+  const response=JSON.parse(wrangler(["secret","list","--name",WORKER,"--config","wrangler.jsonc","--format","json"]));
   if(!Array.isArray(response))throw new Error("Cloudflare returned an invalid Worker secret metadata list.");
   return response.some(item=>item.name===SECRET_NAME&&item.type==="secret_text");
 }
