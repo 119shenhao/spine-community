@@ -1,0 +1,59 @@
+name: Spine PROD Google direct sign-in online acceptance
+on:
+  push:
+    branches: [feature/v1-community-build-20261106]
+    paths:
+      - .github/workflows/spine-prod-google-direct-smoke.yml
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Verify live PROD forum -> Center -> Google without provider choice page
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          const forum='https://spine.nbn369.com';
+          const issuer='https://idcenter.nbn369.com';
+          const callback=forum+'/api/auth/identity/callback';
+          let confirmed=false;
+          for(let attempt=1;attempt<=24;attempt++){
+            try{
+              const start=await fetch(forum+'/api/auth/identity?return_to=%2F',{redirect:'manual',signal:AbortSignal.timeout(12000)});
+              if(start.status!==302)throw Error('Forum authorize is not redirecting');
+              const center=new URL(start.headers.get('location'));
+              if(center.origin!==issuer||center.pathname!=='/oauth/authorize'||
+                center.searchParams.get('client_id')!=='spine-community-prod'||
+                center.searchParams.get('redirect_uri')!==callback||
+                center.searchParams.get('provider_hint')!=='google'||
+                center.searchParams.get('response_type')!=='code'||
+                center.searchParams.get('code_challenge_method')!=='S256'||
+                !center.searchParams.get('state')||!center.searchParams.get('nonce')||
+                !center.searchParams.get('code_challenge'))throw Error('Forum PROD Google hint not yet available');
+              const handoff=await fetch(center,{redirect:'manual',signal:AbortSignal.timeout(12000)});
+              if(handoff.status!==302)throw Error('Center PROD did not bypass HTML choice page');
+              const google=new URL(handoff.headers.get('location'));
+              if(google.origin!=='https://accounts.google.com'||google.pathname!=='/o/oauth2/v2/auth'||
+                 google.searchParams.get('redirect_uri')!==issuer+'/oauth/providers/google/callback'||
+                 !(handoff.headers.get('set-cookie')||'').includes('__Host-ic_oauth_'))
+                 throw Error('Upstream Google handoff or secure browser proof incorrect');
+              confirmed=true;
+              console.log('PASS: LIVE PRODUCTION Spine -> Identity Center (302, no HTML provider page) -> Google with PKCE and secure cookies.');
+              break;
+            }catch(e){
+              console.log('Attempt '+attempt+' waiting for live PRODUCTION release.');
+              if(attempt<24)await new Promise(r=>setTimeout(r,12000));
+            }
+          }
+          if(!confirmed)throw Error('Production Google direct sign-in not verified; release requires investigation.');
+          const invalid=await fetch(forum+'/api/auth/identity/callback',{redirect:'manual',signal:AbortSignal.timeout(12000)});
+          if(invalid.status!==401)throw Error('Missing OAuth state must remain unauthorized');
+          const old=await fetch(forum+'/api/auth/google',{redirect:'manual',signal:AbortSignal.timeout(12000)});
+          if(old.status!==410)throw Error('Legacy Google endpoint must remain retired');
+          const health=await fetch(forum+'/api/health',{signal:AbortSignal.timeout(12000)});
+          const h=await health.json();
+          if(!health.ok||h.status!=='ok'||h.environment!=='production'||h.databaseReady!==true)throw Error('Production forum unhealthy');
+          console.log('PASS: missing OAuth state rejected, legacy direct endpoint disabled, production D1 ready.');
+          NODE
