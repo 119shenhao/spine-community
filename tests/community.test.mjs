@@ -106,6 +106,7 @@ test('unified Google login retains existing members and roles, creates new membe
    assert.equal(target.origin+target.pathname,issuer+'/oauth/authorize');
    assert.equal(target.searchParams.get('scope'),'openid');
    assert.equal(target.searchParams.get('provider_hint'),'google');
+   assert.equal(target.searchParams.get('prompt'),'select_account');
    assert.equal(target.searchParams.get('code_challenge_method'),'S256');
    assert.equal(target.searchParams.get('redirect_uri'),origin+callback);
    expectedChallenge=target.searchParams.get('code_challenge');
