@@ -29,7 +29,31 @@ async function fixture(){const DB=new D1();for(const uid of ['alice','bob','caro
  return {DB,env,call,topic};
 }
 test('schema and constraints: all DDL, FKs, progress author and cross-topic parent',async()=>{const {DB,topic,call}=await fixture();const a=await topic(),b=await topic('Other','Other body');const c=await call('/api/topics/'+a+'/comments','POST',{body:'reply'},'bob');assert.equal(c.status,201);assert.throws(()=>DB.db.prepare("INSERT INTO comments(id,topic_id,author_id,parent_comment_id,body,status) VALUES('bad',?,'alice',?,'bad','published')").run(b,c.data.id));assert.throws(()=>DB.db.prepare("INSERT INTO comments(id,topic_id,author_id,kind,progress_seq,body,status) VALUES('bad2',?,'bob','progress',1,'bad','published')").run(a));assert.equal(DB.db.prepare('PRAGMA foreign_key_check').all().length,0);});
-test('authentication, origin check, upload denial and ordinary publication',async()=>{const {call,topic}=await fixture();assert.equal((await call('/api/topics','POST',{title:'x',body:'y'},null)).status,401);assert.equal((await call('/api/topics','POST',{title:'x',body:'y'},'alice',{origin:'https://evil.test'})).status,403);assert.equal((await call('/api/uploads/a','GET',undefined,null)).status,403);assert.equal((await call('/api/auth/google','GET')).status,503);const id=await topic();const r=await call('/api/topics/'+id,'GET',undefined,null);assert.equal(r.status,200);assert.equal(r.data.topic.status,'published');assert.equal(r.data.topic.terms.length,0);});
+test('authentication, origin check, upload denial and ordinary publication',async()=>{const {call,topic}=await fixture();assert.equal((await call('/api/topics','POST',{title:'x',body:'y'},null)).status,401);assert.equal((await call('/api/topics','POST',{title:'x',body:'y'},'alice',{origin:'https://evil.test'})).status,403);assert.equal((await call('/api/uploads/a','GET',undefined,null)).status,403);assert.equal((await call('/api/auth/google','GET')).status,410);const id=await topic();const r=await call('/api/topics/'+id,'GET',undefined,null);assert.equal(r.status,200);assert.equal(r.data.topic.status,'published');assert.equal(r.data.topic.terms.length,0);});
+test('legacy direct Google login routes and UI are disabled without creating sessions',async()=>{
+ const {DB,env,call}=await fixture();
+ Object.assign(env,{GOOGLE_CLIENT_ID:'legacy-app',GOOGLE_CLIENT_SECRET:'previous-secret'});
+ const beforeSessions=DB.db.prepare('SELECT COUNT(*) n FROM user_sessions').get().n;
+ for(const path of ['/api/auth/google','/api/auth/callback','/api/auth/callback?code=old&state=old']){
+  const result=await call(path,'GET',undefined,null);
+  assert.equal(result.status,410,path);
+  assert.equal(result.data.error,'direct_google_login_disabled');
+  assert.equal(result.headers.get('location'),null);
+  assert.equal(result.headers.get('set-cookie'),null);
+ }
+ for(const path of ['/api/auth/google','/api/auth/callback']){
+  const result=await call(path,'POST',undefined,null);
+  assert.equal(result.status,410,path);
+  assert.equal(result.data.error,'direct_google_login_disabled');
+ }
+ assert.equal(DB.db.prepare('SELECT COUNT(*) n FROM auth_states').get().n,0);
+ assert.equal(DB.db.prepare('SELECT COUNT(*) n FROM user_sessions').get().n,beforeSessions);
+ const frontend=readFileSync('public/app.js','utf8');
+ assert(frontend.includes('/api/auth/identity?return_to='));
+ assert(!frontend.includes('href="/api/auth/google"'));
+ assert(!frontend.includes("t('googleDirect')"));
+ assert(!frontend.includes('state.google'));
+});
 test('unified Google login retains existing members and roles, creates new members once, and fails closed',async t=>{
  const {DB,env,call,topic}=await fixture();
  const origin='https://preview.test',issuer='https://identity.preview.test',client='spine-community-dev';
