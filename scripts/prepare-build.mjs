@@ -56,9 +56,6 @@ function createVersionedFrontend() {
 }
 createVersionedFrontend();
 
-// Production-only one-time client Secret provisioning. This never runs on CI,
-// local builds, or Preview branches. All real mutations happen within the
-// explicitly approved, named Cloudflare production build.
-if(process.env.WORKERS_CI==="1"&&process.env.WORKERS_CI_BRANCH==="main"){
- run(["scripts/provision-production-identity.mjs"]);
-}
+// The one-time production OAuth client Secret was provisioned and the verifier
+// registered on the production Identity Center. Future builds must not generate,
+// upload, or rotate credentials. Keep Cloudflare's existing Secrets intact.
