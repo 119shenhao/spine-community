@@ -4,6 +4,7 @@
   "keep_vars": true,
   "main": "src/index.ts",
   "compatibility_date": "2026-11-06",
+  "compatibility_flags": ["global_fetch_strictly_public"],
   "workers_dev": true,
   "ratelimits": [
     {

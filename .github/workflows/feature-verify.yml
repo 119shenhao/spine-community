@@ -26,6 +26,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run verify
+      - run: node --check scripts/provision-production-identity.mjs
       - name: Prepare navigation browser tests
         run: |
           npm install --prefix "$RUNNER_TEMP/spine-navigation" --no-package-lock --no-save --ignore-scripts playwright@1.58.2
