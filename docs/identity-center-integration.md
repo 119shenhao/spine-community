@@ -71,3 +71,15 @@
 - [上线后统一登录检查 44869871878](https://github.com/119shenhao/spine-community/actions/runs/44869871878) 与 [生产功能/页面检查 44869871891](https://github.com/119shenhao/spine-community/actions/runs/44869871891) 全部成功：正式站 `/api/health` 正常、`/api/me` 的 `identityConfigured=true` 且 `googleConfigured=true`，不合法 OAuth 回调返回 `invalid_oauth_state`，网页及原有功能保持正常。
 - **仍需真实用户端到端验收**：本人从生产论坛点击 Google 登录 → 经生产认证中心 → 返回论坛，验证旧论坛账号 ID、帖子/回帖/收藏及原管理员权限均不改变。自动检查成功不等于已完成此真实浏览器操作。认证中心自身的生产 Google 登录与 Owner 后台登录已由用户截图确认。
 - 首版不做认证中心撤销会话后立即强制论坛本地 Cookie 失效，也不额外轮询 D1。现有论坛登录退出行为保留；此前用户已同意此范围。
+
+## 2026-11-21 · 生产统一认证成为唯一 Google 登录入口（本次最新决定）
+
+用户在生产论坛登录弹窗发现两条路径：上方“使用 Google 登录”经过身份认证中心并产生 `spine-community-prod` 会话，下方“直接使用 Google 登录”绕过认证中心，不在中心记录论坛应用会话。用户明确决定正式论坛**只保留统一认证登录**，开发测试成功后才定向发布生产。
+
+- **开发阶段**：基于 `feature/v1-community-build-20261106` 建立功能分支并经 [PR #40](https://github.com/119shenhao/spine-community/pull/40) 合并。移除 `public/app.js` 中旧 Google 文本链接与 fallback UI：仅当 `identityConfigured=true` 时渲染通往 `/api/auth/identity?return_to=...` 的 Google 登录按钮；未配置则显示明确不可用说明，**不能悄悄回退直连**。
+- **旧接口已禁用**：`GET/POST /api/auth/google`、`GET/POST /api/auth/callback` 均安全返回 HTTP **410**、`{"error":"direct_google_login_disabled"}`，无 Google 跳转、无 OAuth 授权码交换、无新 `auth_states` 或 `user_sessions` 写入。老浏览器/旧链接访问也被拒绝；原论坛会话、退出登录和已有用户数据不受影响。
+- **开发验证**：[开发预览站认证专项验收 44874406718](https://github.com/119shenhao/spine-community/actions/runs/44874406718) 通过：`identityConfigured=true`、两个旧路径真实返回 410 且不设置 Cookie，错误/重复统一回调保护仍有效。[开发完整 CI 44874456738](https://github.com/119shenhao/spine-community/actions/runs/44874456738) 通过。期间旧 SEO 测试错误地强制要求旧直连入口，已同步修正；曾有一次无关的宽屏返回位置浏览器测试失败，重新运行通过。
+- **定向生产发布**：开发/生产分支存在其他差异，**没有把整个开发分支合并到生产**。仅将已验证的 `src/auth.ts`、`public/app.js`、对应测试和生产烟雾脚本经 [PR #41](https://github.com/119shenhao/spine-community/pull/41) 合并生产 `main`（提交 `ca5512d08fa44032a0d193d78d30980d177816ba`）；[生产统一登录线上烟雾验收 44874717297](https://github.com/119shenhao/spine-community/actions/runs/44874717297) 与 [生产页面/功能验收 44874717236](https://github.com/119shenhao/spine-community/actions/runs/44874717236) 都通过。
+- **配置与数据边界**：保留 `IDENTITY_LOGIN_ENABLED=true`、`IDENTITY_ISSUER=https://idcenter.nbn369.com`、`IDENTITY_CLIENT_ID=spine-community-prod`、`IDENTITY_CLIENT_SECRET` Cloudflare 加密绑定；`keep_vars=true` 不变。旧 `GOOGLE_CLIENT_ID` 和 Cloudflare `GOOGLE_CLIENT_SECRET` 配置暂保留但其直连论坛路由已经关闭，后续若确认无外部依赖可单独决定是否清理。此次无 D1 迁移、无用户、帖子、回复或收藏同步/覆盖。
+- **旧用户与管理员保护**：继续按签名后的身份中心 `spine_google_sub` 对应论坛现存 Google subject 精确绑定，保留原论坛 user ID、帖子、回帖、收藏和角色；既有模拟端到端回归仍通过。此次生产上线自动检查**不等于**本人在新版页面用真实 Google 账号从头登录并逐条核对数据；真实用户可在 `https://spine.nbn369.com` 退出论坛后重新登录并核验。
+- **以后固定规则**：新功能先 `feature/v1-community-build-20261106` 开发，开发 CI + 预览在线验收通过，再基于 `main` 定向挑选相关变更发布生产；不携带开发数据库内容、不覆盖生产 Secrets；生产 Smoke 与前端资产验收通过后记录结果。未经新的明确需求不得恢复旧 Google 直连登录入口或绕过认证中心。
