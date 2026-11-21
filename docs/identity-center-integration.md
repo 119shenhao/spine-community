@@ -117,3 +117,13 @@
 - 已建立 [Spine 生产 PR #42](https://github.com/119shenhao/spine-community/pull/42)（Draft），[PR CI #44887266128](https://github.com/119shenhao/spine-community/actions/runs/44887266128) 通过。
 - 对比 `main` 后确认 Spine 生产 PR 仅 2 个文件：`src/auth.ts` 新增 3 行、`tests/community.test.mjs` 新增 1 行；认证中心 PR 仅 3 个文件；与开发分支的其他更改隔离。
 - **尚未正式发布**：按原正式发布规范待明确批准后才合并这两个 PR，依次完成生产上线 HTTP 双跳验证与真实浏览器验收。
+
+## 2026-11-21 · Google 登录跳过 Identity Center 中间页：生产发布完成
+
+本轮用户明确授权将已验证的「点击 Google 登录直接转入 Google、后台仍通过 Identity Center」方案发布到生产。严格按顺序合并：
+
+- Identity Center 生产 [PR #4](https://github.com/119shenhao/identity-center/pull/4)，合并提交 `9d29cb268d2f35e4884cd6d4ffe28e279f5cd3d0`；[正式站线上验证 #44887856052](https://github.com/119shenhao/identity-center/actions/runs/44887856052) 成功，原不带 hint 的提供商选择页仍保留。
+- Spine Community 生产 [PR #42](https://github.com/119shenhao/spine-community/pull/42)，合并提交 `5377e547091a6385d5f83baf588d437c74067418`；[正式站既有统一登录保护测试 #44887917445](https://github.com/119shenhao/spine-community/actions/runs/44887917445) 通过。
+- [**正式环境全链路跳转自动验收 #44887987554**](https://github.com/119shenhao/spine-community/actions/runs/44887987554) **通过**：`spine.nbn369.com` → `idcenter.nbn369.com` 直接 HTTP 302 → `accounts.google.com`，无需中间 Identity Center HTML 页面；验证 PKCE、state/nonce、精确 callback、Center 浏览器事务 Cookie；旧论坛直连 Google 接口仍是 410，未携状态的回调拒绝，生产 D1 Ready。
+- 本次只改正式论坛 `src/auth.ts` 中添加 `provider_hint=google`、相应自动测试，以及认证中心通用 Google 直达处理。原 `spine_google_sub` 旧账号绑定、用户、帖子、管理员权限、论坛 Cookie、D1 和密钥均未修改；**没有生产 D1 迁移或 Secret 轮换**。
+- 自动验收不等于本人生产浏览器重新登录后的最终人工确认；用户可在正式站退出后点击「使用 Google 登录」，验证是否无中间页、保留原账号和管理员权限。未来开发须继续依照 [Identity Center 新应用接入手册](https://github.com/119shenhao/identity-center/blob/main/docs/NEW_APP_INTEGRATION_GUIDE.md)，凡 Google 登录按钮都传 `provider_hint=google`。
