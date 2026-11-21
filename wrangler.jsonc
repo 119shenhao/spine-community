@@ -46,7 +46,7 @@
     "PUBLIC_CONTENT_ON_DEMAND": "true",
     "GOOGLE_CLIENT_ID": "294338107553-k5bts5abj3tg85lt82moelv40sph3tuh.apps.googleusercontent.com",
     "PUBLIC_CONTENT_BASE_URL": "https://spine-data.nbn369.com",
-    "IDENTITY_LOGIN_ENABLED": "false",
+    "IDENTITY_LOGIN_ENABLED": "true",
     "IDENTITY_ISSUER": "https://idcenter.nbn369.com",
     "IDENTITY_CLIENT_ID": "spine-community-prod",
     "IDENTITY_REDIRECT_URI": "https://spine.nbn369.com/api/auth/identity/callback"
