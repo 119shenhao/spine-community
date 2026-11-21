@@ -3011,7 +3011,7 @@ test('SEO: History API, canonical links and redirects replace hash-only navigati
  assert.doesNotMatch(app,/location\.hash\.startsWith\('#\/'\)/);
  // SPA navigation must never hijack the full-page Google OAuth redirect.
  assert.match(app,/!anchor\.getAttribute\('href'\)\.startsWith\('\/api\/'\)/);
- assert.match(app,/href="\/api\/auth\/identity\?return_to="/);
+  assert.match(app,/href="\\/api\\/auth\\/identity\\?return_to=/);
  assert.doesNotMatch(app,/href="\/api\/auth\/google"/);
  assert.match(app,/addEventListener\('popstate'/);
  assert.match(app,/href="\/topic\//);
