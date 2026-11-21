@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
-      - name: Verify production remains ready with unified login explicitly disabled
+      - name: Verify enabled production unified login and existing Google fallback
         shell: bash
         run: |
           python3 - <<'PY'
@@ -32,11 +32,11 @@ jobs:
               code,health=call("/api/health")
               assert code==200 and health.get("status")=="ok" and health.get("environment")=="production" and health.get("databaseReady") is True,"Production health unavailable"
               code,me=call("/api/me")
-              assert code==200 and me.get("identityConfigured") is False and me.get("googleConfigured") is True,"Login setup or existing Google fallback invalid"
-              code,error=call("/api/auth/identity")
-              assert code==503 and error.get("error")=="identity_not_configured","Unified login must remain disabled until credential and user acceptance"
-              print("PASS: production forum health, D1, direct Google fallback, and disabled unified login gate")
-              with open("/tmp/prod-smoke-result","w") as f:f.write("Production readiness PASS; unified login remains disabled pending Worker Secret and real Google account acceptance.\n")
+              assert code==200 and me.get("identityConfigured") is True and me.get("googleConfigured") is True,"Login setup or existing Google fallback invalid"
+              code,error=call("/api/auth/identity/callback")
+              assert code==401 and error.get("error")=="invalid_oauth_state","Invalid callback must not authenticate"
+              print("PASS: production forum health, D1, enabled unified login, direct Google fallback and invalid OAuth callback rejection")
+              with open("/tmp/prod-smoke-result","w") as f:f.write("Production readiness PASS; unified login configured with existing direct Google fallback and negative callback guard.\n")
               break
             except Exception as exc:
               print("Attempt",i,"not yet verified:",str(exc),flush=True)
