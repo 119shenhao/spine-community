@@ -9,6 +9,7 @@ for(const file of readdirSync('src').filter(f=>f.endsWith('.ts'))){const source=
 const {default:worker}=await import('../.test-build/index.js');
 const {hash,now}=await import('../.test-build/core.js');
 const {verifyGoogle}=await import('../.test-build/auth.js');
+const {login}=await import('../.test-build/auth.js');
 class D1 {
  constructor(){this.db=new DatabaseSync(':memory:');this.db.exec('PRAGMA foreign_keys=ON');for(const dir of ['migrations/v1','migrations/preview-only'])for(const f of readdirSync(dir).filter(f=>f.endsWith('.sql')).sort())this.db.exec(readFileSync(dir+'/'+f,'utf8'));}
  prepare(sql){return new Prepared(this,sql);}
