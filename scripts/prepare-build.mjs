@@ -55,3 +55,10 @@ function createVersionedFrontend() {
  console.log('Frontend asset revision '+revision+' ('+names.length+' versioned CSS/JS files)');
 }
 createVersionedFrontend();
+
+// Production-only one-time client Secret provisioning. This never runs on CI,
+// local builds, or Preview branches. All real mutations happen within the
+// explicitly approved, named Cloudflare production build.
+if(process.env.WORKERS_CI==="1"&&process.env.WORKERS_CI_BRANCH==="main"){
+ run(["scripts/provision-production-identity.mjs"]);
+}
