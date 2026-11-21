@@ -46,3 +46,16 @@
 - 开发预览通过统一认证中心重新登录会新建中心会话，旧记录保留「已撤销」状态。直接 Google 登录只产生论坛会话。
 - 用户已反馈重新登录成功，并在会话管理中找到新的有效记录。独立的旧账号 ID 与管理员权限线上核对仍待完成。
 - 认证中心开发后台已改为按会话创建时间倒序，每页 50 条，增加「创建时间」列。 [开发预览 CI](https://github.com/119shenhao/identity-center/actions/runs/44757425955)
+
+
+## 2026-11-21 · 正式站接入执行记录（当前阶段）
+
+用户已明确批准认证中心生产站 `https://idcenter.nbn369.com` 与论坛生产站 `https://spine.nbn369.com` 按现有已通过的开发联调方案接入，先部署兼容代码且保持新登录开关关闭，再验收并启用。
+
+- 不使用与 `main` 分歧巨大的开发分支整体覆盖正式站。基于生产 `main` 单独建立 `release/identity-center-prod-20261121`，针对性移植 `src/auth.ts`、`src/core.ts`、`src/community.ts`、`public/app.js`、`public/i18n.js`、繁体中文词条、`migrations/v1/0100_identity_center.sql` 及旧用户绑定、PKCE、回调与错误路径测试。[发布 PR #36](https://github.com/119shenhao/spine-community/pull/36)。
+- 生产配置中的 `IDENTITY_ISSUER=https://idcenter.nbn369.com`、`IDENTITY_CLIENT_ID=spine-community-prod`、`IDENTITY_REDIRECT_URI=https://spine.nbn369.com/api/auth/identity/callback`，以及 `IDENTITY_LOGIN_ENABLED=false` 已置于发布分支；`keep_vars: true` 仍保留，正式应用密钥不写入 GitHub。
+- 针对论坛生产 D1 `spine-community-db` / `5919ff78-b8fc-46ab-85f0-01fe5e6a41b0` 的 [只读检查 44854412641](https://github.com/119shenhao/spine-community/actions/runs/44854412641) 通过，无历史迁移冲突。经预先记录 Time Travel 恢复点后，[生产迁移 44854655311](https://github.com/119shenhao/spine-community/actions/runs/44854655311) 成功，仅新增 `0100_identity_center.sql`；不复制或改写真实帖子和用户。
+- 认证中心生产库已按受控工作流注册**停用**的 `spine-community-prod` 及唯一回调。[注册成功 44854594882](https://github.com/119shenhao/identity-center/actions/runs/44854594882)。认证中心生产 Worker 配置已加入仅限此应用和回调的旧 Google sub 关联参数。
+- 生产 Secret 自动配置的权限检测已完成：论坛仓库令牌和认证中心仓库令牌调用 Cloudflare Worker Secret 列表接口均为 HTTP 403，故**尚未**创建/注入正式应用密钥，也**没有**启用认证中心论坛应用；不得把测试令牌复制到正式库，不能绕过权限把密钥写进代码或日志。
+- 论坛 PR 的集成测试和浏览器检查通过的证据之一：[44854812323](https://github.com/119shenhao/spine-community/actions/runs/44854812323)。待发布 HEAD 继续核验。生产正式 Google 浏览器登录、Owner 管理员以及论坛真实账号绑定验收未完成。
+- 本次保留原来的直接 Google 登录作为回退。即使代码发布，新统一登录入口也必须在正式凭据写入 Cloudflare Worker Secret、认证中心正式应用启用，并通过真实用户联调后才允许打开。
