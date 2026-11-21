@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
-      - name: Verify enabled production unified login and existing Google fallback
+      - name: Verify production unified-only login and closed legacy routes
         shell: bash
         run: |
           python3 - <<'PY'
@@ -32,11 +32,14 @@ jobs:
               code,health=call("/api/health")
               assert code==200 and health.get("status")=="ok" and health.get("environment")=="production" and health.get("databaseReady") is True,"Production health unavailable"
               code,me=call("/api/me")
-              assert code==200 and me.get("identityConfigured") is True and me.get("googleConfigured") is True,"Login setup or existing Google fallback invalid"
+              assert code==200 and me.get("identityConfigured") is True and me.get("googleConfigured") is True,"Identity Center or preserved Google OAuth credentials missing"
+              for legacy_path in ("/api/auth/google","/api/auth/callback"):
+                legacy_code,legacy=call(legacy_path)
+                assert legacy_code==410 and legacy.get("error")=="direct_google_login_disabled","Legacy Google login still exposed: "+legacy_path
               code,error=call("/api/auth/identity/callback")
               assert code==401 and error.get("error")=="invalid_oauth_state","Invalid callback must not authenticate"
-              print("PASS: production forum health, D1, enabled unified login, direct Google fallback and invalid OAuth callback rejection")
-              with open("/tmp/prod-smoke-result","w") as f:f.write("Production readiness PASS; unified login configured with existing direct Google fallback and negative callback guard.\n")
+              print("PASS: production forum health, D1, unified-only login, old endpoints HTTP 410 and invalid unified callback rejection")
+              with open("/tmp/prod-smoke-result","w") as f:f.write("Production readiness PASS; unified login configured, old Google routes retired, and invalid callback rejected.\n")
               break
             except Exception as exc:
               print("Attempt",i,"not yet verified:",str(exc),flush=True)

@@ -23,7 +23,7 @@ const readingStorage=(()=>{try{return window.localStorage;}catch{return null;}})
 let readingPreferences=loadReadingPreferences(readingStorage);
 applyReadingPreferences(document.documentElement,readingPreferences);
 const readingText=key=>readingLabels(locale)[key];
-const state={user:null,google:false,identityLogin:false,health:null,terms:[],next:null,feed:[],highlights:[],topic:null,comments:[],notificationItems:[],unread:0,admin:null};
+const state={user:null,identityLogin:false,health:null,terms:[],next:null,feed:[],highlights:[],topic:null,comments:[],notificationItems:[],unread:0,admin:null};
 let sequence=0,observer,toastTimer,translations;
 let analyticsRankingRequest=0;
 const historicalLanguageAfter={topic:'',comment:''};
@@ -54,9 +54,10 @@ function needUser(){if(state.user)return true;showLogin();return false;}
 const isPreview=()=>state.health?.environment==='preview'||(!state.health?.environment&&(location.hostname.startsWith('feature-')||['localhost','127.0.0.1'].includes(location.hostname)));
 function showLogin(){
  const returnTo=encodeURIComponent(location.pathname+location.search+location.hash);
- const google=state.google?`<a class="button primary" href="/api/auth/google">G &nbsp; ${t('google')}</a>`:`<div class="notice">${t('loginSetup')}</div>`;
- const unified=`<a class="button primary" href="/api/auth/identity?return_to=${returnTo}">G &nbsp; ${t('google')}</a>${state.google?`<p><a href="/api/auth/google">${t('googleDirect')}</a></p>`:''}`;
- modal(`<h2>${t('login')}</h2><p>${t('loginNote')}</p>${state.identityLogin?unified:google}${isPreview()?`<p class="subtle">${t('previewOnly')}</p>`:''}`);
+ const login=state.identityLogin
+  ?`<a class="button primary" href="/api/auth/identity?return_to=${returnTo}">G &nbsp; ${t('google')}</a>`
+  :`<div class="notice">${t('loginSetup')}</div>`;
+ modal(`<h2>${t('login')}</h2><p>${t('loginNote')}</p>${login}${isPreview()?`<p class="subtle">${t('previewOnly')}</p>`:''}`);
 }
 const chineseShareNames={WeChat:'微信',QQ:'QQ',Douyin:'抖音',Bilibili:'B站',Weibo:'微博',Qzone:'QQ空间'};
 const sharePlatformName=name=>locale.startsWith('zh')?(chineseShareNames[name]||name):name;
@@ -311,7 +312,7 @@ async function render(force=false,restore=false){const n=++sequence;renderedList
  if(n===sequence&&state.health?.analyticsEnabled===true)send('/api/pageview',{path:location.pathname}).catch(()=>{});
 }
 function findContent(type,id){return type==='topic'?(state.topic?.id===id?state.topic:state.feed.find(c=>c.id===id)):state.comments.find(c=>c.id===id)||state.feed.find(c=>c.id===id);}
-async function refreshMe(){const me=await api('/api/me');state.user=me.user;state.google=me.googleConfigured;state.identityLogin=me.identityConfigured===true;}
+async function refreshMe(){const me=await api('/api/me');state.user=me.user;state.identityLogin=me.identityConfigured===true;}
 async function refreshUnread(){if(!state.user)return;try{const r=await api('/api/notifications');state.unread=r.unread;renderChrome();}catch{}}
 function rememberAnalyticsFilters(){
  const url=new URL(location.href);

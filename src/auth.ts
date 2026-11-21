@@ -181,22 +181,11 @@ async function identityRoute(req:Request,env:Env,url:URL){
 export async function authRoute(req:Request,env:Env,user:Row|null,path:string):Promise<Response|null>{
   const url=new URL(req.url);
   if(req.method==='GET'&&(path==='/api/auth/identity'||path===identityCallback))return identityRoute(req,env,url);
-  if(path==='/api/auth/google'&&req.method==='GET'){
-    if(!env.GOOGLE_CLIENT_ID||!env.GOOGLE_CLIENT_SECRET)fail(503,'google_not_configured');
-    const state=randomToken(),nonce=randomToken(),verifier=randomToken();
-    await stmt(env.DB,'INSERT INTO auth_states VALUES(?,?,?,?)',await hash(state),nonce,verifier,now()+600).run();
-    const query=new URLSearchParams({client_id:env.GOOGLE_CLIENT_ID,redirect_uri:url.origin+'/api/auth/callback',response_type:'code',scope:'openid',state,nonce,code_challenge:await pkceChallenge(verifier),code_challenge_method:'S256'});
-    return redirect('https://accounts.google.com/o/oauth2/v2/auth?'+query,`sc_oauth=${state}; HttpOnly; SameSite=Lax; Path=/api/auth; Max-Age=600${url.protocol==='https:'?'; Secure':''}`);
-  }
-  if(path==='/api/auth/callback'&&req.method==='GET'){
-    const state=url.searchParams.get('state');if(!state||state!==cookie(req,'sc_oauth'))fail(401,'invalid_oauth_state');
-    const saved=await one(env.DB,'DELETE FROM auth_states WHERE state_hash=? AND expires_at>? RETURNING *',await hash(state),now());if(!saved||!env.GOOGLE_CLIENT_ID||!env.GOOGLE_CLIENT_SECRET)fail(401,'invalid_oauth_state');
-    const code=url.searchParams.get('code');if(!code)fail(400,'login_cancelled');
-    const r=await fetch('https://oauth2.googleapis.com/token',{method:'POST',body:new URLSearchParams({code,client_id:env.GOOGLE_CLIENT_ID,client_secret:env.GOOGLE_CLIENT_SECRET,redirect_uri:url.origin+'/api/auth/callback',grant_type:'authorization_code',code_verifier:saved.verifier})});
-    if(!r.ok)fail(401,'login_failed');const data=await r.json() as {id_token:string};
-    const claims=await verifyGoogle(data.id_token,env.GOOGLE_CLIENT_ID,saved.nonce);
-    return login(req,env,claims.sub);
-  }
+  // The forum now accepts interactive sign-in exclusively via Identity Center.
+  // Block both the legacy initiation endpoint and outstanding Google callbacks,
+  // including requests from cached old clients, without token exchange or D1 writes.
+  if(path==='/api/auth/google'||path==='/api/auth/callback')
+    fail(410,'direct_google_login_disabled');
   if(path==='/api/auth/logout'&&req.method==='POST'){
     if(user)await stmt(env.DB,'UPDATE user_sessions SET revoked_at=? WHERE id=?',now(),user.session_id).run();
     return json({ok:true},200,{'set-cookie':sessionCookie(req,'',0)});
