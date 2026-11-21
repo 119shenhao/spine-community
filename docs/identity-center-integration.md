@@ -59,3 +59,15 @@
 - 生产 Secret 自动配置的权限检测已完成：论坛仓库令牌和认证中心仓库令牌调用 Cloudflare Worker Secret 列表接口均为 HTTP 403，故**尚未**创建/注入正式应用密钥，也**没有**启用认证中心论坛应用；不得把测试令牌复制到正式库，不能绕过权限把密钥写进代码或日志。
 - 论坛 PR 的集成测试和浏览器检查通过的证据之一：[44854812323](https://github.com/119shenhao/spine-community/actions/runs/44854812323)。待发布 HEAD 继续核验。生产正式 Google 浏览器登录、Owner 管理员以及论坛真实账号绑定验收未完成。
 - 本次保留原来的直接 Google 登录作为回退。即使代码发布，新统一登录入口也必须在正式凭据写入 Cloudflare Worker Secret、认证中心正式应用启用，并通过真实用户联调后才允许打开。
+
+## 2026-11-21 · 论坛生产环境统一身份认证正式启用（自动验收通过）
+
+用户批准复用开发环境已经验证的接入流程。现已完成生产应用密钥初始化、认证中心应用激活、论坛登录开关开启及部署后检查。
+
+- 生产论坛：`https://spine.nbn369.com`；生产认证中心：`https://idcenter.nbn369.com`。仅 `spine-community-prod` 和精确回调 `https://spine.nbn369.com/api/auth/identity/callback` 被启用。
+- 生产 Worker Secret：`IDENTITY_CLIENT_SECRET`，在论坛自身 Cloudflare Builds 中生成并安全注入，中心 D1 仅保存匹配的 SHA-256 Base64URL 摘要，明文未入 GitHub 或 D1。针对正式 `wrangler secret list` 命令的参数兼容问题修复并通过 [PR #38](https://github.com/119shenhao/spine-community/pull/38) 合并；[密钥回执验收 44869479321](https://github.com/119shenhao/spine-community/actions/runs/44869479321) 成功。
+- [认证中心生产 OAuth 应用激活 44869665293](https://github.com/119shenhao/identity-center/actions/runs/44869665293) 成功；受控工作流核对论坛 D1 回执、认证中心生产 D1、精确回调和摘要一致后，仅启用 `spine-community-prod`。
+- [生产启用 PR #39](https://github.com/119shenhao/spine-community/pull/39)（合并提交 `f43b1545e3bf633dbcca968a9cd202bd198ad61a`）：设置 `IDENTITY_LOGIN_ENABLED=true`，删除将一次性密钥初始化挂在每次生产构建上的逻辑，防止重复生成或轮换；保留 `keep_vars: true` 及原 `GOOGLE_CLIENT_ID` 与 Cloudflare 加密 `GOOGLE_CLIENT_SECRET`。
+- [上线后统一登录检查 44869871878](https://github.com/119shenhao/spine-community/actions/runs/44869871878) 与 [生产功能/页面检查 44869871891](https://github.com/119shenhao/spine-community/actions/runs/44869871891) 全部成功：正式站 `/api/health` 正常、`/api/me` 的 `identityConfigured=true` 且 `googleConfigured=true`，不合法 OAuth 回调返回 `invalid_oauth_state`，网页及原有功能保持正常。
+- **仍需真实用户端到端验收**：本人从生产论坛点击 Google 登录 → 经生产认证中心 → 返回论坛，验证旧论坛账号 ID、帖子/回帖/收藏及原管理员权限均不改变。自动检查成功不等于已完成此真实浏览器操作。认证中心自身的生产 Google 登录与 Owner 后台登录已由用户截图确认。
+- 首版不做认证中心撤销会话后立即强制论坛本地 Cookie 失效，也不额外轮询 D1。现有论坛登录退出行为保留；此前用户已同意此范围。
