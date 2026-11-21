@@ -94,3 +94,19 @@
 - **账号与权限边界**：本站通过经验证的 `spine_google_sub` 精确关联旧 Google identity，不迁移/重建论坛本地 user ID，也不覆盖帖子/回复/收藏/业务管理员角色。认证中心 Owner 不自动赋予论坛管理员权限。论坛 Cookie 与中心会话独立，中心撤销后论坛不立即退出；这是用户已接受的非即时联动策略，不增加轮询和额外 Worker/D1 消耗。
 - **后续开发规范**：开发环境（`feature/v1-community-build-20261106`）先实现、自动测试及预览在线验收；用户同意后从生产 `main` 基线**定向**发布已测改动；不全量合并分叉的开发分支、不同步开发用户/帖子/会话、不覆盖现有 Cloudflare Secrets；真实登录与旧账号/角色验收完成才结项。
 - **复用范本**：本仓库 `src/auth.ts`、`src/community.ts`、`public/app.js`、`migrations/v1/0100_identity_center.sql` 和相应测试；完整新网站接入步骤详见 [Identity Center 接入手册](https://github.com/119shenhao/identity-center/blob/main/docs/NEW_APP_INTEGRATION_GUIDE.md)。其中 Spine 的旧账号映射字段是**定制特例**，其他业务应重新设计映射。
+
+## 2026-11-21 · Google 登录不再展示 Identity Center 提供商选择页（新确认需求）
+
+用户已在戒赌社区开发站实际完成 Google 登录并验收「点击论坛按钮后直接进入 Google / 或复用中心已有 SSO 会话，不再显示 `Identity Center / Choose a provider` 页面」的交互。要求在 Spine Community 同样采用这一体验，并作为所有新网站接入 Google / Identity Center 的固定规范。
+
+**设计与安全边界**：
+
+- 浏览器始终访问本论坛 `/api/auth/identity?return_to=...`；论坛服务端仍生成加密随机 state、nonce、PKCE verifier 并保存一次性状态，设置绑定 Cookie。
+- 论坛在原有 `{IDENTITY_ISSUER}/oauth/authorize` 的全部参数上增添 **`provider_hint=google`**。中心只允许已启用且回调精确白名单匹配的 `web_confidential` 客户端直达 Google，仍要验证状态、PKCE、回调以及上游 ID Token。
+- 既有 SSO Cookie 时中心直接签发授权码返回论坛；否则中心在设置事务证明 Cookie 后 302 到 Google，不渲染中间 HTML 页面。旧 `/api/auth/google` 等直连路由仍为 410，绝不能改为绕开中心的原生 Google 登录。
+- 原有 `spine_google_sub` 的旧账户安全绑定机制、现有 user ID、帖子/回复、收藏、管理员角色、论坛自身 Cookie、退出登录逻辑均不变。
+- 取消授权要安全回到论坛，错误回调、非法 state、跨环境 Client/redirect 不允许；未来其他 Google 网站必须按 `identity-center/docs/NEW_APP_INTEGRATION_GUIDE.md` 中的固定规范实现。
+
+**实施记录**：代码已提交开发分支 `feature/v1-community-build-20261106`（`src/auth.ts` / `tests/community.test.mjs`），并通过 [开发完整 CI #44886973516](https://github.com/119shenhao/spine-community/actions/runs/44886973516) 和 [预览认证/语言健康 #44886973502](https://github.com/119shenhao/spine-community/actions/runs/44886973502)。中心通用支持的开发 CI 见 [#44887010782](https://github.com/119shenhao/identity-center/actions/runs/44887010782)。
+
+**发布状态**：这一段只记录开发结果，**不得宣称 Spine 正式站已应用该改动**。生产必须从主分支单独挑选目标改动，通过 CI、线上预验收和用户既定批准流程后发布，不得合并开发分支其他业务功能，不涉及 D1 迁移或 Secret 轮换。正式上线和真实浏览器验收完成后追加记录。
