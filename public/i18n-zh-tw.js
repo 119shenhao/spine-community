@@ -37,6 +37,7 @@ contentCountNote:"僅統計目前公開內容；樓中樓逐條計數。切換�
   "login": "登入",
   "logout": "登出",
   "google": "使用 Google 登入",
+  "googleDirect": "直接使用 Google 登入",
   "loginNote": "無須登入即可瀏覽。登入後便能參與討論。",
   "loginSetup": "Google 登入暫時無法使用，你仍可瀏覽內容。",
   "eyebrow": "讓每段經歷被理解",
