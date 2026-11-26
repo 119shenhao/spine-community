@@ -12,8 +12,11 @@ const PREVIEW={config:'wrangler.preview-migrations.jsonc',binding:'PREVIEW_DB',i
 const PRODUCTION={config:'wrangler.production-sync.jsonc',binding:'PRODUCTION_DB',id:PRODUCTION_ID};
 const argv=process.argv.slice(2),apply=argv.includes('--apply');
 const limitArg=argv.find(v=>v.startsWith('--limit='));
+const retryArg=argv.find(v=>v.startsWith('--retry-topic='));
+const retryTopic=retryArg?.slice(14)??null;
+const UUID=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 const limit=limitArg?Number(limitArg.slice(8)):20;
-if(argv.some(a=>a!=='--apply'&&!a.startsWith('--limit='))||!Number.isInteger(limit)||limit<1||limit>100)throw Error('Usage: npm run sync:production -- [--limit=20] [--apply]');
+if(argv.some(a=>a!=='--apply'&&!a.startsWith('--limit=')&&!a.startsWith('--retry-topic='))||(retryArg&&!UUID.test(retryTopic))||!Number.isInteger(limit)||limit<1||limit>100)throw Error('Usage: npm run sync:production -- [--limit=20] [--retry-topic=UUID] [--apply]');
 if(apply&&process.env.SPINE_SYNC_PRODUCTION_CONFIRM!==PRODUCTION_ID)throw Error('Production writes require SPINE_SYNC_PRODUCTION_CONFIRM='+PRODUCTION_ID+' AND --apply, after separate approval and backup.');
 for(const dest of [PREVIEW,PRODUCTION]){
  const cfg=JSON.parse(readFileSync(dest.config,'utf8'));
@@ -54,7 +57,7 @@ export function sortComments(comments){
  const byId=new Map(comments.map(c=>[c.id,c])),ordered=[],visiting=new Set(),done=new Set();
  function visit(row){
   if(done.has(row.id))return true;
-  if(visiting.has(row.id))throw Error('Cyclic comment tree: '+row.id);
+  if(visiting.has(row.id))throw new TopicSyncError('cyclic_reply_tree');
   if(!['published','deleted'].includes(row.status))return false;
   visiting.add(row.id);
   if(row.parent_comment_id){
@@ -118,13 +121,13 @@ function assertReady(){
 }
 function verifyTopic(topic,hash){
  const prod=query(PRODUCTION,'SELECT id,author_id,title,body,content_hash,source_lang,source_lang_mode FROM topics WHERE content_hash='+sqlValue(hash)+' OR (title='+sqlValue(topic.title)+' AND body='+sqlValue(topic.body)+') OR id='+sqlValue(topic.id)+' LIMIT 3');
- if(prod.length>1)throw Error('Conflicting production matches for '+topic.id+'; manual review required');
+ if(prod.length>1)throw new TopicSyncError('conflicting_production_matches');
  if(prod.length&&prod[0].id===topic.id){
   const chosen=resolveSyncLanguage(topic);
   if(prod[0].title!==topic.title||prod[0].body!==topic.body||
      prod[0].author_id!=='system-unknown-import'||
      prod[0].source_lang!==chosen.label||prod[0].source_lang_mode!==chosen.mode)
-   throw Error('Production topic ID/content/language collision for '+topic.id+'; never overwrite existing data');
+   throw new TopicSyncError('production_topic_collision');
  }
  return prod[0]||null;
 }
@@ -140,9 +143,9 @@ export function buildInserts(topic,comments,terms,hash){
  for(const term of terms)lines.push('INSERT OR IGNORE INTO topic_terms(topic_id,term_id) VALUES('+[topic.id,term.term_id].map(sqlValue).join(',')+');');
  for(const c of comments){
   // Preserve visible original text and parentage; never transfer a login identity.
-  if(!['regular','progress'].includes(c.kind))throw Error('Unsupported source comment kind on '+topic.id+': '+c.id);
-  if(c.kind==='progress'&&(!Number.isInteger(c.progress_seq)||c.progress_seq<1||c.parent_comment_id!==null))throw Error('Invalid source progress on '+topic.id+': '+c.id);
-  if(c.kind==='regular'&&c.progress_seq!=null)throw Error('Invalid source regular comment on '+topic.id+': '+c.id);
+  if(!['regular','progress'].includes(c.kind))throw new TopicSyncError('unsupported_reply_kind');
+  if(c.kind==='progress'&&(!Number.isInteger(c.progress_seq)||c.progress_seq<1||c.parent_comment_id!==null))throw new TopicSyncError('invalid_progress_sequence');
+  if(c.kind==='regular'&&c.progress_seq!=null)throw new TopicSyncError('invalid_regular_reply');
   const choice=resolveSyncLanguage(c);
   lines.push('INSERT OR IGNORE INTO comments(id,topic_id,author_id,parent_comment_id,kind,progress_seq,body,source_lang,source_lang_mode,status,created_at) VALUES('+
    [c.id,topic.id,'system-unknown-import',c.parent_comment_id,c.kind,c.progress_seq??null,c.body,choice.label,choice.mode,c.status,c.created_at].map(sqlValue).join(',')+');');
@@ -157,10 +160,10 @@ function verifyComments(id,comments){
  for(const row of rows){
   if(!expected.has(row.id))continue; // an unrelated production reply does not alter the source snapshot
   const src=comments.find(c=>c.id===row.id);
-  if(row.parent_comment_id!==src.parent_comment_id||row.body!==src.body||row.status!==src.status||(row.source_lang!==resolveSyncLanguage(src).label||row.source_lang_mode!==resolveSyncLanguage(src).mode)||row.author_id!=='system-unknown-import'||row.kind!==src.kind||row.progress_seq!==(src.progress_seq??null))throw Error('Production comment mismatch: '+row.id);
+  if(row.parent_comment_id!==src.parent_comment_id||row.body!==src.body||row.status!==src.status||(row.source_lang!==resolveSyncLanguage(src).label||row.source_lang_mode!==resolveSyncLanguage(src).mode)||row.author_id!=='system-unknown-import'||row.kind!==src.kind||row.progress_seq!==(src.progress_seq??null))throw new TopicSyncError('production_reply_mismatch');
   expected.delete(row.id);
  }
- if(expected.size)throw Error('Missing '+expected.size+' production replies for '+id+'; preview receipt NOT written');
+ if(expected.size)throw new TopicSyncError('production_replies_missing');
 }
 function verifyWrittenLanguageEvidence(topic,comments){
  const expected=[['topic',topic],...comments.map(c=>['comment',c])].filter(([,row])=>resolveSyncLanguage(row).method);
@@ -174,7 +177,7 @@ function verifyWrittenLanguageEvidence(topic,comments){
   if(!match||match.language!==language.label||match.method!==language.method||
      match.content_version!==1||
      (language.score!=null&&Math.abs(match.score-language.score)>1e-7))
-   throw Error('Production language proof mismatch: '+type+'/'+content.id+'; preview receipt NOT written');
+   throw new TopicSyncError('production_language_proof_mismatch');
  }
 }
 function markPreview(topic,targetId,hash,commentCount){
@@ -189,44 +192,99 @@ function markPreview(topic,targetId,hash,commentCount){
  'ON CONFLICT(source_topic_id) DO NOTHING;';
  query(PREVIEW,sql);
  const rows=query(PREVIEW,'SELECT production_topic_id,content_hash FROM topic_sync_receipts WHERE source_topic_id='+sqlValue(topic.id));
- if(rows.length!==1||rows[0].production_topic_id!==targetId||rows[0].content_hash!==hash)throw Error('Could not confirm preview receipt for '+topic.id);
+ if(rows.length!==1||rows[0].production_topic_id!==targetId||rows[0].content_hash!==hash)throw new TopicSyncError('sync_receipt_mismatch');
+}
+// Only explicitly classified row problems may be isolated. A DB command failure,
+ // an ambiguous write or failure to save the error record stops the run.
+class TopicSyncError extends Error {}
+const errorTable='topic_sync_errors';
+const createErrorTable="CREATE TABLE IF NOT EXISTS "+errorTable+" ("+
+ 'source_topic_id TEXT PRIMARY KEY NOT NULL, reason TEXT NOT NULL, '+
+ 'first_seen_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL, attempts INTEGER NOT NULL)';
+const baseEligible="t.status='published' AND NOT EXISTS "+
+ '(SELECT 1 FROM topic_sync_receipts r WHERE r.source_topic_id=t.id)';
+const mayoHold="t.id IN (SELECT c.topic_id FROM collect_sources c LEFT JOIN collector_candidates q"+
+ " ON q.site=c.site AND q.source_id=c.source_id WHERE c.site='mayoclinic' AND c.state='completed'"+
+ " AND c.completed_duplicate=0 AND c.topic_id IS NOT NULL AND COALESCE(q.status,'')<>'completed')";
+function setupErrors(){
+ for(const table of ['collect_sources','collector_candidates']){
+  const rows=query(PREVIEW,"SELECT name FROM sqlite_master WHERE type='table' AND name="+sqlValue(table));
+  if(rows.length!==1)throw Error('Missing preview collector verification table: '+table);
+ }
+ if(apply)query(PREVIEW,createErrorTable);
+ const present=query(PREVIEW,"SELECT name FROM sqlite_master WHERE type='table' AND name="+sqlValue(errorTable)).length===1;
+ if(!present)return false;
+ if(apply)query(PREVIEW,"INSERT INTO "+errorTable+
+  " (source_topic_id,reason,first_seen_at,last_seen_at,attempts) "+
+  "SELECT t.id,'collector_readback_unverified',unixepoch(),unixepoch(),1 FROM topics t WHERE "+baseEligible+
+  " AND "+mayoHold+" ON CONFLICT(source_topic_id) DO NOTHING");
+ return true;
+}
+function recordError(id,reason){
+ query(PREVIEW,"INSERT INTO "+errorTable+
+  " (source_topic_id,reason,first_seen_at,last_seen_at,attempts) VALUES ("+
+  sqlValue(id)+","+sqlValue(reason)+",unixepoch(),unixepoch(),1) "+
+  "ON CONFLICT(source_topic_id) DO UPDATE SET reason=excluded.reason,last_seen_at=excluded.last_seen_at,"+
+  "attempts="+errorTable+".attempts+1");
 }
 function run(){
  console.log(apply?'APPLY MODE: explicitly enabled; verify production backup and prior approval.':'DRY RUN: no database writes will be issued.');
  assertReady();
+ const hasErrors=setupErrors();
+ const runtimeHold=hasErrors?"EXISTS (SELECT 1 FROM "+errorTable+
+  " e WHERE e.source_topic_id=t.id AND e.reason<>'collector_readback_unverified')":"0";
+ const retryFilter=retryTopic?" AND (NOT ("+runtimeHold+") OR t.id="+sqlValue(retryTopic)+")":" AND NOT ("+runtimeHold+")";
+ const eligible=baseEligible+" AND NOT ("+mayoHold+")"+retryFilter;
  const topics=query(PREVIEW,"SELECT t.id,t.title,t.body,t.source_lang,t.source_lang_mode,t.content_version,t.status,t.symptom_duration_days,t.created_at,t.content_hash,"+currentLanguageSelect+" "+
- "FROM topics t "+currentLanguageProjection('t','topic')+" WHERE t.status='published' "+
- "AND NOT EXISTS (SELECT 1 FROM topic_sync_receipts r WHERE r.source_topic_id=t.id) ORDER BY t.created_at,t.id LIMIT "+limit);
- const counts={examined:0,new:0,existing:0,comments:0,marked:0};
+ "FROM topics t "+currentLanguageProjection('t','topic')+" WHERE "+eligible+
+ " ORDER BY "+(retryTopic?"CASE WHEN t.id="+sqlValue(retryTopic)+" THEN 0 ELSE 1 END, ":"")+"t.created_at,t.id LIMIT "+limit);
+ const counts={examined:0,new:0,existing:0,comments:0,marked:0,failed:0,held:0,errors:[]};
  for(const topic of topics){
   counts.examined++;
-  if(typeof topic.title!=='string'||typeof topic.body!=='string')throw Error('Unexpected missing source text');
+  try{
+  if(typeof topic.title!=='string'||typeof topic.body!=='string')throw new TopicSyncError('source_text_missing');
   const hash=fingerprint(topic.title,topic.body);
-  if(topic.content_hash&&topic.content_hash!==hash)throw Error('Source hash mismatch: '+topic.id);
+  if(topic.content_hash&&topic.content_hash!==hash)throw new TopicSyncError('source_fingerprint_mismatch');
   const existing=verifyTopic(topic,hash);
   if(existing&&existing.id!==topic.id){
    console.log('SKIP already exists: '+topic.id+' -> '+existing.id);
-   counts.existing++;markPreview(topic,existing.id,hash,0);if(apply)counts.marked++;continue;
+   markPreview(topic,existing.id,hash,0);counts.existing++;if(apply)counts.marked++;continue;
   }
   const raw=query(PREVIEW,'SELECT c.id,c.author_id,c.parent_comment_id,c.kind,c.progress_seq,c.body,c.source_lang,c.source_lang_mode,c.content_version,c.status,c.created_at,'+currentLanguageSelect+
  ' FROM comments c '+currentLanguageProjection('c','comment')+' WHERE c.topic_id='+sqlValue(topic.id)+' ORDER BY c.rowid');
   const comments=sortComments(raw),terms=query(PREVIEW,'SELECT term_id FROM topic_terms WHERE topic_id='+sqlValue(topic.id));
   if(terms.length){
    const allowed=query(PRODUCTION,'SELECT id FROM taxonomy_terms WHERE id IN ('+terms.map(t=>sqlValue(t.term_id)).join(',')+')');
-   if(allowed.length!==terms.length)throw Error('Production taxonomy missing for '+topic.id);
+   if(allowed.length!==terms.length)throw new TopicSyncError('production_taxonomy_missing');
   }
-  console.log((existing?'RESUME':'NEW')+' '+topic.id+' '+JSON.stringify(topic.title)+' replies='+comments.length);
+  console.log((existing?'RESUME':'NEW')+' '+topic.id+' replies='+comments.length);
   // Validate *every* selected source reply in dry-run too, before a production write.
   const sql=buildInserts(topic,comments,terms,hash);
-  counts.new++;counts.comments+=comments.length;
-  if(!apply)continue;
+  if(!apply){counts.new++;counts.comments+=comments.length;continue;}
   writeFile(PRODUCTION,sql);
   const inserted=verifyTopic(topic,hash);
-  if(!inserted||inserted.id!==topic.id)throw Error('Production topic was not created: '+topic.id);
+  if(!inserted||inserted.id!==topic.id)throw new TopicSyncError('production_topic_missing');
   verifyComments(topic.id,comments);
   verifyWrittenLanguageEvidence(topic,comments);
   markPreview(topic,topic.id,hash,comments.length);counts.marked++;
+  counts.new++;counts.comments+=comments.length;
+  }catch(error){
+   if(!(error instanceof TopicSyncError))throw error;
+   if(apply)recordError(topic.id,error.message);
+   counts.failed++;
+   counts.errors.push({topic_id:topic.id,reason:error.message});
+   console.warn('SYNC_ERROR '+topic.id+' '+error.message);
+  }
  }
+ // A receipt wins over an old diagnostic, so resolved topics never count as held.
+ counts.held=Number(query(PREVIEW,"SELECT COUNT(*) total FROM topics t WHERE "+baseEligible+
+  " AND (("+mayoHold+") OR ("+runtimeHold+"))")[0]?.total);
+ if(!Number.isSafeInteger(counts.held)||counts.held<0)throw Error('Could not count held topics');
+ counts.held_sample=counts.held?query(PREVIEW,"SELECT t.id topic_id, CASE WHEN "+mayoHold+
+  " THEN 'collector_readback_unverified' ELSE e.reason END reason FROM topics t "+
+  (hasErrors?"LEFT JOIN "+errorTable+" e ON e.source_topic_id=t.id ":"LEFT JOIN (SELECT NULL reason) e ON 1=0 ")+
+  "WHERE "+baseEligible+" AND (("+mayoHold+") OR ("+runtimeHold+")) ORDER BY t.created_at,t.id LIMIT 25"):[];
+
  console.log(JSON.stringify({mode:apply?'apply':'dry_run',...counts},null,2));
 }
 if(process.argv[1]&&resolve(process.argv[1])===resolve(new URL(import.meta.url).pathname))run();
